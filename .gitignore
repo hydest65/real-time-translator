@@ -4,3 +4,4 @@ __pycache__/
 .env
 .cache/
 git_meta/
+.git_locked_by_acl/
