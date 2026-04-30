@@ -4,6 +4,7 @@ const statusText = document.querySelector("#statusText");
 const statusDot = document.querySelector("#statusDot");
 const subtitleStack = document.querySelector("#subtitleStack");
 const audioSource = document.querySelector("#audioSource");
+const sourceLanguage = document.querySelector("#sourceLanguage");
 const modelSize = document.querySelector("#modelSize");
 const deviceType = document.querySelector("#deviceType");
 const chunkSeconds = document.querySelector("#chunkSeconds");
@@ -21,6 +22,38 @@ let autoFollowSubtitles = true;
 const maxDisplayHistory = 80;
 const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
+const uiThemeStorageKey = "subtitleStudioUiTheme";
+
+function applySavedUiTheme() {
+  let theme;
+  try {
+    theme = JSON.parse(localStorage.getItem(uiThemeStorageKey) || "{}");
+  } catch (error) {
+    theme = {};
+  }
+
+  const allowedProperties = [
+    "--bg",
+    "--bg-soft",
+    "--bg-low",
+    "--text",
+    "--muted",
+    "--accent",
+    "--accent-strong",
+    "--accent-soft",
+    "--subtitle-font-size",
+    "--source-font-size",
+    "--panel-width",
+    "--ui-radius",
+    "--background-art",
+  ];
+
+  allowedProperties.forEach((property) => {
+    if (theme[property]) {
+      document.documentElement.style.setProperty(property, theme[property]);
+    }
+  });
+}
 
 function setStatus(status, detail = "") {
   statusText.textContent = status;
@@ -125,6 +158,19 @@ function updateEngineControls() {
     : "Local mode: waiting for first subtitle.";
 }
 
+function updateLanguageHints() {
+  const isSpanish = sourceLanguage.value === "spa_Latn";
+  const subtitle = document.querySelector("#brandSubtitle");
+  if (subtitle) {
+    subtitle.textContent = isSpanish
+      ? "Spanish to Chinese - Local or Azure cloud"
+      : "English to Chinese - Local or Azure cloud";
+  }
+  perfText.textContent = isSpanish
+    ? "Spanish mode: local ASR uses multilingual Whisper automatically."
+    : "English mode: optimized English ASR is available.";
+}
+
 function start() {
   if (socket && socket.readyState === WebSocket.OPEN) {
     return;
@@ -155,7 +201,7 @@ function start() {
         asr_device: deviceType.value,
         asr_compute_type: "int8",
         audio_source: audioSource.value,
-        source_language: "eng_Latn",
+        source_language: sourceLanguage.value,
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
         chunk_seconds: Number(chunkSeconds.value),
@@ -216,7 +262,10 @@ function stop() {
 startButton.addEventListener("click", start);
 stopButton.addEventListener("click", stop);
 translationEngine.addEventListener("change", updateEngineControls);
+sourceLanguage.addEventListener("change", updateLanguageHints);
 subtitleStack.addEventListener("scroll", () => {
   autoFollowSubtitles = isSubtitleAtBottom();
 });
+applySavedUiTheme();
 updateEngineControls();
+updateLanguageHints();

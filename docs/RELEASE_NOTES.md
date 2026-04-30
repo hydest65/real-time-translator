@@ -1,5 +1,65 @@
 # Release Notes
 
+## Unreleased - Spanish Source Language
+
+Date: 2026-04-30
+
+### Product
+
+- Added Spanish-to-Chinese alongside the existing English-to-Chinese workflow.
+- Added a source language selector on the main Subtitle Studio toolbar.
+
+### Backend
+
+- Allowed `spa_Latn` source language through runtime config instead of forcing English.
+- Mapped Spanish local ASR to Whisper `es` and multilingual `base` / `small` models.
+- Mapped Azure Spanish mode to `es-ES -> zh-Hans`.
+- Added Argos, MarianMT, and NLLB routing for Spanish-to-Chinese local translation.
+
+### Verification
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed with the bundled Node runtime.
+- Spanish config mapping check passed for `spa_Latn -> es-ES`, Whisper `es`, and multilingual ASR model selection.
+- Runtime audio behavior still depends on local audio routing and valid Azure credentials.
+
+## 0.1.2 - Visual UI Editor Closeout
+
+Date: 2026-04-30
+
+### Product
+
+- Added a browser-based visual UI editor for quick local appearance tuning.
+- Kept the main subtitle workflow unchanged: Azure Cloud remains the primary low-latency route and local engines remain fallback options.
+- Preserved the fast/direct translation model with no MiniMax, Balanced, or Quality controls.
+
+### Frontend
+
+- Added `/static/ui-editor.html` with live preview controls for background color, panel color, accent/subtitle color, text color, subtitle font sizes, left panel width, corner radius, and background decoration.
+- Added `frontend/ui-editor.css` and `frontend/ui-editor.js`.
+- Main page now loads saved editor choices from browser `localStorage` using the `subtitleStudioUiTheme` key.
+- Added a `UI Editor` entry button to the main toolbar.
+- Removed the extra raised shell behind the topbar while preserving the individual brand and toolbar cards.
+- Restored the main subtitle monitor outer shell after visual review because the page looked weaker without it.
+
+### Documentation
+
+- Updated README, product requirements, technical architecture, UI style notes, QA checklist, and the project-local closeout skill.
+
+### Verification
+
+- Frontend JavaScript syntax check passed for `frontend/app.js` and `frontend/ui-editor.js` with the bundled Node runtime.
+- Backend compile and import checks passed.
+- Local health endpoints responded on ports `8000` and `8001`.
+- Full live audio behavior still depends on local audio device routing and valid Azure credentials.
+
+### Known Limitations
+
+- UI editor saves to the current browser only; it does not yet write accepted styles back into `frontend/style.css`.
+- Browser cache may require `Ctrl + F5` after static asset changes.
+- System audio still depends on Windows exposing a monitor input or Stereo Mix.
+
 ## 0.1.1 - Fast-Only Soft UI Closeout
 
 Date: 2026-04-30

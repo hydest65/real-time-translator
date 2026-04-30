@@ -25,6 +25,9 @@ Read these three files early when continuing product, architecture, or UI work:
    - `frontend/index.html`
    - `frontend/style.css`
    - `frontend/app.js`
+   - `frontend/ui-editor.html`
+   - `frontend/ui-editor.css`
+   - `frontend/ui-editor.js`
    - `README.md`
 
 2. Confirm the active architecture:

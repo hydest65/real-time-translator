@@ -27,6 +27,8 @@ class Translator(Protocol):
 def nllb_to_short_code(language: str | None) -> str:
     if language == "zho_Hans":
         return "zh"
+    if language == "spa_Latn":
+        return "es"
     return "en"
 
 
@@ -49,6 +51,8 @@ class ArgosTranslator:
         installed = self.translate_module.get_installed_languages()
         if self._find_translation(installed, source_code, target_code) is not None:
             return
+        if self._can_pivot(source_code, target_code, installed):
+            return
         self.package.update_package_index()
         available_packages = self.package.get_available_packages()
         package = next(
@@ -59,6 +63,8 @@ class ArgosTranslator:
             ),
             None,
         )
+        if package is None and self._install_pivot_packages(source_code, target_code, available_packages):
+            return
         if package is None:
             raise RuntimeError(f"Argos package not found for {source_code}->{target_code}.")
         self.package.install_from_path(package.download())
@@ -69,6 +75,38 @@ class ArgosTranslator:
         if source is None or target is None:
             return None
         return source.get_translation(target)
+
+    def _can_pivot(self, source_code: str, target_code: str, languages) -> bool:
+        if source_code == "en" or target_code != "zh":
+            return False
+        return (
+            self._find_translation(languages, source_code, "en") is not None
+            and self._find_translation(languages, "en", target_code) is not None
+        )
+
+    def _install_pivot_packages(self, source_code: str, target_code: str, available_packages) -> bool:
+        if source_code == "en" or target_code != "zh":
+            return False
+        needed_pairs = [(source_code, "en"), ("en", target_code)]
+        selected_packages = []
+        for from_code, to_code in needed_pairs:
+            installed = self.translate_module.get_installed_languages()
+            if self._find_translation(installed, from_code, to_code) is not None:
+                continue
+            package = next(
+                (
+                    item
+                    for item in available_packages
+                    if item.from_code == from_code and item.to_code == to_code
+                ),
+                None,
+            )
+            if package is None:
+                return False
+            selected_packages.append(package)
+        for package in selected_packages:
+            self.package.install_from_path(package.download())
+        return True
 
     async def translate(
         self,
@@ -92,6 +130,12 @@ class ArgosTranslator:
         self._ensure_package(source_code, target_code)
         languages = self.translate_module.get_installed_languages()
         translation = self._find_translation(languages, source_code, target_code)
+        if translation is None and self._can_pivot(source_code, target_code, languages):
+            first_hop = self._find_translation(languages, source_code, "en")
+            second_hop = self._find_translation(languages, "en", target_code)
+            assert first_hop is not None
+            assert second_hop is not None
+            return second_hop.translate(first_hop.translate(cleaned).strip()).strip()
         if translation is None:
             raise RuntimeError(f"Argos translation unavailable for {source_code}->{target_code}.")
         return translation.translate(cleaned).strip()
@@ -105,6 +149,7 @@ class MarianMTTranslator:
     def __init__(
         self,
         en_zh_model_name: str,
+        es_zh_model_name: str,
         device_preference: str = "cuda",
     ) -> None:
         import torch
@@ -115,6 +160,7 @@ class MarianMTTranslator:
         self.AutoTokenizer = AutoTokenizer
         self.model_names = {
             "eng_Latn": en_zh_model_name,
+            "spa_Latn": es_zh_model_name,
         }
         self.device = self._resolve_device(device_preference)
         self._models: dict[str, tuple[object, object]] = {}

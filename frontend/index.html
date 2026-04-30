@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=red-light-v2-20260430" />
+    <link rel="stylesheet" href="/static/style.css?v=monitor-shell-restore-20260430" />
   </head>
   <body>
     <main class="studio">
@@ -13,7 +13,7 @@
           <span class="status-dot" id="statusDot"></span>
           <div>
             <p class="brand-title">Subtitle Studio</p>
-            <p class="brand-subtitle">English to Chinese · Local or Azure cloud</p>
+            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - Local or Azure cloud</p>
           </div>
         </div>
 
@@ -26,29 +26,11 @@
             </select>
           </label>
 
-          <label class="local-control">
-            ASR
-            <select id="modelSize">
-              <option value="base.en" selected>base.en</option>
-              <option value="small.en">small.en</option>
-            </select>
-          </label>
-
-          <label class="local-control">
-            Device
-            <select id="deviceType">
-              <option value="cuda" selected>cuda</option>
-              <option value="auto">auto</option>
-              <option value="cpu">cpu</option>
-            </select>
-          </label>
-
-          <label class="local-control">
-            Chunk
-            <select id="chunkSeconds">
-              <option value="2">2s</option>
-              <option value="3" selected>3s</option>
-              <option value="5">5s</option>
+          <label>
+            Source
+            <select id="sourceLanguage">
+              <option value="eng_Latn" selected>English</option>
+              <option value="spa_Latn">Spanish</option>
             </select>
           </label>
 
@@ -64,6 +46,33 @@
 
           <button id="startButton">Start</button>
           <button id="stopButton" disabled>Stop</button>
+          <a class="editor-link" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
+
+          <label class="local-control local-extension local-extension-start">
+            ASR
+            <select id="modelSize">
+              <option value="base.en" selected>base.en</option>
+              <option value="small.en">small.en</option>
+            </select>
+          </label>
+
+          <label class="local-control local-extension">
+            Device
+            <select id="deviceType">
+              <option value="cuda" selected>cuda</option>
+              <option value="auto">auto</option>
+              <option value="cpu">cpu</option>
+            </select>
+          </label>
+
+          <label class="local-control local-extension">
+            Chunk
+            <select id="chunkSeconds">
+              <option value="2">2s</option>
+              <option value="3" selected>3s</option>
+              <option value="5">5s</option>
+            </select>
+          </label>
         </section>
       </header>
 
@@ -100,7 +109,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=red-light-v2-20260430"></script>
+    <script src="/static/app.js?v=source-language-es-zh-20260430"></script>
   </body>
 </html>
 

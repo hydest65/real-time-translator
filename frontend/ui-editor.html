@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Subtitle Studio UI Editor</title>
+    <link rel="stylesheet" href="/static/ui-editor.css?v=ui-editor-20260430" />
+  </head>
+  <body>
+    <main class="editor-shell">
+      <section class="control-panel" aria-label="UI editor controls">
+        <div class="editor-heading">
+          <p class="eyebrow">Subtitle Studio</p>
+          <h1>UI Editor</h1>
+          <p>调整颜色、字幕大小和布局，右侧会实时预览。</p>
+        </div>
+
+        <div class="control-group">
+          <h2>颜色</h2>
+          <label>
+            背景
+            <input type="color" data-theme-key="--bg" value="#e8edf5" />
+          </label>
+          <label>
+            面板
+            <input type="color" data-theme-key="--bg-soft" value="#edf2f8" />
+          </label>
+          <label>
+            主按钮/中文字幕
+            <input type="color" data-theme-key="--accent-strong" value="#3f54d2" />
+          </label>
+          <label>
+            普通文字
+            <input type="color" data-theme-key="--text" value="#3f4a58" />
+          </label>
+        </div>
+
+        <div class="control-group">
+          <h2>字幕</h2>
+          <label>
+            中文字幕大小
+            <input type="range" data-theme-key="--subtitle-font-size" min="18" max="42" value="24" data-unit="px" />
+            <span data-output-for="--subtitle-font-size">24px</span>
+          </label>
+          <label>
+            英文字幕大小
+            <input type="range" data-theme-key="--source-font-size" min="11" max="24" value="14" data-unit="px" />
+            <span data-output-for="--source-font-size">14px</span>
+          </label>
+        </div>
+
+        <div class="control-group">
+          <h2>布局</h2>
+          <label>
+            背景图块
+            <select data-theme-key="--background-art">
+              <option value="radial-gradient(circle at 10% 8%, rgba(240, 244, 250, 0.95), transparent 28%), linear-gradient(145deg, var(--bg) 0%, var(--bg-low) 100%)" selected>显示</option>
+              <option value="linear-gradient(145deg, var(--bg) 0%, var(--bg-low) 100%)">删除</option>
+            </select>
+          </label>
+          <label>
+            左侧信息栏宽度
+            <input type="range" data-theme-key="--panel-width" min="180" max="340" value="230" data-unit="px" />
+            <span data-output-for="--panel-width">230px</span>
+          </label>
+          <label>
+            圆角
+            <input type="range" data-theme-key="--ui-radius" min="8" max="34" value="22" data-unit="px" />
+            <span data-output-for="--ui-radius">22px</span>
+          </label>
+        </div>
+
+        <div class="actions">
+          <button id="saveTheme">保存到主页面</button>
+          <button id="resetTheme" class="secondary">恢复默认</button>
+        </div>
+
+        <textarea id="cssOutput" readonly aria-label="Generated CSS"></textarea>
+      </section>
+
+      <section class="preview-panel" aria-label="Live preview">
+        <iframe id="previewFrame" title="Subtitle Studio preview" src="/"></iframe>
+      </section>
+    </main>
+
+    <script src="/static/ui-editor.js?v=ui-editor-20260430"></script>
+  </body>
+</html>

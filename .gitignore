@@ -3,6 +3,7 @@ __pycache__/
 *.pyc
 .env
 .env*
+!.env.example
 .cache/
 .runtime/
 git_meta/

@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Literal
 
 
 DevicePreference = Literal["auto", "cuda", "cpu"]
 TranslationEngine = Literal["argos", "marianmt", "nllb", "azure"]
 AudioSource = Literal["microphone", "system"]
+
+
+def load_dotenv_file() -> None:
+    env_path = Path(__file__).resolve().parents[1] / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+        if name:
+            import os
+
+            os.environ.setdefault(name, value)
+
+
+load_dotenv_file()
 
 
 @dataclass
@@ -27,6 +48,7 @@ class AppConfig:
     vad_rms_threshold: float = 0.008
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
+    marian_es_zh_model_name: str = "Helsinki-NLP/opus-mt-es-zh"
     azure_speech_key: str = ""
     azure_speech_region: str = ""
     azure_source_language: str = "en-US"

@@ -12,6 +12,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - input selector
   - engine selector
   - start/stop controls
+  - UI Editor entry button
 - Left side panel:
   - status
   - notice
@@ -51,3 +52,12 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - Blue-violet accent is reserved for primary actions, live state, and Chinese subtitle emphasis.
 - Red is reserved for the small operating lamp and error state.
 - Control chrome stays compact so meeting attention remains on the subtitle display.
+- The top-level topbar shell is transparent; the brand block and toolbar keep their own soft raised cards.
+- The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
+
+## Visual UI Editor
+
+- The editor is available at `/static/ui-editor.html`.
+- It provides browser-side controls for background color, panel color, accent/subtitle color, text color, Chinese subtitle size, English subtitle size, left panel width, corner radius, and background decoration.
+- The editor previews the live page through an embedded frame and saves changes to browser `localStorage`.
+- The editor is for fast local tuning. Permanent design decisions should still be copied into `frontend/style.css` after the user accepts them.
