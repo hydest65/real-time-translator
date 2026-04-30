@@ -1,0 +1,123 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Subtitle Studio</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <main class="studio">
+      <header class="studio-topbar">
+        <div class="brand">
+          <span class="status-dot" id="statusDot"></span>
+          <div>
+            <p class="brand-title">Subtitle Studio</p>
+            <p class="brand-subtitle">English to Chinese · Local or Azure cloud</p>
+          </div>
+        </div>
+
+        <section class="toolbar" aria-label="Controls">
+          <label>
+            Input
+            <select id="audioSource">
+              <option value="microphone" selected>Mic</option>
+              <option value="system">System</option>
+            </select>
+          </label>
+
+          <label class="local-control">
+            ASR
+            <select id="modelSize">
+              <option value="base.en" selected>base.en</option>
+              <option value="small.en">small.en</option>
+            </select>
+          </label>
+
+          <label class="local-control">
+            Device
+            <select id="deviceType">
+              <option value="cuda" selected>cuda</option>
+              <option value="auto">auto</option>
+              <option value="cpu">cpu</option>
+            </select>
+          </label>
+
+          <label class="local-control">
+            Chunk
+            <select id="chunkSeconds">
+              <option value="2">2s</option>
+              <option value="3" selected>3s</option>
+              <option value="5">5s</option>
+            </select>
+          </label>
+
+          <label class="local-control">
+            Mode
+            <select id="latencyMode">
+              <option value="realtime" selected>Realtime</option>
+              <option value="balanced">Balanced</option>
+            </select>
+          </label>
+
+          <label>
+            Engine
+            <select id="translationEngine">
+              <option value="azure" selected>Azure Cloud</option>
+              <option value="argos">Argos</option>
+              <option value="marianmt">MarianMT</option>
+              <option value="nllb">NLLB</option>
+            </select>
+          </label>
+
+          <label class="cloud-control">
+            Quality
+            <select id="translationQuality">
+              <option value="fast">Fast</option>
+              <option value="balanced" selected>Balanced</option>
+              <option value="quality">Quality</option>
+            </select>
+          </label>
+
+          <button id="startButton">Start</button>
+          <button id="stopButton" disabled>Stop</button>
+        </section>
+      </header>
+
+      <section class="studio-grid">
+        <aside class="side-panel" aria-label="Runtime information">
+          <div class="panel-section">
+            <p class="panel-label">Status</p>
+            <span class="notice-pill" id="statusText">Stopped</span>
+          </div>
+          <div class="panel-section">
+            <p class="panel-label">Notice</p>
+            <span class="notice-pill muted" id="noticeText">Ready</span>
+          </div>
+          <div class="panel-section">
+            <p class="panel-label">Activity</p>
+            <p class="panel-line" id="logText">Ready.</p>
+          </div>
+          <div class="panel-section">
+            <p class="panel-label">Performance</p>
+            <p class="panel-line perf" id="perfText">Waiting for first subtitle.</p>
+          </div>
+        </aside>
+
+        <section class="subtitle-box" aria-label="Subtitle history">
+          <div class="subtitle-box-header">
+            <div>
+              <p class="monitor-title">Subtitle Monitor</p>
+              <p class="monitor-subtitle">Live history · scroll to review</p>
+            </div>
+            <span class="monitor-badge">LIVE</span>
+          </div>
+          <div class="subtitle-stream" id="subtitleStack" aria-live="polite"></div>
+        </section>
+      </section>
+    </main>
+
+    <script src="/static/app.js"></script>
+  </body>
+</html>
+
