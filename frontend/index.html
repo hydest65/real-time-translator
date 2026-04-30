@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v=red-light-v2-20260430" />
   </head>
   <body>
     <main class="studio">
@@ -52,14 +52,6 @@
             </select>
           </label>
 
-          <label class="local-control">
-            Mode
-            <select id="latencyMode">
-              <option value="realtime" selected>Realtime</option>
-              <option value="balanced">Balanced</option>
-            </select>
-          </label>
-
           <label>
             Engine
             <select id="translationEngine">
@@ -67,15 +59,6 @@
               <option value="argos">Argos</option>
               <option value="marianmt">MarianMT</option>
               <option value="nllb">NLLB</option>
-            </select>
-          </label>
-
-          <label class="cloud-control">
-            Quality
-            <select id="translationQuality">
-              <option value="fast">Fast</option>
-              <option value="balanced" selected>Balanced</option>
-              <option value="quality">Quality</option>
             </select>
           </label>
 
@@ -117,7 +100,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js"></script>
+    <script src="/static/app.js?v=red-light-v2-20260430"></script>
   </body>
 </html>
 

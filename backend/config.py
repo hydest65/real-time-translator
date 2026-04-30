@@ -6,9 +6,7 @@ from typing import Literal
 
 DevicePreference = Literal["auto", "cuda", "cpu"]
 TranslationEngine = Literal["argos", "marianmt", "nllb", "azure"]
-LatencyMode = Literal["realtime", "balanced"]
 AudioSource = Literal["microphone", "system"]
-TranslationQuality = Literal["fast", "balanced", "quality"]
 
 
 @dataclass
@@ -19,8 +17,6 @@ class AppConfig:
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
     translation_engine: TranslationEngine = "azure"
-    latency_mode: LatencyMode = "realtime"
-    translation_quality: TranslationQuality = "balanced"
     audio_source: AudioSource = "microphone"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
@@ -28,9 +24,6 @@ class AppConfig:
     overlap_seconds: float = 0.5
     max_subtitles: int = 1
     queue_max_size: int = 2
-    buffer_max_wait_seconds: float = 4.0
-    buffer_min_words: int = 8
-    buffer_max_words: int = 18
     vad_rms_threshold: float = 0.008
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
@@ -47,10 +40,6 @@ class AppConfig:
     segmenter_pause_seconds: float = 0.9
     segmenter_max_words: int = 22
     segmenter_max_seconds: float = 10.0
-    minimax_api_key: str = ""
-    minimax_base_url: str = "https://api.minimax.io/v1"
-    minimax_model: str = "MiniMax-M2.7"
-    minimax_timeout_seconds: float = 6.0
 
 
 config = AppConfig()

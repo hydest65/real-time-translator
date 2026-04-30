@@ -2,13 +2,23 @@
 
 Use this local project skill whenever closing a version of `real_time_translator`.
 
+## Core Continuation Docs
+
+Read these three files early when continuing product, architecture, or UI work:
+
+- `docs/PRODUCT_REQUIREMENTS.md`: product goal, target users, MVP scope, fast-only mode, and out-of-scope items.
+- `docs/TECHNICAL_ARCHITECTURE.md`: Azure cloud route, local fallback route, backend modules, and environment variables.
+- `docs/UI_STYLE.md`: compact Subtitle Studio layout, subtitle monitor behavior, scrolling rules, and visual direction.
+
 ## Closeout Steps
 
 1. Inspect current implementation:
+   - `docs/PRODUCT_REQUIREMENTS.md`
+   - `docs/TECHNICAL_ARCHITECTURE.md`
+   - `docs/UI_STYLE.md`
    - `backend/config.py`
    - `backend/main.py`
    - `backend/cloud_speech.py`
-   - `backend/text_polisher.py`
    - `backend/audio_capture.py`
    - `backend/asr.py`
    - `backend/translator.py`
@@ -20,7 +30,8 @@ Use this local project skill whenever closing a version of `real_time_translator
 2. Confirm the active architecture:
    - Azure Cloud is the primary low-latency path.
    - Local ASR/translation remains a fallback path.
-   - MiniMax polishing is optional and asynchronous.
+   - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
+   - Fast/direct translation is the only active mode.
    - The browser UI is the main operating surface.
 
 3. Update documentation:
@@ -48,9 +59,7 @@ Use this local project skill whenever closing a version of `real_time_translator
 ## Version Discipline
 
 - Do not commit API keys.
-- Do not treat MiniMax as required for live subtitles.
-- Do not block Azure live output while waiting for polishing.
+- Do not reintroduce MiniMax, Balanced, or Quality modes unless explicitly requested.
 - Do not split long Azure final subtitles purely by time.
 - Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
 - Keep true speaker diarization as a future feature unless explicitly implemented.
-

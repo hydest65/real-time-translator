@@ -2,15 +2,15 @@
 
 ## Direction
 
-The app uses a compact SaaS-style control surface, not a marketing page. The primary screen is the actual working subtitle studio.
+The app uses the selected `Soft UI Evolution / Focus Display` direction. It is still a compact working subtitle studio, not a marketing page, but the visual priority is now the large subtitle monitor.
 
 ## Layout
 
 - Top bar:
   - product name
+  - small red status lamp
   - input selector
   - engine selector
-  - quality selector
   - start/stop controls
 - Left side panel:
   - status
@@ -18,7 +18,9 @@ The app uses a compact SaaS-style control surface, not a marketing page. The pri
   - activity
   - performance
 - Main subtitle monitor:
-  - fixed visible area
+  - largest visual area on the screen
+  - soft raised outer shell
+  - recessed inner subtitle stream
   - internal right-side scrollbar
   - preserved subtitle history
   - live row plus final bilingual rows
@@ -32,10 +34,20 @@ The app uses a compact SaaS-style control surface, not a marketing page. The pri
 - If the user is at the bottom, new subtitles auto-follow.
 - If the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
 
+## Status Lamp Behavior
+
+- The top-left lamp is always shaped like a small red indicator.
+- When stopped, the lamp remains visible as a dim red bulb.
+- When translation is running or connecting, the bulb slowly pulses.
+- On error, the bulb stays red without the normal running pulse.
+
 ## Visual Style
 
-- Dark professional workspace.
-- Subtle borders and restrained contrast.
-- Teal accent for translated Chinese and live status.
-- Compact spacing suitable for meetings and screen sharing.
-
+- Soft gray-blue background `#E8EDF5`.
+- Raised panels use dual-direction shadows: dark `#D1D9E6` bottom-right and light `#F0F4FA` top-left.
+- Inputs, select controls, subtitle stream, and active/status surfaces use inset shadows for a debossed feel.
+- No hard borders, no dark backgrounds, and no pure white surfaces.
+- High border radius, generally 16px or above.
+- Blue-violet accent is reserved for primary actions, live state, and Chinese subtitle emphasis.
+- Red is reserved for the small operating lamp and error state.
+- Control chrome stays compact so meeting attention remains on the subtitle display.

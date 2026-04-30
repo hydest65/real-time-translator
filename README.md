@@ -18,19 +18,18 @@ Windows real-time subtitle translator. It now supports two routes:
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
 - Queue max size: `2`; old chunks are dropped when work piles up
-- Frontend: Subtitle Studio layout with a fixed subtitle monitor showing the latest 5 bilingual lines
-- Azure subtitles: live partial results update the current row; final results enter the 5-line history
+- Frontend: Subtitle Studio layout with a fixed subtitle monitor and scrollable bilingual history
+- Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
+- Azure subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous; the UI adapts font size instead of cutting by time
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
-- Mode:
-  - `Realtime`: translate each ASR result immediately.
-  - `Balanced`: lightly buffer fragments until punctuation, about 8 words, or about 4 seconds.
+- Mode: fast/direct translation only.
 
 ## Translation Engines
 
 - `azure`: cloud streaming speech translation through Azure Speech Translation. Best for Teams meetings and low latency.
 - `argos`: lowest latency local translation. Best offline/default local choice.
-- `marianmt`: balanced quality and speed through Helsinki-NLP MarianMT models.
+- `marianmt`: local neural translation through Helsinki-NLP MarianMT models.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
 First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
@@ -57,7 +56,7 @@ real_time_translator/
 ## Version Closeout Docs
 
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
-- `docs/TECHNICAL_ARCHITECTURE.md`: Azure, MiniMax, and local fallback architecture.
+- `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
 - `docs/UI_STYLE.md`: Subtitle Studio layout and interaction rules.
 - `docs/RELEASE_NOTES.md`: current milestone release notes.
 - `docs/QA_CHECKLIST.md`: static checks and runtime smoke test checklist.
@@ -101,24 +100,10 @@ $env:AZURE_SPEECH_REGION="your_region"
 Optional phrase list for better names and technical terms:
 
 ```powershell
-$env:AZURE_PHRASE_LIST="Teams,Codex,MiniMax,faster-whisper,MarianMT,Azure Speech"
+$env:AZURE_PHRASE_LIST="Teams,Codex,faster-whisper,MarianMT,Azure Speech"
 ```
 
-Optional MiniMax polishing for better final Chinese:
-
-```powershell
-$env:MINIMAX_API_KEY="your_minimax_key"
-$env:MINIMAX_BASE_URL="https://api.minimax.io/v1"
-$env:MINIMAX_MODEL="MiniMax-M2.7"
-```
-
-The web page has a `Quality` selector for Azure mode:
-
-- `Fast`: show Azure translation only. Lowest latency.
-- `Balanced`: show Azure translation immediately, then polish final lines with MiniMax when configured.
-- `Quality`: show the English final line first, then replace the Chinese with MiniMax translation.
-
-MiniMax polishing uses a domain subtitle prompt for engineering, pharmaceutical facilities, chemical process, cleanroom, utilities, HVAC, validation, commissioning, and modular construction meetings. It preserves numbers, units, tags, drawing numbers, document numbers, company names, product names, system names, and common abbreviations such as AHU, BMS, EMS, HVAC, HEPA, WFI, PW, CIP, SIP, FAT, SAT, GMP, P&ID, HAZOP, MEP, BIM, RFI, NCR, and CAPA.
+MiniMax polishing and Balanced/Quality modes have been removed. The app now keeps a single fast/direct live-subtitle path.
 
 Example region values look like `eastus`, `westus`, or the region shown in your Azure resource page.
 
@@ -156,10 +141,8 @@ Recommended first test:
 ASR: base.en
 Device: cuda
 Chunk: 3s
-Mode: Balanced
 Engine: Azure Cloud
 Input: System, if available for Teams audio
-Quality: Balanced
 ```
 
 Recommended private/offline test:
@@ -168,7 +151,6 @@ Recommended private/offline test:
 ASR: base.en
 Device: cuda
 Chunk: 3s
-Mode: Balanced
 Engine: Argos
 ```
 

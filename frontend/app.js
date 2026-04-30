@@ -7,9 +7,7 @@ const audioSource = document.querySelector("#audioSource");
 const modelSize = document.querySelector("#modelSize");
 const deviceType = document.querySelector("#deviceType");
 const chunkSeconds = document.querySelector("#chunkSeconds");
-const latencyMode = document.querySelector("#latencyMode");
 const translationEngine = document.querySelector("#translationEngine");
-const translationQuality = document.querySelector("#translationQuality");
 const localControls = document.querySelectorAll(".local-control");
 const cloudControls = document.querySelectorAll(".cloud-control");
 const logText = document.querySelector("#logText");
@@ -29,7 +27,7 @@ function setStatus(status, detail = "") {
   logText.textContent = detail || status;
   statusDot.classList.toggle(
     "active",
-    ["Listening", "Transcribing", "Translating", "Loading models", "Connecting cloud"].includes(status),
+    ["Connecting", "Listening", "Transcribing", "Translating", "Loading models", "Connecting cloud"].includes(status),
   );
   statusDot.classList.toggle("error", status === "Error");
 }
@@ -73,17 +71,11 @@ function renderSubtitle(item) {
 
     const translation = document.createElement("p");
     translation.className = "translation";
-    translation.textContent = entry.translatedText || (entry.isPolishing ? "Polishing..." : "...");
+    translation.textContent = entry.translatedText || "...";
 
     const timestamp = document.createElement("div");
     timestamp.className = "timestamp";
-    const state = entry.isFinal === false
-      ? " - live"
-      : entry.isPolished
-        ? " - polished"
-        : entry.isFallback
-          ? " - fallback"
-          : "";
+    const state = entry.isFinal === false ? " - live" : "";
     timestamp.textContent = `${formatTimestamp(entry.start)} - ${formatTimestamp(entry.end)}${state}`;
 
     row.append(source, translation, timestamp);
@@ -129,7 +121,7 @@ function updateEngineControls() {
     item.classList.toggle("hidden", !isCloud);
   });
   perfText.textContent = isCloud
-    ? "Azure mode: streaming live subtitles; Balanced can polish final lines."
+    ? "Azure mode: streaming live subtitles."
     : "Local mode: waiting for first subtitle.";
 }
 
@@ -166,15 +158,10 @@ function start() {
         source_language: "eng_Latn",
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
-        translation_quality: translationQuality.value,
-        latency_mode: latencyMode.value,
         chunk_seconds: Number(chunkSeconds.value),
         overlap_seconds: 0.5,
         max_subtitles: serverSubtitleWindow,
         queue_max_size: 2,
-        buffer_max_wait_seconds: 4,
-        buffer_min_words: 8,
-        buffer_max_words: 18,
       },
     }));
   });

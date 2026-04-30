@@ -19,8 +19,6 @@ class CloudSubtitle:
     start_seconds: float
     end_seconds: float
     is_final: bool
-    is_polished: bool = False
-    is_fallback: bool = False
     received_at: float = field(default_factory=time.perf_counter)
 
 

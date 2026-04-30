@@ -98,7 +98,7 @@ class ArgosTranslator:
 
 
 class MarianMTTranslator:
-    """Balanced local translation through Helsinki-NLP MarianMT models."""
+    """Local neural translation through Helsinki-NLP MarianMT models."""
 
     engine_name = "marianmt"
 
@@ -155,7 +155,7 @@ class MarianMTTranslator:
 
 
 class NLLBTranslator:
-    """Higher-quality local translation, kept as the slower option."""
+    """Slower local translation through NLLB models."""
 
     engine_name = "nllb"
 

@@ -19,6 +19,13 @@ If Node is available:
 node --check real_time_translator\frontend\app.js
 ```
 
+Current closeout result on 2026-04-30:
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed with the bundled Node runtime.
+- Command-line `git` was not available in this shell; use GitHub Desktop for sync if needed.
+
 ## Runtime Smoke Test
 
 ```powershell
@@ -35,19 +42,20 @@ http://127.0.0.1:8000
 
 Test matrix:
 
-- Input: Mic, Engine: Azure Cloud, Quality: Fast.
-- Input: Mic, Engine: Azure Cloud, Quality: Balanced.
-- Input: System, Engine: Azure Cloud, Quality: Balanced, if Windows supports system capture.
+- Input: Mic, Engine: Azure Cloud.
+- Input: System, Engine: Azure Cloud, if Windows supports system capture.
 - Engine: Argos, if offline/local fallback is needed.
 
 ## Manual UX Checks
 
 - Start button connects and changes status.
 - Stop button stops streaming and returns to stopped state.
+- Red status lamp is dim but visible when stopped.
+- Red status lamp pulses slowly while running or connecting.
 - Live subtitles appear without waiting for full paragraphs.
 - Final subtitles enter history.
+- No MiniMax, Balanced, or Quality mode controls are visible.
 - Subtitle monitor has its own right-side scrollbar.
 - Scrolling upward does not prevent new subtitles from arriving.
 - Returning to the bottom resumes auto-follow.
 - Long subtitles do not overflow the monitor.
-

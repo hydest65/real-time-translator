@@ -16,7 +16,6 @@ from .audio_capture import AudioChunk, MicrophoneAudioCapture
 from .asr import TranscriptionResult, WhisperASR
 from .cloud_speech import AzureSpeechTranslationSession, CloudSubtitle, stream_microphone_to_azure
 from .config import AppConfig, config
-from .text_polisher import MiniMaxTextPolisher, has_minimax_config
 from .translator import ArgosTranslator, MarianMTTranslator, NLLBTranslator, Translator
 
 
@@ -50,71 +49,6 @@ class TranslateJob:
     transcribed_at: float = field(default_factory=time.perf_counter)
 
 
-class SentenceBuffer:
-    def __init__(self, max_wait_seconds: float, min_words: int, max_words: int) -> None:
-        self.max_wait_seconds = max_wait_seconds
-        self.min_words = min_words
-        self.max_words = max_words
-        self.parts: list[str] = []
-        self.start_seconds: float | None = None
-        self.end_seconds: float | None = None
-        self.audio_duration_seconds = 0.0
-        self.captured_at: float | None = None
-        self.asr_ms = 0.0
-        self.updated_at: float | None = None
-
-    def add(self, job: TranslateJob) -> TranslateJob | None:
-        text = job.source_text.strip()
-        if not text:
-            return None
-        if self.start_seconds is None:
-            self.start_seconds = job.start_seconds
-            self.captured_at = job.captured_at
-        self.end_seconds = job.end_seconds
-        self.audio_duration_seconds += job.audio_duration_seconds
-        self.asr_ms += job.asr_ms
-        self.updated_at = time.perf_counter()
-        self.parts.append(text)
-
-        candidate = self._text()
-        word_count = len(candidate.split())
-        has_sentence_end = candidate.endswith((".", "?", "!"))
-        if has_sentence_end or word_count >= self.max_words or word_count >= self.min_words:
-            return self.flush()
-        return None
-
-    def flush_if_stale(self) -> TranslateJob | None:
-        if not self.parts or self.updated_at is None:
-            return None
-        if time.perf_counter() - self.updated_at < self.max_wait_seconds:
-            return None
-        return self.flush()
-
-    def flush(self) -> TranslateJob | None:
-        if not self.parts or self.start_seconds is None or self.end_seconds is None or self.captured_at is None:
-            return None
-        count = max(1, len(self.parts))
-        job = TranslateJob(
-            source_text=self._text(),
-            start_seconds=self.start_seconds,
-            end_seconds=self.end_seconds,
-            audio_duration_seconds=self.audio_duration_seconds,
-            captured_at=self.captured_at,
-            asr_ms=self.asr_ms / count,
-        )
-        self.parts = []
-        self.start_seconds = None
-        self.end_seconds = None
-        self.audio_duration_seconds = 0.0
-        self.captured_at = None
-        self.asr_ms = 0.0
-        self.updated_at = None
-        return job
-
-    def _text(self) -> str:
-        return " ".join(self.parts).strip()
-
-
 @dataclass
 class SubtitleJob:
     source_text: str
@@ -126,11 +60,6 @@ class SubtitleJob:
     translate_ms: float
     total_latency_ms: float
     engine: str
-
-
-@dataclass
-class PolishJob:
-    subtitle: CloudSubtitle
 
 
 @dataclass
@@ -274,17 +203,11 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["overlap_seconds"] = max(0.0, min(1.0, float(merged["overlap_seconds"])))
     merged["max_subtitles"] = max(1, min(5, int(merged["max_subtitles"])))
     merged["queue_max_size"] = max(1, min(4, int(merged["queue_max_size"])))
-    merged["buffer_max_wait_seconds"] = max(1.0, min(8.0, float(merged["buffer_max_wait_seconds"])))
-    merged["buffer_min_words"] = max(3, min(14, int(merged["buffer_min_words"])))
-    merged["buffer_max_words"] = max(8, min(30, int(merged["buffer_max_words"])))
     merged["audio_sample_rate"] = int(merged["audio_sample_rate"])
     merged["audio_channels"] = int(merged["audio_channels"])
     merged["vad_rms_threshold"] = float(merged["vad_rms_threshold"])
     if merged["audio_source"] not in ("microphone", "system"):
         merged["audio_source"] = "microphone"
-    if merged["translation_quality"] not in ("fast", "balanced", "quality"):
-        merged["translation_quality"] = "balanced"
-    merged["minimax_timeout_seconds"] = max(1.0, min(15.0, float(merged["minimax_timeout_seconds"])))
     merged["turn_detector_enabled"] = bool(merged["turn_detector_enabled"])
     merged["turn_pause_seconds"] = max(0.6, min(4.0, float(merged["turn_pause_seconds"])))
     merged["noise_min_words"] = max(1, min(5, int(merged["noise_min_words"])))
@@ -407,11 +330,6 @@ async def translate_worker(
     stop_event: asyncio.Event,
 ) -> None:
     assert runtime.translator is not None
-    sentence_buffer = SentenceBuffer(
-        active_config.buffer_max_wait_seconds,
-        active_config.buffer_min_words,
-        active_config.buffer_max_words,
-    )
 
     async def process_translate_job(job: TranslateJob) -> None:
         started = time.perf_counter()
@@ -443,22 +361,9 @@ async def translate_worker(
         try:
             job: TranslateJob = await asyncio.wait_for(translate_queue.get(), timeout=0.2)
         except asyncio.TimeoutError:
-            if active_config.latency_mode == "balanced":
-                stale_job = sentence_buffer.flush_if_stale()
-                if stale_job is not None:
-                    await process_translate_job(stale_job)
             continue
 
-        if active_config.latency_mode == "balanced":
-            buffered_job = sentence_buffer.add(job)
-            translate_queue.task_done()
-            if buffered_job is None:
-                put_latest(status_queue, {"type": "status", "status": "Listening", "detail": "Buffering sentence."})
-                continue
-            job = buffered_job
-
-        if active_config.latency_mode != "balanced":
-            translate_queue.task_done()
+        translate_queue.task_done()
         await process_translate_job(job)
 
 
@@ -468,7 +373,6 @@ async def websocket_push_worker(
     status_queue: asyncio.Queue,
     stop_event: asyncio.Event,
     active_config: AppConfig | None = None,
-    polish_queue: asyncio.Queue | None = None,
 ) -> None:
     turn_detector = (
         SubtitleTurnDetector(
@@ -518,7 +422,7 @@ async def websocket_push_worker(
                 subtitle_queue.task_done()
             elif isinstance(payload, CloudSubtitle):
                 turn_meta: dict[str, Any] = {}
-                if turn_detector is not None and payload.is_final and not payload.is_polished and not payload.is_fallback:
+                if turn_detector is not None and payload.is_final:
                     decision = turn_detector.classify(payload)
                     if decision.is_noise:
                         turn_meta["isNoise"] = True
@@ -527,123 +431,32 @@ async def websocket_push_worker(
                     turn_meta["isNewTurn"] = decision.is_new_turn
 
                 total_latency_ms = (time.perf_counter() - payload.received_at) * 1000
-                should_polish = (
-                    active_config is not None
-                    and active_config.translation_quality != "fast"
-                    and has_minimax_config(active_config)
-                    and payload.is_final
-                    and not payload.is_polished
-                    and not payload.is_fallback
-                    and bool(payload.source_text.strip())
-                )
                 perf = {
                     "audioSeconds": round(payload.end_seconds - payload.start_seconds, 2),
                     "asrMs": 0,
                     "translateMs": 0,
                     "totalLatencyMs": round(total_latency_ms, 1),
-                    "engine": "minimax" if payload.is_polished else "azure",
+                    "engine": "azure",
                     "final": payload.is_final,
-                    "quality": active_config.translation_quality if active_config else "fast",
                 }
                 await websocket.send_json(
                     {
                         "type": "subtitle",
                         "sequenceId": payload.sequence_id,
                         "sourceText": payload.source_text,
-                        "translatedText": ""
-                        if should_polish and active_config.translation_quality == "quality"
-                        else payload.translated_text,
+                        "translatedText": payload.translated_text,
                         "start": round(payload.start_seconds, 2),
                         "end": round(payload.end_seconds, 2),
                         "isFinal": payload.is_final,
-                        "isPolished": payload.is_polished,
-                        "isFallback": payload.is_fallback,
-                        "isPolishing": should_polish,
                         "perf": perf,
                         **turn_meta,
                     }
                 )
-                if should_polish and polish_queue is not None:
-                    put_latest(polish_queue, PolishJob(subtitle=payload))
                 print(f"[azure] {perf} text={payload.source_text!r}", flush=True)
                 subtitle_queue.task_done()
             else:
                 await websocket.send_json(payload)
                 status_queue.task_done()
-
-
-async def polish_worker(
-    polish_queue: asyncio.Queue,
-    subtitle_queue: asyncio.Queue,
-    status_queue: asyncio.Queue,
-    active_config: AppConfig,
-    stop_event: asyncio.Event,
-) -> None:
-    polisher = MiniMaxTextPolisher(active_config)
-    if not polisher.enabled:
-        put_latest(
-            status_queue,
-            {
-                "type": "notice",
-                "label": "Azure only",
-                "detail": "Set MINIMAX_API_KEY to enable Balanced/Quality polishing.",
-            },
-        )
-
-    while not stop_event.is_set():
-        try:
-            job: PolishJob = await asyncio.wait_for(polish_queue.get(), timeout=0.2)
-        except asyncio.TimeoutError:
-            continue
-
-        try:
-            started = time.perf_counter()
-            result = await polisher.polish(
-                job.subtitle.source_text,
-                job.subtitle.translated_text,
-                active_config.translation_quality,
-            )
-            if result is not None:
-                polished = CloudSubtitle(
-                    sequence_id=job.subtitle.sequence_id,
-                    source_text=job.subtitle.source_text,
-                    translated_text=result.text,
-                    start_seconds=job.subtitle.start_seconds,
-                    end_seconds=job.subtitle.end_seconds,
-                    is_final=True,
-                    is_polished=True,
-                    received_at=time.perf_counter(),
-                )
-                put_latest(subtitle_queue, polished)
-                put_latest(
-                    status_queue,
-                    {
-                        "type": "notice",
-                        "label": "Polished",
-                        "detail": f"{(time.perf_counter() - started) * 1000:.0f}ms",
-                    },
-                )
-            else:
-                put_latest(subtitle_queue, fallback_subtitle(job.subtitle))
-        except Exception as exc:
-            put_latest(status_queue, {"type": "notice", "label": "Polish failed", "detail": str(exc)})
-            put_latest(subtitle_queue, fallback_subtitle(job.subtitle))
-        finally:
-            polish_queue.task_done()
-
-
-def fallback_subtitle(subtitle: CloudSubtitle) -> CloudSubtitle:
-    return CloudSubtitle(
-        sequence_id=subtitle.sequence_id,
-        source_text=subtitle.source_text,
-        translated_text=subtitle.translated_text,
-        start_seconds=subtitle.start_seconds,
-        end_seconds=subtitle.end_seconds,
-        is_final=True,
-        is_polished=False,
-        is_fallback=True,
-        received_at=time.perf_counter(),
-    )
 
 
 @app.websocket("/ws/subtitles")
@@ -676,7 +489,6 @@ async def subtitles(websocket: WebSocket) -> None:
         translate_queue = create_queue(active_config.queue_max_size)
         subtitle_queue = create_queue(active_config.queue_max_size)
         status_queue = create_queue(active_config.queue_max_size)
-        polish_queue = create_queue(active_config.queue_max_size)
 
         capture = MicrophoneAudioCapture(
             sample_rate=active_config.audio_sample_rate,
@@ -705,16 +517,9 @@ async def subtitles(websocket: WebSocket) -> None:
                         status_queue,
                         stop_event,
                         active_config,
-                        polish_queue,
                     )
                 ),
             ]
-            if active_config.translation_quality != "fast":
-                tasks.append(
-                    asyncio.create_task(
-                        polish_worker(polish_queue, subtitle_queue, status_queue, active_config, stop_event)
-                    )
-                )
             await send_status(websocket, "Listening", "Azure Speech Translation")
         else:
             tasks = [
