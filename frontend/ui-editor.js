@@ -1,4 +1,4 @@
-const storageKey = "subtitleStudioUiTheme";
+const storageKey = "subtitleStudioUiThemeCompact20260502";
 const controls = [...document.querySelectorAll("[data-theme-key]")];
 const previewFrame = document.querySelector("#previewFrame");
 const saveButton = document.querySelector("#saveTheme");

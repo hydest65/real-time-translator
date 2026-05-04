@@ -40,6 +40,7 @@ class ASRJob:
 
 @dataclass
 class TranslateJob:
+    sequence_id: str
     source_text: str
     start_seconds: float
     end_seconds: float
@@ -51,6 +52,7 @@ class TranslateJob:
 
 @dataclass
 class SubtitleJob:
+    sequence_id: str
     source_text: str
     translated_text: str
     start_seconds: float
@@ -60,6 +62,13 @@ class SubtitleJob:
     translate_ms: float
     total_latency_ms: float
     engine: str
+    is_final: bool = True
+
+
+@dataclass
+class UtteranceUpdate:
+    draft: SubtitleJob | None = None
+    ready: TranslateJob | None = None
 
 
 @dataclass
@@ -100,6 +109,115 @@ class SubtitleTurnDetector:
     @staticmethod
     def _normalize_text(text: str) -> str:
         return re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9'\s]", " ", text.lower())).strip()
+
+
+class LocalUtteranceAggregator:
+    def __init__(self, active_config: AppConfig) -> None:
+        self.pause_seconds = active_config.segmenter_pause_seconds
+        self.max_words = active_config.segmenter_max_words
+        self.max_seconds = active_config.segmenter_max_seconds
+        self.sequence_index = 0
+        self.reset()
+
+    def reset(self) -> None:
+        self.sequence_id = ""
+        self.source_text = ""
+        self.start_seconds = 0.0
+        self.end_seconds = 0.0
+        self.audio_duration_seconds = 0.0
+        self.captured_at = time.perf_counter()
+        self.last_update_at = 0.0
+        self.asr_ms = 0.0
+
+    @property
+    def has_text(self) -> bool:
+        return bool(self.source_text.strip())
+
+    def add_asr_result(self, item: TranscriptionResult, job: ASRJob, asr_ms: float) -> UtteranceUpdate:
+        if not self.has_text:
+            self.sequence_index += 1
+            self.sequence_id = f"local-utterance-{self.sequence_index}"
+            self.start_seconds = item.start_seconds
+            self.captured_at = job.chunk.captured_at
+
+        previous_end = self.end_seconds
+        self.source_text = self._merge_text(self.source_text, item.text)
+        self.end_seconds = max(self.end_seconds, item.end_seconds)
+        self.audio_duration_seconds = max(self.audio_duration_seconds, self.end_seconds - self.start_seconds)
+        self.last_update_at = time.perf_counter()
+        self.asr_ms += asr_ms
+
+        draft = self._subtitle(is_final=False, engine_suffix="draft")
+        if not self._should_mark_ready(previous_end, item):
+            return UtteranceUpdate(draft=draft)
+
+        return UtteranceUpdate(draft=draft, ready=self.mark_ready())
+
+    def mark_ready(self) -> TranslateJob | None:
+        if not self.has_text:
+            return None
+        job = TranslateJob(
+            sequence_id=self.sequence_id,
+            source_text=self.source_text.strip(),
+            start_seconds=self.start_seconds,
+            end_seconds=self.end_seconds,
+            audio_duration_seconds=max(0.0, self.audio_duration_seconds),
+            captured_at=self.captured_at,
+            asr_ms=self.asr_ms,
+        )
+        self.reset()
+        return job
+
+    def mark_ready_if_idle(self) -> TranslateJob | None:
+        if not self.has_text or not self.last_update_at:
+            return None
+        if time.perf_counter() - self.last_update_at < self.pause_seconds:
+            return None
+        return self.mark_ready()
+
+    def _subtitle(self, is_final: bool, engine_suffix: str) -> SubtitleJob:
+        return SubtitleJob(
+            sequence_id=self.sequence_id,
+            source_text=self.source_text.strip(),
+            translated_text="",
+            start_seconds=self.start_seconds,
+            end_seconds=self.end_seconds,
+            audio_duration_seconds=max(0.0, self.audio_duration_seconds),
+            asr_ms=self.asr_ms,
+            translate_ms=0,
+            total_latency_ms=(time.perf_counter() - self.captured_at) * 1000,
+            engine=f"local-{engine_suffix}",
+            is_final=is_final,
+        )
+
+    def _should_mark_ready(self, previous_end: float, item: TranscriptionResult) -> bool:
+        text = self.source_text.strip()
+        words = SubtitleTurnDetector._normalize_text(text).split()
+        if len(words) >= self.max_words:
+            return True
+        if self.end_seconds - self.start_seconds >= self.max_seconds:
+            return True
+        gap = item.start_seconds - previous_end if previous_end else 0.0
+        return gap >= self.pause_seconds and len(words) >= 4
+
+    @staticmethod
+    def _merge_text(current: str, incoming: str) -> str:
+        clean_current = current.strip()
+        clean_incoming = incoming.strip()
+        if not clean_current:
+            return clean_incoming
+        if not clean_incoming:
+            return clean_current
+
+        current_words = clean_current.split()
+        incoming_words = clean_incoming.split()
+        max_overlap = min(6, len(current_words), len(incoming_words))
+        for overlap in range(max_overlap, 0, -1):
+            left = " ".join(current_words[-overlap:]).lower().strip(".,!?;:")
+            right = " ".join(incoming_words[:overlap]).lower().strip(".,!?;:")
+            if left == right:
+                return " ".join([*current_words, *incoming_words[overlap:]])
+        return f"{clean_current} {clean_incoming}"
 
 
 class Runtime:
@@ -220,7 +338,7 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["segmenter_enabled"] = bool(merged["segmenter_enabled"])
     merged["segmenter_pause_seconds"] = max(0.4, min(2.0, float(merged["segmenter_pause_seconds"])))
     merged["segmenter_max_words"] = max(8, min(40, int(merged["segmenter_max_words"])))
-    merged["segmenter_max_seconds"] = max(4.0, min(20.0, float(merged["segmenter_max_seconds"])))
+    merged["segmenter_max_seconds"] = max(3.0, min(20.0, float(merged["segmenter_max_seconds"])))
     return AppConfig(**merged)
 
 
@@ -254,6 +372,10 @@ def put_latest(queue_: asyncio.Queue, item: object) -> None:
             queue_.task_done()
         except asyncio.QueueEmpty:
             break
+    queue_.put_nowait(item)
+
+
+def enqueue_translation(queue_: asyncio.Queue, item: object) -> None:
     queue_.put_nowait(item)
 
 
@@ -300,15 +422,21 @@ async def audio_capture_worker(
 async def asr_worker(
     audio_queue: asyncio.Queue,
     translate_queue: asyncio.Queue,
+    subtitle_queue: asyncio.Queue,
     status_queue: asyncio.Queue,
     active_config: AppConfig,
     stop_event: asyncio.Event,
 ) -> None:
     assert runtime.asr is not None
+    aggregator = LocalUtteranceAggregator(active_config)
     while not stop_event.is_set():
         try:
             job: ASRJob = await asyncio.wait_for(audio_queue.get(), timeout=0.2)
         except asyncio.TimeoutError:
+            pending_job = aggregator.mark_ready_if_idle()
+            if pending_job is not None:
+                enqueue_translation(translate_queue, pending_job)
+                put_latest(status_queue, {"type": "status", "status": "Translating", "detail": "Translating completed sentence."})
             continue
 
         started = time.perf_counter()
@@ -322,21 +450,18 @@ async def asr_worker(
         audio_queue.task_done()
 
         if not transcriptions:
+            pending_job = aggregator.mark_ready_if_idle()
+            if pending_job is not None:
+                enqueue_translation(translate_queue, pending_job)
             put_latest(status_queue, {"type": "status", "status": "Listening", "detail": "No speech detected."})
             continue
 
         for item in transcriptions:
-            put_latest(
-                translate_queue,
-                TranslateJob(
-                    source_text=item.text,
-                    start_seconds=item.start_seconds,
-                    end_seconds=item.end_seconds,
-                    audio_duration_seconds=job.chunk.duration_seconds,
-                    captured_at=job.chunk.captured_at,
-                    asr_ms=asr_ms,
-                ),
-            )
+            update = aggregator.add_asr_result(item, job, asr_ms)
+            if update.draft is not None:
+                put_latest(subtitle_queue, update.draft)
+            if update.ready is not None:
+                enqueue_translation(translate_queue, update.ready)
 
 
 async def translate_worker(
@@ -362,6 +487,7 @@ async def translate_worker(
         put_latest(
             subtitle_queue,
             SubtitleJob(
+                sequence_id=job.sequence_id,
                 source_text=job.source_text,
                 translated_text=translated,
                 start_seconds=job.start_seconds,
@@ -371,8 +497,10 @@ async def translate_worker(
                 translate_ms=translate_ms,
                 total_latency_ms=total_latency_ms,
                 engine=runtime.translator.engine_name,
+                is_final=True,
             ),
         )
+        put_latest(status_queue, {"type": "status", "status": "Listening", "detail": "Waiting for speech."})
 
     while not stop_event.is_set():
         try:
@@ -380,8 +508,12 @@ async def translate_worker(
         except asyncio.TimeoutError:
             continue
 
-        translate_queue.task_done()
-        await process_translate_job(job)
+        try:
+            await process_translate_job(job)
+        except Exception as exc:
+            put_latest(status_queue, {"type": "status", "status": "Error", "detail": f"Translation failed: {exc}"})
+        finally:
+            translate_queue.task_done()
 
 
 async def websocket_push_worker(
@@ -411,6 +543,8 @@ async def websocket_push_worker(
 
         for task in pending:
             task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         if not done:
             continue
 
@@ -427,11 +561,12 @@ async def websocket_push_worker(
                 await websocket.send_json(
                     {
                         "type": "subtitle",
-                        "sequenceId": "",
+                        "sequenceId": payload.sequence_id,
                         "sourceText": payload.source_text,
                         "translatedText": payload.translated_text,
                         "start": round(payload.start_seconds, 2),
                         "end": round(payload.end_seconds, 2),
+                        "isFinal": payload.is_final,
                         "perf": perf,
                     }
                 )
@@ -503,9 +638,9 @@ async def subtitles(websocket: WebSocket) -> None:
             await runtime.ensure_models(active_config)
 
         audio_queue = create_queue(active_config.queue_max_size)
-        translate_queue = create_queue(active_config.queue_max_size)
-        subtitle_queue = create_queue(active_config.queue_max_size)
-        status_queue = create_queue(active_config.queue_max_size)
+        translate_queue = asyncio.Queue()
+        subtitle_queue = create_queue(max(6, active_config.queue_max_size))
+        status_queue = create_queue(max(3, active_config.queue_max_size))
 
         capture = MicrophoneAudioCapture(
             sample_rate=active_config.audio_sample_rate,
@@ -542,7 +677,7 @@ async def subtitles(websocket: WebSocket) -> None:
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
                 asyncio.create_task(audio_capture_worker(capture, audio_queue, status_queue, active_config, stop_event)),
-                asyncio.create_task(asr_worker(audio_queue, translate_queue, status_queue, active_config, stop_event)),
+                asyncio.create_task(asr_worker(audio_queue, translate_queue, subtitle_queue, status_queue, active_config, stop_event)),
                 asyncio.create_task(translate_worker(translate_queue, subtitle_queue, status_queue, active_config, stop_event)),
                 asyncio.create_task(websocket_push_worker(websocket, subtitle_queue, status_queue, stop_event)),
             ]
@@ -567,3 +702,5 @@ async def subtitles(websocket: WebSocket) -> None:
             capture.stop()
         for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)

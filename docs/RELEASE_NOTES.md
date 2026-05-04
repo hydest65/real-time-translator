@@ -1,8 +1,53 @@
 # Release Notes
 
-## Unreleased - Spanish Source Language
+## Unreleased - Local Split Transcript Closeout
+
+Date: 2026-05-02
+
+### Frontend
+
+- Kept Azure mode on the original single bilingual subtitle monitor and scroll-history strategy.
+- Reworked local mode into three reading zones: stable English context, live English draft, and complete Chinese translation.
+- Changed the local English context and Chinese translation panes from scrolling subtitle rows to continuous forward text blocks.
+- Kept the local English draft pane separate so ASR updates can remain responsive while Chinese waits for a fuller utterance.
+- Versioned the main static assets so browser refresh picks up the local split transcript update.
+
+### Backend
+
+- Kept `LocalUtteranceAggregator` as the local sentence/utterance boundary layer.
+- Made local translation jobs run through a background queue that does not block the English draft path.
+- Added safer translation-worker exception handling and task cleanup on stop/disconnect.
+
+### Product
+
+- Local mode now optimizes for watchability: immediate English draft, readable English context, and slightly delayed complete Chinese.
+- Azure remains the recommended lowest-latency mode and keeps its existing UI behavior.
+
+### Verification
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed with the bundled Node runtime.
+- Runtime audio behavior still depends on selecting the correct input source (`System` for computer audio, `Mic` for microphone) and valid Azure credentials for cloud mode.
+
+## 0.1.3 - Spanish Source Language and Compact Local Layout
 
 Date: 2026-04-30
+
+### Frontend
+
+- Reduced subtitle row padding and stream spacing so more subtitle history fits in the monitor.
+- Changed subtitle text to fixed source/translation sizes; short and long subtitles no longer use different length-based font sizes.
+- Increased the compact English source subtitle default from 12px to 13px for readability.
+- Updated the UI editor subtitle-size defaults for the compact subtitle layout.
+- Added a Local Latency control with Low and Steady presets; Low selects a 2s local chunk.
+- Split subtitle rendering by engine: Azure keeps the existing single bilingual monitor, while local engines use separate English live transcript and Chinese translation monitors.
+- Local English monitor now keeps recent stable English context and one current draft row instead of showing only the latest draft.
+
+### Backend
+
+- Reworked local mode around a `LocalUtteranceAggregator`: ASR chunks update a continuous English utterance row, and only ready utterances are translated into Chinese.
+- Low latency local runs with shorter overlap and smaller audio queues while preserving ready translation jobs so completed sentences are not dropped.
 
 ### Product
 
@@ -38,7 +83,7 @@ Date: 2026-04-30
 
 - Added `/static/ui-editor.html` with live preview controls for background color, panel color, accent/subtitle color, text color, subtitle font sizes, left panel width, corner radius, and background decoration.
 - Added `frontend/ui-editor.css` and `frontend/ui-editor.js`.
-- Main page now loads saved editor choices from browser `localStorage` using the `subtitleStudioUiTheme` key.
+- Main page now loads saved editor choices from browser `localStorage` using the `subtitleStudioUiThemeCompact20260502` key.
 - Added a `UI Editor` entry button to the main toolbar.
 - Removed the extra raised shell behind the topbar while preserving the individual brand and toolbar cards.
 - Restored the main subtitle monitor outer shell after visual review because the page looked weaker without it.

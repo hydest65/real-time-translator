@@ -19,6 +19,7 @@ The source language selector maps English to `en-US` and Spanish to `es-ES`; the
 ```text
 audio_capture_worker
   -> asr_worker
+  -> LocalUtteranceAggregator
   -> translate_worker
   -> websocket_push_worker
   -> browser subtitle monitor
@@ -26,10 +27,11 @@ audio_capture_worker
 
 Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translation.
 English local mode can use English-only Whisper models such as `base.en` and `small.en`. Spanish local mode automatically maps those selections to multilingual `base` and `small`, then translates `spa_Latn -> zho_Hans`.
+The local low-latency preset uses a shorter `2s` chunk and `0.2s` overlap. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a brief idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 
 ## Key Backend Modules
 
-- `backend/main.py`: FastAPI app, WebSocket orchestration, queues, workers, direct fast translation flow, and paragraph turn detection.
+- `backend/main.py`: FastAPI app, WebSocket orchestration, queues, local utterance aggregation, workers, direct fast translation flow, and paragraph turn detection.
 - `backend/audio_capture.py`: microphone and system audio capture.
 - `backend/cloud_speech.py`: Azure streaming translation integration.
 - `backend/asr.py`: faster-whisper wrapper.
@@ -42,20 +44,23 @@ English local mode can use English-only Whisper models such as `base.en` and `sm
 - `frontend/index.html`: main Subtitle Studio operating surface.
 - `frontend/style.css`: shared visual tokens, soft UI layout, subtitle monitor, controls, and saved-theme CSS variable hooks.
 - `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, and saved UI theme loading.
+- Frontend rendering uses two UI modes: Azure events render into the original single bilingual subtitle stream, while local events split into stable English context, live English draft, and complete Chinese translation panes.
 - `frontend/ui-editor.html`: visual editor page for tuning the main UI.
 - `frontend/ui-editor.css`: editor layout and control styling.
 - `frontend/ui-editor.js`: editor preview, `localStorage` save/reset behavior, and generated CSS preview.
 
-Saved UI editor choices are stored in the browser under `subtitleStudioUiTheme`. This is a local browser preference, not a server-side user setting.
+Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCompact20260502`. This is a local browser preference, not a server-side user setting.
 
 ## Latency Design
 
 - Azure route avoids fixed local time slicing.
 - Live Azure partials update the current subtitle row.
 - Final Azure results enter history.
+- Local low-latency mode reduces chunk size, accumulates English ASR output into utterances, and translates only ready utterances.
+- Audio queues may drop stale chunks for responsiveness. The local translation queue is background-only and preserves ready utterances so completed sentences are not lost or allowed to block the English draft path.
 - There is no MiniMax polish queue and no Balanced/Quality path.
 - The active translation mode is fixed to fast/direct output.
-- Local queues are size-limited so stale work is dropped rather than displayed late.
+- The local audio queue is size-limited so stale audio work is dropped rather than displayed late.
 
 ## Paragraph Turn Detection
 

@@ -18,22 +18,30 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - notice
   - activity
   - performance
-- Main subtitle monitor:
+- Azure main subtitle monitor:
   - largest visual area on the screen
   - soft raised outer shell
   - recessed inner subtitle stream
   - internal right-side scrollbar
   - preserved subtitle history
   - live row plus final bilingual rows
+- Azure mode keeps the single bilingual subtitle monitor and its scroll-review behavior.
+- Local mode uses two stacked monitors:
+  - upper monitor split into stable English context above and live ASR draft below
+  - lower monitor for slightly delayed complete Chinese sentence translation
 
 ## Subtitle Behavior
 
 - Chinese translation is visually emphasized.
-- English source remains visible above the Chinese.
-- Long subtitles remain semantically continuous; the UI reduces font size rather than cutting by time.
-- User can scroll up inside the subtitle monitor without losing incoming live subtitles.
-- If the user is at the bottom, new subtitles auto-follow.
-- If the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
+- Azure mode keeps English source visible above the Chinese in each subtitle row.
+- In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
+- In local mode, stable English context and complete Chinese translation append forward as continuous text blocks without vertical scrolling.
+- In local mode, the English live draft stays in its own lower English pane and updates quickly.
+- Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
+- Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
+- Azure users can scroll up inside the subtitle monitor without losing incoming live subtitles.
+- In Azure mode, if the user is at the bottom, new subtitles auto-follow.
+- In Azure mode, if the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
 
 ## Status Lamp Behavior
 

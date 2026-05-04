@@ -59,9 +59,9 @@ class AppConfig:
     noise_min_words: int = 2
     noise_phrases: str = "uh,um,ah,er,mm,hmm,ok,okay,yeah,yep,nope"
     segmenter_enabled: bool = True
-    segmenter_pause_seconds: float = 0.9
-    segmenter_max_words: int = 22
-    segmenter_max_seconds: float = 10.0
+    segmenter_pause_seconds: float = 0.8
+    segmenter_max_words: int = 24
+    segmenter_max_seconds: float = 8.0
 
 
 config = AppConfig()

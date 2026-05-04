@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=monitor-shell-restore-20260430" />
+    <link rel="stylesheet" href="/static/style.css?v=local-split-context-draft-20260502" />
   </head>
   <body>
     <main class="studio">
@@ -66,10 +66,20 @@
           </label>
 
           <label class="local-control local-extension">
+            Latency
+            <select id="localLatencyPreset">
+              <option value="low" selected>Low</option>
+              <option value="steady">Steady</option>
+            </select>
+          </label>
+
+          <label class="local-control local-extension">
             Chunk
             <select id="chunkSeconds">
-              <option value="2">2s</option>
-              <option value="3" selected>3s</option>
+              <option value="1">1s</option>
+              <option value="1.5">1.5s</option>
+              <option value="2" selected>2s</option>
+              <option value="3">3s</option>
               <option value="5">5s</option>
             </select>
           </label>
@@ -96,7 +106,7 @@
           </div>
         </aside>
 
-        <section class="subtitle-box" aria-label="Subtitle history">
+        <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Cloud subtitle history">
           <div class="subtitle-box-header">
             <div>
               <p class="monitor-title">Subtitle Monitor</p>
@@ -106,10 +116,37 @@
           </div>
           <div class="subtitle-stream" id="subtitleStack" aria-live="polite"></div>
         </section>
+
+        <section class="local-subtitle-layout hidden" id="localSubtitleLayout" aria-label="Local subtitle workspace">
+          <section class="split-subtitle-box" aria-label="English live transcript">
+            <div class="subtitle-box-header compact">
+              <div>
+                <p class="monitor-title">English Live Transcript</p>
+                <p class="monitor-subtitle">Context above · live draft below</p>
+              </div>
+              <span class="monitor-badge">ASR</span>
+            </div>
+            <div class="english-pane">
+              <div class="subtitle-stream english-stream english-context-stream" id="englishContextStack" aria-live="polite"></div>
+              <div class="subtitle-stream english-stream english-draft-stream" id="englishDraftStack" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <section class="split-subtitle-box" aria-label="Chinese translated subtitles">
+            <div class="subtitle-box-header compact">
+              <div>
+                <p class="monitor-title">Chinese Translation</p>
+                <p class="monitor-subtitle">Complete sentence translation · slightly delayed</p>
+              </div>
+              <span class="monitor-badge">ZH</span>
+            </div>
+            <div class="subtitle-stream chinese-stream" id="chineseSubtitleStack" aria-live="polite"></div>
+          </section>
+        </section>
       </section>
     </main>
 
-    <script src="/static/app.js?v=source-language-es-zh-20260430"></script>
+    <script src="/static/app.js?v=local-split-context-draft-20260502"></script>
   </body>
 </html>
 

@@ -13,17 +13,18 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Whisper model: `base.en`
 - Accuracy option: `small.en`
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
-- Audio chunk: `3s`
-- Overlap: `0.5s`
+- Local low-latency preset: `2s` audio chunk, `0.2s` overlap, queue max size `1`
+- Local steady preset: `3s` audio chunk, `0.5s` overlap, queue max size `2`
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
-- Queue max size: `2`; old chunks are dropped when work piles up
-- Frontend: Subtitle Studio layout with a fixed subtitle monitor and scrollable bilingual history
+- Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
+- Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English or Spanish, both translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
-- Long subtitles stay continuous; the UI adapts font size instead of cutting by time
+- Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
+- Local English context and Chinese translation panes append text forward without vertical scrolling
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
 - Mode: fast/direct translation only.
 
@@ -130,7 +131,7 @@ Engine: Azure Cloud
 
 In Azure mode, the app streams microphone audio to Azure Speech Translation and receives live source-language and Chinese subtitle results. It does not load Whisper, Argos, MarianMT, or NLLB for that run.
 
-Azure can sometimes return very long final segments. The app keeps them as one semantic subtitle and adapts the display size instead of forcing time-based cuts.
+Azure can sometimes return very long final segments. The app keeps them as one semantic subtitle with fixed subtitle sizing instead of forcing time-based cuts.
 
 The paragraph detector is intentionally lightweight. It uses the pause between final subtitles plus a short noise list such as `uh`, `um`, `ok`, and `yeah`. This is not true speaker diarization; it avoids noise-triggered paragraph breaks while keeping latency low.
 
@@ -210,7 +211,8 @@ Recommended private/offline test:
 ```text
 ASR: base.en
 Device: cuda
-Chunk: 3s
+Latency: Low
+Chunk: 2s
 Engine: Argos
 ```
 
@@ -227,11 +229,14 @@ Local mode runs four async workers:
 ```text
 audio_capture_worker
   -> asr_worker
+  -> LocalUtteranceAggregator
   -> translate_worker
   -> websocket_push_worker
 ```
 
-Each queue has max size `2`. When a queue is full, the oldest item is dropped so the app stays close to real time instead of translating stale audio.
+In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The translation queue preserves ready utterances so completed sentences are not lost.
+
+For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history; they keep the latest readable text block visible and trim older overflow. Azure mode keeps the original single bilingual scrolling monitor.
 
 Azure mode uses a shorter cloud-streaming route:
 
@@ -253,7 +258,7 @@ Every subtitle includes:
 - total latency
 - translation engine
 
-The browser shows this in the Perf line. PowerShell also prints lines like:
+The browser shows this in the Perf line. If you see an `argos-asr` or similar engine name, that is the English-first local ASR row before Chinese translation completes. PowerShell also prints lines like:
 
 ```text
 [perf] {'audioSeconds': 3.0, 'asrMs': 420.5, 'translateMs': 35.2, 'totalLatencyMs': 620.1, 'engine': 'argos'}

@@ -23,7 +23,9 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
   - Argos Translate
   - MarianMT
   - NLLB
-- Fixed subtitle monitor with internal scrolling history.
+- Local low-latency preset that uses shorter audio chunks, shows live English ASR draft immediately, and translates Chinese after sentence completion.
+- Fixed subtitle monitor with internal scrolling history for Azure.
+- Two-mode subtitle workspace: Azure keeps one bilingual monitor; local mode uses separate English context, English draft, and Chinese translation panes.
 - Real-time live row plus final subtitle history.
 - Top-left red status lamp that remains visible when stopped and pulses while running.
 - Visual UI editor for local browser-side tuning of colors, subtitle size, panel width, corner radius, and background decoration.
@@ -34,6 +36,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - `Fast` is the only active mode.
 - Azure Cloud streams live bilingual subtitles directly from Azure Speech Translation.
 - Local fallback translates each ASR result immediately without delayed polishing or quality-mode buffering.
+- Local fallback shows stable English context as continuous forward text, keeps the current live draft in a separate lower English pane, then sends complete Chinese sentence translations to a continuous Chinese pane.
 
 ## Out Of Scope For This Version
 
@@ -50,7 +53,9 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - User can open `http://127.0.0.1:8000`, click Start, and see live bilingual subtitles.
 - User can choose English or Spanish as the source language before starting.
 - Azure mode should feel close to real time during normal speech.
+- Local Low latency mode should keep the live ASR draft responsive while stable English and Chinese complete sentences append forward without vertical scrolling.
 - The interface should not show MiniMax, Balanced, or Quality mode controls.
 - The status lamp should be visible when stopped and gently pulse after Start.
-- User can scroll subtitle history inside the subtitle monitor while new subtitles continue to arrive.
+- In Azure mode, user can scroll subtitle history inside the subtitle monitor while new subtitles continue to arrive.
+- In local mode, user can scan English live transcript and Chinese translations separately.
 - User can open `/static/ui-editor.html`, tune the visual style, save it locally, and see the saved style on the main subtitle page.
