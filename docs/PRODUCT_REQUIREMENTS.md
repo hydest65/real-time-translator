@@ -14,15 +14,15 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 ## Current MVP Scope
 
 - Local browser subtitle window served by FastAPI.
-- Audio input from microphone, with experimental system audio input when Windows exposes a monitor or Stereo Mix device.
+- Audio input from microphone, with `System` mode that prefers loopback from the current default Windows playback device and falls back to Stereo Mix / monitor input when needed.
 - Azure Speech Translation as the main low-latency route.
 - Source language selector for English or Spanish, with Simplified Chinese as the fixed target language.
 - Local fallback engines for offline/private testing:
   - faster-whisper `base.en` / `small.en` for English
   - multilingual faster-whisper `base` / `small` automatically for Spanish
-  - Argos Translate
-  - MarianMT
-  - NLLB
+  - Argos Translate as the recommended local realtime engine
+  - MarianMT for local comparison / quality testing
+  - NLLB for local comparison / non-realtime use
 - Local low-latency preset that uses shorter audio chunks, shows live English ASR draft immediately, and translates Chinese after sentence completion.
 - Fixed subtitle monitor with internal scrolling history for Azure.
 - Two-mode subtitle workspace: Azure keeps one bilingual monitor; local mode uses separate English context, English draft, and Chinese translation panes.
@@ -36,7 +36,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - `Fast` is the only active mode.
 - Azure Cloud streams live bilingual subtitles directly from Azure Speech Translation.
 - Local fallback translates each ASR result immediately without delayed polishing or quality-mode buffering.
-- Local fallback shows stable English context as continuous forward text, keeps the current live draft in a separate lower English pane, then sends complete Chinese sentence translations to a continuous Chinese pane.
+- Local fallback shows stable English context as a continuous text pane that fills first and then scrolls, keeps the current live draft in a separate lower English pane, then sends complete Chinese sentence translations to a continuous Chinese pane.
 
 ## Out Of Scope For This Version
 
@@ -53,9 +53,10 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - User can open `http://127.0.0.1:8000`, click Start, and see live bilingual subtitles.
 - User can choose English or Spanish as the source language before starting.
 - Azure mode should feel close to real time during normal speech.
-- Local Low latency mode should keep the live ASR draft responsive while stable English and Chinese complete sentences append forward without vertical scrolling.
+- Local Low latency mode should keep the live ASR draft responsive while stable English context and Chinese complete sentences stay readable as continuous text flows.
 - The interface should not show MiniMax, Balanced, or Quality mode controls.
 - The status lamp should be visible when stopped and gently pulse after Start.
 - In Azure mode, user can scroll subtitle history inside the subtitle monitor while new subtitles continue to arrive.
 - In local mode, user can scan English live transcript and Chinese translations separately.
+- Local MarianMT and NLLB do not need to match Azure realtime behavior on this machine; they are comparison paths rather than the primary recommended route.
 - User can open `/static/ui-editor.html`, tune the visual style, save it locally, and see the saved style on the main subtitle page.

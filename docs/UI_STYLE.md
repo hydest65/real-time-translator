@@ -35,7 +35,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - Chinese translation is visually emphasized.
 - Azure mode keeps English source visible above the Chinese in each subtitle row.
 - In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
-- In local mode, stable English context and complete Chinese translation append forward as continuous text blocks without vertical scrolling.
+- In local mode, stable English context and complete Chinese translation render as continuous text blocks. The English context pane should fill its readable area first and then scroll.
 - In local mode, the English live draft stays in its own lower English pane and updates quickly.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.

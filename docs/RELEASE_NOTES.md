@@ -1,5 +1,39 @@
 # Release Notes
 
+## 0.1.5 - System Loopback and Local Realtime Tuning Closeout
+
+Date: 2026-05-04
+
+### Frontend
+
+- Restored the local English upper area to a continuous reading flow instead of separate stable-row cards.
+- Kept the lower local English draft pane for fast draft visibility while ASR is still forming the utterance.
+- Tightened the local latency presets so `Low` now drives a `1s` chunk and `Steady` now targets `1.5s`.
+- Sent additional local realtime tuning values from the browser to the backend so chunk overlap, queue pressure, and utterance segmentation all match the selected latency preset.
+
+### Backend
+
+- Updated system-audio capture to prefer loopback from the current default Windows playback device when available, with Stereo Mix / speaker-monitor fallback.
+- Added `soundcard` as the preferred Windows loopback path for `Input: System`.
+- Tuned local chunking, overlap, queue size, and utterance segmentation for earlier subtitle emission.
+- Added local English cleanup for noisy punctuation sequences such as repeated `///` and excessive ellipses.
+- Completed the local dependency set for `faster-whisper`, Argos, MarianMT, and NLLB startup.
+
+### Product
+
+- Azure Cloud remains the recommended production route for real-time use.
+- Argos is now the recommended local engine when realtime behavior matters.
+- MarianMT and NLLB remain available for local quality comparison, but on this machine they are not the recommended real-time choice.
+
+### Verification
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed with the bundled Node runtime.
+- Azure `System` mode was manually verified after the loopback change.
+- Local Argos route was verified after dependency completion.
+- MarianMT and NLLB import/model startup paths were verified, but their practical real-time usability remains limited on this environment.
+
 ## 0.1.4 - Local Split Transcript Closeout
 
 Date: 2026-05-04

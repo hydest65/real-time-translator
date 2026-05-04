@@ -27,13 +27,13 @@ audio_capture_worker
 
 Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translation.
 English local mode can use English-only Whisper models such as `base.en` and `small.en`. Spanish local mode automatically maps those selections to multilingual `base` and `small`, then translates `spa_Latn -> zho_Hans`.
-The local low-latency preset uses a shorter `2s` chunk and `0.2s` overlap. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a brief idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
+The local default chunk is `1.5s`. The `Low` preset uses a `1s` chunk, `0.1s` overlap, queue size `1`, and tighter utterance segmentation so subtitles appear earlier. The `Steady` preset uses a `1.5s` chunk, `0.2s` overlap, queue size `1`, and slightly looser utterance segmentation for more stable wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a brief idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 
 ## Key Backend Modules
 
 - `backend/main.py`: FastAPI app, WebSocket orchestration, queues, local utterance aggregation, workers, direct fast translation flow, and paragraph turn detection.
-- `backend/audio_capture.py`: microphone and system audio capture.
+- `backend/audio_capture.py`: microphone capture plus Windows system-audio capture that prefers current-default-device loopback through `soundcard`, then falls back to Stereo Mix / speaker-monitor matching through `sounddevice`.
 - `backend/cloud_speech.py`: Azure streaming translation integration.
 - `backend/asr.py`: faster-whisper wrapper.
 - `backend/translator.py`: Argos, MarianMT, and NLLB local translators.
@@ -45,7 +45,7 @@ The `faster-whisper` module is loaded lazily when local ASR is actually requeste
 - `frontend/index.html`: main Subtitle Studio operating surface.
 - `frontend/style.css`: shared visual tokens, soft UI layout, subtitle monitor, controls, and saved-theme CSS variable hooks.
 - `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, and saved UI theme loading.
-- Frontend rendering uses two UI modes: Azure events render into the original single bilingual subtitle stream, while local events split into stable English context, live English draft, and complete Chinese translation panes.
+- Frontend rendering uses two UI modes: Azure events render into the original single bilingual subtitle stream, while local events split into continuous English context, live English draft, and complete Chinese translation panes.
 - `frontend/ui-editor.html`: visual editor page for tuning the main UI.
 - `frontend/ui-editor.css`: editor layout and control styling.
 - `frontend/ui-editor.js`: editor preview, `localStorage` save/reset behavior, and generated CSS preview.
@@ -57,11 +57,12 @@ Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCo
 - Azure route avoids fixed local time slicing.
 - Live Azure partials update the current subtitle row.
 - Final Azure results enter history.
-- Local low-latency mode reduces chunk size, accumulates English ASR output into utterances, and translates only ready utterances.
+- Local low-latency mode reduces chunk size, overlap, and queue pressure, accumulates English ASR output into utterances, and translates only ready utterances.
 - Audio queues may drop stale chunks for responsiveness. The local translation queue is background-only and preserves ready utterances so completed sentences are not lost or allowed to block the English draft path.
 - There is no MiniMax polish queue and no Balanced/Quality path.
 - The active translation mode is fixed to fast/direct output.
 - The local audio queue is size-limited so stale audio work is dropped rather than displayed late.
+- MarianMT and NLLB run through Transformers. In the current environment, the installed `torch` runtime is CPU-only, so those translators do not gain practical GPU acceleration even if local ASR is using CUDA.
 
 ## Paragraph Turn Detection
 
