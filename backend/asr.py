@@ -4,7 +4,7 @@ import asyncio
 import os
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 import numpy as np
 
@@ -13,9 +13,6 @@ DEFAULT_HF_CACHE = PROJECT_ROOT / ".cache" / "huggingface"
 DEFAULT_HF_CACHE.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("HF_HOME", str(DEFAULT_HF_CACHE))
 os.environ.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_CACHE / "hub"))
-
-from faster_whisper import WhisperModel
-
 
 @dataclass
 class TranscriptionResult:
@@ -51,7 +48,9 @@ class WhisperASR:
             pass
         return "cpu"
 
-    def _load_model(self, device: str) -> WhisperModel:
+    def _load_model(self, device: str) -> Any:
+        from faster_whisper import WhisperModel
+
         try:
             return WhisperModel(self.model_size, device=device, compute_type=self.compute_type)
         except Exception:

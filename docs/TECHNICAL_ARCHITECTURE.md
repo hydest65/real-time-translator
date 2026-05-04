@@ -28,6 +28,7 @@ audio_capture_worker
 Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translation.
 English local mode can use English-only Whisper models such as `base.en` and `small.en`. Spanish local mode automatically maps those selections to multilingual `base` and `small`, then translates `spa_Latn -> zho_Hans`.
 The local low-latency preset uses a shorter `2s` chunk and `0.2s` overlap. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a brief idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
+The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 
 ## Key Backend Modules
 

@@ -112,6 +112,8 @@ class SubtitleTurnDetector:
 
 
 class LocalUtteranceAggregator:
+    SENTENCE_END_RE = re.compile(r"[.!?。！？][\"')\]]*$")
+
     def __init__(self, active_config: AppConfig) -> None:
         self.pause_seconds = active_config.segmenter_pause_seconds
         self.max_words = active_config.segmenter_max_words
@@ -193,6 +195,8 @@ class LocalUtteranceAggregator:
     def _should_mark_ready(self, previous_end: float, item: TranscriptionResult) -> bool:
         text = self.source_text.strip()
         words = SubtitleTurnDetector._normalize_text(text).split()
+        if self._looks_sentence_complete(text, words):
+            return True
         if len(words) >= self.max_words:
             return True
         if self.end_seconds - self.start_seconds >= self.max_seconds:
@@ -200,10 +204,16 @@ class LocalUtteranceAggregator:
         gap = item.start_seconds - previous_end if previous_end else 0.0
         return gap >= self.pause_seconds and len(words) >= 4
 
+    @classmethod
+    def _looks_sentence_complete(cls, text: str, words: list[str]) -> bool:
+        if len(words) < 7:
+            return False
+        return bool(cls.SENTENCE_END_RE.search(text))
+
     @staticmethod
     def _merge_text(current: str, incoming: str) -> str:
-        clean_current = current.strip()
-        clean_incoming = incoming.strip()
+        clean_current = LocalUtteranceAggregator._normalize_local_text(current)
+        clean_incoming = LocalUtteranceAggregator._normalize_local_text(incoming)
         if not clean_current:
             return clean_incoming
         if not clean_incoming:
@@ -216,8 +226,22 @@ class LocalUtteranceAggregator:
             left = " ".join(current_words[-overlap:]).lower().strip(".,!?;:")
             right = " ".join(incoming_words[:overlap]).lower().strip(".,!?;:")
             if left == right:
-                return " ".join([*current_words, *incoming_words[overlap:]])
-        return f"{clean_current} {clean_incoming}"
+                return LocalUtteranceAggregator._normalize_local_text(" ".join([*current_words, *incoming_words[overlap:]]))
+        return LocalUtteranceAggregator._normalize_local_text(f"{clean_current} {clean_incoming}")
+
+    @staticmethod
+    def _normalize_local_text(text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned:
+            return ""
+
+        cleaned = re.sub(r"(?:\s*[\\/|]{2,}\s*)+", " ", cleaned)
+        cleaned = re.sub(r"(?:\s*\.\s*){3,}", "... ", cleaned)
+        cleaned = re.sub(r"([!?.,])(?:\s*\1){1,}", r"\1", cleaned)
+        cleaned = re.sub(r"\s+([,.!?;:])", r"\1", cleaned)
+        cleaned = re.sub(r"([,.!?;:])([A-Za-z])", r"\1 \2", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        return cleaned.strip()
 
 
 class Runtime:

@@ -27,6 +27,8 @@ Current closeout result on 2026-05-04:
 - Frontend JavaScript syntax check passed with the bundled Node runtime.
 - UI editor JavaScript syntax check passed with the bundled Node runtime.
 - GitHub sync completed through the `sync-worktree2` GitHub Desktop worktree on branch `codex/realtime-translator-closeout`.
+- Local runtime smoke test passed for `GET /` and `GET /api/health` on port `8000`.
+- Azure startup path now works without importing `faster-whisper` until a local engine is selected.
 
 ## Runtime Smoke Test
 

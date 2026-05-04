@@ -428,7 +428,7 @@ select,
 
 .english-context-stream {
   display: block;
-  overflow: hidden;
+  overflow-y: auto;
 }
 
 .english-draft-stream {
@@ -445,9 +445,16 @@ select,
   margin: 0;
   color: #334155;
   font-size: 16px;
-  line-height: 1.48;
+  line-height: 1.4;
   font-weight: 760;
   overflow-wrap: anywhere;
+}
+
+.english-flow-text {
+  color: #334155;
+  font-size: 15px;
+  line-height: 1.42;
+  font-weight: 760;
 }
 
 .translation-flow-text {

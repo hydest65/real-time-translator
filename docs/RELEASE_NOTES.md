@@ -33,7 +33,7 @@ Date: 2026-05-04
 
 ## 0.1.3 - Spanish Source Language and Compact Local Layout
 
-Date: 2026-04-30
+Date: 2026-05-04
 
 ### Frontend
 
@@ -54,6 +54,7 @@ Date: 2026-04-30
 
 - Added Spanish-to-Chinese alongside the existing English-to-Chinese workflow.
 - Added a source language selector on the main Subtitle Studio toolbar.
+- Kept Azure Cloud usable as the primary route even when local `faster-whisper` dependencies are not ready on Windows.
 
 ### Backend
 
@@ -61,6 +62,11 @@ Date: 2026-04-30
 - Mapped Spanish local ASR to Whisper `es` and multilingual `base` / `small` models.
 - Mapped Azure Spanish mode to `es-ES -> zh-Hans`.
 - Added Argos, MarianMT, and NLLB routing for Spanish-to-Chinese local translation.
+- Delayed importing `faster-whisper` until local ASR is selected, so Azure-first startup no longer hard-fails on missing local ASR packages.
+
+### Documentation
+
+- Updated README and architecture notes to explain the Azure-first startup path and the lazy local-ASR dependency load.
 
 ### Verification
 
@@ -68,6 +74,7 @@ Date: 2026-04-30
 - Backend import check passed.
 - Frontend JavaScript syntax check passed with the bundled Node runtime.
 - Spanish config mapping check passed for `spa_Latn -> es-ES`, Whisper `es`, and multilingual ASR model selection.
+- Local runtime smoke test passed for `GET /` and `GET /api/health` on `http://127.0.0.1:8000`.
 - Runtime audio behavior still depends on local audio routing and valid Azure credentials.
 
 ## 0.1.2 - Visual UI Editor Closeout

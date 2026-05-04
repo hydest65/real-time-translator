@@ -8,13 +8,14 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 ## Current Low-Latency Defaults
 
 - Engine: `Azure Cloud` for lowest latency, or local engines when privacy/offline mode matters
-- Input: `Mic` by default; `System` tries to capture Stereo Mix / speaker-monitor input on Windows
+- Input: `Mic` by default; `System` first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input
 - Local ASR: `faster-whisper`
 - Whisper model: `base.en`
 - Accuracy option: `small.en`
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
-- Local low-latency preset: `2s` audio chunk, `0.2s` overlap, queue max size `1`
-- Local steady preset: `3s` audio chunk, `0.5s` overlap, queue max size `2`
+- Local default chunk: `1.5s`
+- Local low-latency preset: `1s` audio chunk, `0.1s` overlap, queue max size `1`
+- Local steady preset: `1.5s` audio chunk, `0.2s` overlap, queue max size `1`
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
@@ -24,7 +25,7 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Source language: English or Spanish, both translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
-- Local English context and Chinese translation panes append text forward without vertical scrolling
+- Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
 - Mode: fast/direct translation only.
 
@@ -32,7 +33,7 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 
 - `azure`: cloud streaming speech translation through Azure Speech Translation. Best for Teams meetings and low latency.
 - `argos`: lowest latency local translation. Best offline/default local choice.
-- `marianmt`: local neural translation through Helsinki-NLP MarianMT models.
+- `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
 First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
@@ -69,7 +70,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.1.4 - Local Split Transcript Closeout`.
+- Current closeout: `0.1.5 - System Loopback and Local Realtime Tuning Closeout`.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
 - `docs/UI_STYLE.md`: Subtitle Studio layout and interaction rules.
@@ -82,7 +83,7 @@ real_time_translator/
 Use Python 3.11 on Windows.
 
 ```powershell
-cd "C:\Users\lixin11190\Documents\New project 3\real_time_translator"
+cd path\to\real-time-translator
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -95,6 +96,8 @@ If your pip source says it cannot find `argostranslate`, install it from PyPI di
 python -m pip install argostranslate==1.9.6 -i https://pypi.org/simple
 python -m pip install sacremoses==0.0.53 -i https://pypi.org/simple
 ```
+
+If Windows cannot install the local `faster-whisper` stack immediately, you can still start and use the Azure Cloud route first. The backend now delays loading `faster-whisper` until a local engine is actually selected.
 
 If you already have the virtual environment, just run:
 
@@ -136,7 +139,7 @@ Azure can sometimes return very long final segments. The app keeps them as one s
 
 The paragraph detector is intentionally lightweight. It uses the pause between final subtitles plus a short noise list such as `uh`, `um`, `ok`, and `yeah`. This is not true speaker diarization; it avoids noise-triggered paragraph breaks while keeping latency low.
 
-For Teams meetings, choose `Input: System` if your Windows audio device exposes Stereo Mix or speaker-monitor input. If the app reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
+For Teams meetings, choose `Input: System`. The app now prefers the current default Windows playback device through loopback capture when available. If loopback is unavailable, it falls back to Stereo Mix / speaker-monitor input. If the app still reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
 
 ## Run
 
@@ -158,7 +161,7 @@ Double-click: Stop Subtitle Studio.bat
 PowerShell start:
 
 ```powershell
-cd "C:\Users\lixin11190\Documents\New project 3\real_time_translator"
+cd path\to\real-time-translator
 .\scripts\start-server.ps1
 ```
 
@@ -167,7 +170,7 @@ You can also double-click `start-server.bat` in the project folder. These option
 Manual developer start:
 
 ```powershell
-cd "C:\Users\lixin11190\Documents\New project 3\real_time_translator"
+cd path\to\real-time-translator
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
@@ -192,7 +195,7 @@ Recommended first test:
 Source: English
 ASR: base.en
 Device: cuda
-Chunk: 3s
+Chunk: 1s or 1.5s
 Engine: Azure Cloud
 Input: System, if available for Teams audio
 ```
@@ -203,7 +206,7 @@ Recommended Spanish test:
 Source: Spanish
 ASR: base.en
 Device: cuda
-Chunk: 3s
+Chunk: 1s or 1.5s
 Engine: Azure Cloud
 ```
 
@@ -213,7 +216,7 @@ Recommended private/offline test:
 ASR: base.en
 Device: cuda
 Latency: Low
-Chunk: 2s
+Chunk: 1s
 Engine: Argos
 ```
 
@@ -237,7 +240,7 @@ audio_capture_worker
 
 In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The translation queue preserves ready utterances so completed sentences are not lost.
 
-For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history; they keep the latest readable text block visible and trim older overflow. Azure mode keeps the original single bilingual scrolling monitor.
+For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
 
 Azure mode uses a shorter cloud-streaming route:
 

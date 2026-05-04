@@ -28,8 +28,8 @@ let englishDraftById = new Map();
 let chineseTranslationHistory = [];
 let liveSubtitle = null;
 let autoFollowSubtitles = true;
+let autoFollowEnglishContext = true;
 const maxDisplayHistory = 80;
-const maxFlowCharacters = 900;
 const maxChineseFlowCharacters = 520;
 const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
@@ -158,7 +158,7 @@ function renderLocalSubtitle(item) {
         sequenceId: draftId,
         isFinal: true,
       });
-      englishContextHistory = englishContextHistory.slice(-8);
+      englishContextHistory = englishContextHistory.slice(-24);
       englishDraftById.delete(draftId);
       renderEnglishContext();
       renderEnglishDraft();
@@ -177,7 +177,11 @@ function renderLocalSubtitle(item) {
 }
 
 function renderEnglishContext() {
-  renderTextFlow(englishContextStack, englishContextHistory, "sourceText", maxFlowCharacters, "context");
+  const wasFollowing = isAtBottom(englishContextStack);
+  renderTextFlow(englishContextStack, englishContextHistory, "sourceText", null, "context");
+  if (autoFollowEnglishContext && wasFollowing) {
+    englishContextStack.scrollTop = englishContextStack.scrollHeight;
+  }
 }
 
 function renderEnglishDraft() {
@@ -224,17 +228,17 @@ function renderSubtitleList(target, entries, mode) {
 }
 
 function renderTextFlow(target, entries, field, maxCharacters, mode) {
-  const text = trimFlowText(
-    entries
-      .map((entry) => entry[field])
-      .filter(Boolean)
-      .join(" "),
-    maxCharacters,
-  );
+  const joinedText = entries
+    .map((entry) => entry[field])
+    .filter(Boolean)
+    .join(" ");
+  const text = typeof maxCharacters === "number"
+    ? trimFlowText(joinedText, maxCharacters)
+    : joinedText.replace(/\s+/g, " ").trim();
 
   target.innerHTML = "";
   const paragraph = document.createElement("p");
-  paragraph.className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""}`.trim();
+  paragraph.className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""} ${mode === "context" ? "english-flow-text" : ""}`.trim();
   paragraph.textContent = text;
   target.append(paragraph);
 }
@@ -290,20 +294,40 @@ function applyLocalLatencyPreset() {
     return;
   }
   if (localLatencyPreset.value === "low") {
-    chunkSeconds.value = "2";
+    chunkSeconds.value = "1";
   } else {
-    chunkSeconds.value = "3";
+    chunkSeconds.value = "1.5";
   }
 }
 
 function effectiveLocalChunkSeconds(isLowLatencyLocal) {
   const selectedChunk = Number(chunkSeconds.value);
   if (!isLowLatencyLocal) {
-    return selectedChunk;
+    return Math.min(selectedChunk || 1.5, 1.5);
   }
-  const cappedChunk = Math.min(selectedChunk || 2, 2);
+  const cappedChunk = Math.min(selectedChunk || 1, 1);
   chunkSeconds.value = String(cappedChunk);
   return cappedChunk;
+}
+
+function localRealtimeTuning() {
+  const isLowLatencyLocal = localLatencyPreset?.value === "low";
+  if (isLowLatencyLocal) {
+    return {
+      overlap_seconds: 0.1,
+      queue_max_size: 1,
+      segmenter_pause_seconds: 0.35,
+      segmenter_max_words: 10,
+      segmenter_max_seconds: 2.6,
+    };
+  }
+  return {
+    overlap_seconds: 0.2,
+    queue_max_size: 1,
+    segmenter_pause_seconds: 0.55,
+    segmenter_max_words: 14,
+    segmenter_max_seconds: 3.8,
+  };
 }
 
 function updateLanguageHints() {
@@ -346,6 +370,7 @@ function start() {
     const isCloud = translationEngine.value === "azure";
     const isLowLatencyLocal = !isCloud && localLatencyPreset?.value === "low";
     const effectiveChunk = effectiveLocalChunkSeconds(isLowLatencyLocal);
+    const realtimeTuning = isCloud ? null : localRealtimeTuning();
     setStatus(
       isCloud ? "Connecting cloud" : "Loading models",
       isCloud ? "Connecting to Azure Speech Translation." : "Preparing low-latency local pipeline.",
@@ -361,9 +386,12 @@ function start() {
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
         chunk_seconds: effectiveChunk,
-        overlap_seconds: isLowLatencyLocal ? 0.2 : 0.5,
+        overlap_seconds: realtimeTuning?.overlap_seconds ?? 0.5,
         max_subtitles: serverSubtitleWindow,
-        queue_max_size: isLowLatencyLocal ? 1 : 2,
+        queue_max_size: realtimeTuning?.queue_max_size ?? 2,
+        segmenter_pause_seconds: realtimeTuning?.segmenter_pause_seconds,
+        segmenter_max_words: realtimeTuning?.segmenter_max_words,
+        segmenter_max_seconds: realtimeTuning?.segmenter_max_seconds,
       },
     }));
   });
@@ -422,6 +450,9 @@ localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
 sourceLanguage.addEventListener("change", updateLanguageHints);
 subtitleStack.addEventListener("scroll", () => {
   autoFollowSubtitles = isSubtitleAtBottom();
+});
+englishContextStack.addEventListener("scroll", () => {
+  autoFollowEnglishContext = isAtBottom(englishContextStack);
 });
 applySavedUiTheme();
 updateEngineControls();

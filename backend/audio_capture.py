@@ -2,12 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import queue
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import AsyncIterator, Optional
 
 import numpy as np
 import sounddevice as sd
+
+try:
+    import soundcard as sc
+except Exception:
+    sc = None
 
 
 @dataclass
@@ -24,7 +30,7 @@ class AudioChunk:
 
 
 class MicrophoneAudioCapture:
-    """Capture microphone or system-mix audio and yield mono float32 audio."""
+    """Capture microphone or system audio and yield mono float32 audio."""
 
     def __init__(
         self,
@@ -41,25 +47,34 @@ class MicrophoneAudioCapture:
         self.overlap_seconds = min(max(overlap_seconds, 0.0), max(chunk_seconds - 0.1, 0.0))
         self._queue: "queue.Queue[np.ndarray]" = queue.Queue()
         self._stream: Optional[sd.InputStream] = None
+        self._system_recorder = None
+        self._system_reader_thread: Optional[threading.Thread] = None
         self._stopped = True
         self._next_start_sample = 0
         self._device: int | None = None
         self._input_sample_rate = sample_rate
 
     def _callback(self, indata: np.ndarray, frames: int, time_info, status) -> None:
-        audio = indata.copy()
-        if audio.ndim > 1:
-            audio = audio.mean(axis=1)
-        audio = audio.astype(np.float32)
-        if int(self._input_sample_rate) != int(self.sample_rate):
-            audio = resample_linear(audio, self._input_sample_rate, self.sample_rate)
-        self._queue.put(audio)
+        self._queue.put(self._normalize_audio(indata, self._input_sample_rate))
+
+    def _normalize_audio(self, audio: np.ndarray, source_rate: int) -> np.ndarray:
+        normalized = np.asarray(audio, dtype=np.float32)
+        if normalized.ndim > 1:
+            normalized = normalized.mean(axis=1)
+        if int(source_rate) != int(self.sample_rate):
+            normalized = resample_linear(normalized, source_rate, self.sample_rate)
+        return normalized.astype(np.float32, copy=False)
 
     def start(self) -> None:
-        if self._stream is not None:
+        if self._stream is not None or self._system_recorder is not None:
             return
+
         self._stopped = False
         self._next_start_sample = 0
+
+        if self.audio_source == "system" and self._start_system_loopback():
+            return
+
         self._device = self._select_device()
         if self._device is not None:
             device_info = sd.query_devices(self._device)
@@ -68,6 +83,7 @@ class MicrophoneAudioCapture:
         else:
             self._input_sample_rate = self.sample_rate
             input_channels = self.channels
+
         self._stream = sd.InputStream(
             samplerate=self._input_sample_rate,
             channels=max(1, input_channels),
@@ -77,12 +93,102 @@ class MicrophoneAudioCapture:
         )
         self._stream.start()
 
+    def _start_system_loopback(self) -> bool:
+        if sc is None:
+            return False
+
+        loopback = self._select_loopback_microphone()
+        if loopback is None:
+            return False
+
+        try:
+            self._input_sample_rate = self.sample_rate
+            self._system_recorder = loopback.recorder(
+                samplerate=self.sample_rate,
+                channels=max(1, self.channels),
+                blocksize=max(512, int(self.sample_rate * 0.1)),
+            )
+            self._system_recorder.__enter__()
+        except Exception:
+            self._system_recorder = None
+            return False
+
+        self._system_reader_thread = threading.Thread(
+            target=self._read_system_loopback,
+            name="system-loopback-reader",
+            daemon=True,
+        )
+        self._system_reader_thread.start()
+        return True
+
+    def _select_loopback_microphone(self):
+        if sc is None:
+            return None
+
+        try:
+            speaker = sc.default_speaker()
+            if speaker is None:
+                return None
+            speaker_name = getattr(speaker, "name", "")
+            loopbacks = [
+                microphone
+                for microphone in sc.all_microphones(include_loopback=True)
+                if getattr(microphone, "isloopback", False)
+            ]
+            exact_match = next((item for item in loopbacks if getattr(item, "name", "") == speaker_name), None)
+            if exact_match is not None:
+                return exact_match
+
+            lowered_name = speaker_name.lower()
+            substring_match = next(
+                (item for item in loopbacks if lowered_name and lowered_name in getattr(item, "name", "").lower()),
+                None,
+            )
+            if substring_match is not None:
+                return substring_match
+        except Exception:
+            return None
+        return None
+
+    def _read_system_loopback(self) -> None:
+        recorder = self._system_recorder
+        if recorder is None:
+            return
+
+        frames_per_read = max(512, int(self.sample_rate * 0.1))
+        try:
+            while not self._stopped:
+                try:
+                    audio = recorder.record(numframes=frames_per_read)
+                except Exception:
+                    if self._stopped:
+                        break
+                    raise
+                if audio is None or len(audio) == 0:
+                    continue
+                self._queue.put(self._normalize_audio(audio, self.sample_rate))
+        except Exception:
+            self._stopped = True
+
     def stop(self) -> None:
         self._stopped = True
+
         if self._stream is not None:
             self._stream.stop()
             self._stream.close()
             self._stream = None
+
+        if self._system_recorder is not None:
+            try:
+                self._system_recorder.__exit__(None, None, None)
+            except Exception:
+                pass
+            self._system_recorder = None
+
+        if self._system_reader_thread is not None:
+            self._system_reader_thread.join(timeout=1.0)
+            self._system_reader_thread = None
+
         while not self._queue.empty():
             try:
                 self._queue.get_nowait()
@@ -96,12 +202,14 @@ class MicrophoneAudioCapture:
         devices = list(sd.query_devices())
         preferred_terms = (
             "stereo mix",
-            "立体声混音",
+            "\u7acb\u4f53\u58f0\u6df7\u97f3",
+            "stereo input",
             "what u hear",
+            "loopback",
             "speaker",
             "speakers",
-            "扬声器",
-            "电脑扬声器",
+            "\u626c\u58f0\u5668",
+            "\u7535\u8111\u626c\u58f0\u5668",
         )
         candidates = []
         for index, device in enumerate(devices):
@@ -144,7 +252,7 @@ class MicrophoneAudioCapture:
                 self._next_start_sample += step_samples
 
     async def frames(self) -> AsyncIterator[np.ndarray]:
-        """Yield short raw microphone frames for cloud streaming recognizers."""
+        """Yield short raw audio frames for cloud streaming recognizers."""
 
         while not self._stopped:
             try:
