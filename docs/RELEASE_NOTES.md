@@ -1,8 +1,8 @@
 # Release Notes
 
-## Unreleased - Local Split Transcript Closeout
+## 0.1.4 - Local Split Transcript Closeout
 
-Date: 2026-05-02
+Date: 2026-05-04
 
 ### Frontend
 
@@ -28,6 +28,7 @@ Date: 2026-05-02
 - Backend compile check passed.
 - Backend import check passed.
 - Frontend JavaScript syntax check passed with the bundled Node runtime.
+- GitHub sync passed on branch `codex/realtime-translator-closeout`.
 - Runtime audio behavior still depends on selecting the correct input source (`System` for computer audio, `Mic` for microphone) and valid Azure credentials for cloud mode.
 
 ## 0.1.3 - Spanish Source Language and Compact Local Layout

@@ -69,6 +69,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
+- Current closeout: `0.1.4 - Local Split Transcript Closeout`.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
 - `docs/UI_STYLE.md`: Subtitle Studio layout and interaction rules.

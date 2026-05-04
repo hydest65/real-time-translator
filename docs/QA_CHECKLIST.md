@@ -20,13 +20,13 @@ node --check real_time_translator\frontend\app.js
 node --check real_time_translator\frontend\ui-editor.js
 ```
 
-Current closeout result on 2026-05-02:
+Current closeout result on 2026-05-04:
 
 - Backend compile check passed.
 - Backend import check passed.
 - Frontend JavaScript syntax check passed with the bundled Node runtime.
 - UI editor JavaScript syntax check passed with the bundled Node runtime.
-- Command-line `git` was not available in this shell; use GitHub Desktop for sync if needed.
+- GitHub sync completed through the `sync-worktree2` GitHub Desktop worktree on branch `codex/realtime-translator-closeout`.
 
 ## Runtime Smoke Test
 
