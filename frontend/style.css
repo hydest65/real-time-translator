@@ -137,13 +137,13 @@ select,
 }
 
 .toolbar .local-extension {
-  flex: 0 0 92px;
-  min-width: 92px;
+  flex: 0 0 132px;
+  min-width: 132px;
   animation: unfoldLocalControl 420ms ease-out;
 }
 
 .toolbar .local-extension-start {
-  margin-left: 72px;
+  margin-left: 32px;
 }
 
 .toolbar select {

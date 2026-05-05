@@ -14,7 +14,7 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 ## Current MVP Scope
 
 - Local browser subtitle window served by FastAPI.
-- Audio input from microphone, with `System` mode that prefers loopback from the current default Windows playback device and falls back to Stereo Mix / monitor input when needed.
+- Audio input defaults to `System`, which prefers loopback from the current default Windows playback device and falls back to Stereo Mix / monitor input when needed. `Mic` remains available.
 - High-end local English-to-Chinese as the main route.
 - Azure Speech Translation as an optional comparison/fallback route.
 - English source speech with Simplified Chinese as the fixed target language.

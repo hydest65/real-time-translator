@@ -9,6 +9,7 @@ Date: 2026-05-05
 - Repositioned the project as a dedicated high-end local English-to-Chinese subtitle workflow.
 - Removed Spanish from the active product surface so local mode can stay on English-only Whisper `.en` models.
 - Made `Argos` the default engine and kept Azure Cloud as an optional comparison/fallback route.
+- Made `System` the default input for meeting/system-audio capture, with `Mic` as the manual fallback.
 - Promoted `medium.en` as the default local ASR model for RTX 5070 Ti 16GB class hardware.
 
 ### Frontend

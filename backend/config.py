@@ -38,7 +38,7 @@ class AppConfig:
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
     translation_engine: TranslationEngine = "argos"
-    audio_source: AudioSource = "microphone"
+    audio_source: AudioSource = "system"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
     chunk_seconds: float = 1.5

@@ -8,7 +8,7 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 ## Current Low-Latency Defaults
 
 - Engine: `Argos` local by default for private high-end local use; `Azure Cloud` remains optional
-- Input: `Mic` by default; `System` first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input
+- Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input
 - Local ASR: `faster-whisper`
 - Whisper model: `medium.en`
 - Faster options: `small.en` and `base.en`
@@ -141,7 +141,7 @@ Azure can sometimes return very long final segments. The app keeps them as one s
 
 The paragraph detector is intentionally lightweight. It uses the pause between final subtitles plus a short noise list such as `uh`, `um`, `ok`, and `yeah`. This is not true speaker diarization; it avoids noise-triggered paragraph breaks while keeping latency low.
 
-For Teams meetings, choose `Input: System`. The app now prefers the current default Windows playback device through loopback capture when available. If loopback is unavailable, it falls back to Stereo Mix / speaker-monitor input. If the app still reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
+For Teams meetings, keep `Input: System`. The app now prefers the current default Windows playback device through loopback capture when available. If loopback is unavailable, it falls back to Stereo Mix / speaker-monitor input. If the app still reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
 
 ## Run
 

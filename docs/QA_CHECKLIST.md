@@ -40,6 +40,7 @@ High-end local upgrade result on 2026-05-05:
 - `WhisperASR` loaded on `cuda`.
 - `medium.en` warm ASR average was `494.1ms` for a `13.3s` sample, RTF `0.037`.
 - Frontend now defaults to `Argos`, `medium.en`, `cuda`, and English-only source.
+- Input now defaults to `System`, with `Mic` available as the manual fallback.
 
 ## Runtime Smoke Test
 
@@ -57,8 +58,8 @@ http://127.0.0.1:8000
 
 Test matrix:
 
-- Input: Mic, Engine: Azure Cloud.
-- Input: System, Engine: Azure Cloud, if Windows supports system capture.
+- Input: System, Engine: Azure Cloud.
+- Input: Mic, Engine: Azure Cloud, if microphone capture is needed.
 - Engine: Argos, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1s.
 - Engine: Argos, ASR: small.en, Device: cuda, Latency: Low, Chunk: 1s.
 
