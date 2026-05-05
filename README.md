@@ -19,8 +19,8 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 - Local steady preset: `2s` audio chunk, `0.3s` overlap, queue max size `1`
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
-- Frontend: Azure and local mode use the same fixed bilingual subtitle monitor
-- Local subtitles show fast English draft updates in the live row, then replace them with final bilingual history rows when Chinese translation completes
+- Frontend: local mode uses a two-level subtitle workspace with English live transcript above and polished Chinese translation below
+- Local subtitles show fast English draft updates in the upper pane, then send fuller English utterances to the lower Chinese pane after translation completes
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, background-art toggles, and theme import/export
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English only, translated into Simplified Chinese
@@ -241,7 +241,7 @@ audio_capture_worker
 
 In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The high-end local edition uses a slightly longer `1.5s` ASR window and duplicate-phrase filtering so repeated loopback fragments are less likely to become repeated Chinese translations. The translation queue preserves ready utterances so completed sentences are not lost.
 
-For local mode, the frontend receives fast English draft updates first. The draft updates the current live row in the same bilingual monitor used by Azure. When an utterance is ready, the stable English text and Chinese translation replace the draft row and enter the scrollable subtitle history. This keeps local display behavior close to Azure while preserving the local backend's sentence-completion translation step.
+For local mode, the frontend receives fast English draft updates first. The upper pane shows the English transcript continuously, with the current sentence updating live. The backend only sends fuller, less-fragmented English utterances to translation, so the lower Chinese pane updates slightly later but with more complete wording.
 
 Azure mode uses a shorter cloud-streaming route:
 

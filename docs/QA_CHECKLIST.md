@@ -70,12 +70,13 @@ Test matrix:
 - Red status lamp is dim but visible when stopped.
 - Red status lamp pulses slowly while running or connecting.
 - Live subtitles appear without waiting for full paragraphs.
-- In local Low latency mode, the current live row updates while ASR is still forming the utterance.
-- In local Low latency mode, final bilingual rows replace matching draft rows and enter the same subtitle history.
-- Repeated loopback phrases should not be appended many times to the subtitle history.
+- In local Low latency mode, the upper English pane updates while ASR is still forming the utterance.
+- In local Low latency mode, the lower Chinese pane only receives fuller translated utterances.
+- Short fragments such as `and`, `in Vietnam`, or `the General Director of the` should not become standalone Chinese rows.
+- Repeated loopback phrases should not be appended many times to either subtitle pane.
 - Azure mode keeps one bilingual subtitle monitor.
 - Azure and local mode both use subtitle rows, internal scroll history, and bottom auto-follow.
-- Local mode should not show separate English context, English draft, or Chinese translation panes.
+- Local mode shows English transcript above and polished Chinese translation below.
 - `Input: System` can capture the current active Windows playback device when loopback is available.
 - No Source selector is shown in the high-end English-only build.
 - Final subtitles enter history.

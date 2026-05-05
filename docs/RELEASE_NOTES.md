@@ -17,8 +17,8 @@ Date: 2026-05-05
 - Removed the Source selector and fixed the runtime payload to `eng_Latn -> zho_Hans`.
 - Reordered the ASR selector to `medium.en`, `small.en`, then `base.en`.
 - Updated static asset versions for the high-end local build.
-- Reworked local mode into the same Azure-style bilingual subtitle monitor: live ASR drafts update the current row and final Chinese translations replace that row in history.
-- Removed the separate local English context, English draft, and Chinese translation panes so stale draft rows cannot remain stuck in the middle of the UI.
+- Reworked local mode into a two-level subtitle workspace: English live transcript above and polished Chinese translation below.
+- Tightened local utterance readiness so short fragments such as `and`, `in Vietnam`, or dangling phrases ending with `of the` do not become standalone Chinese subtitles.
 - Kept the UI editor import/export/CSS-copy tools added during this upgrade window.
 
 ### Backend

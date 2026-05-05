@@ -114,6 +114,39 @@ class SubtitleTurnDetector:
 class LocalUtteranceAggregator:
     SENTENCE_END_RE = re.compile(r"[.!?。！？][\"')\]]*$")
 
+    MIN_READY_WORDS = 10
+    MIN_IDLE_READY_WORDS = 12
+    MIN_FORCED_READY_WORDS = 8
+    DANGLING_END_WORDS = {
+        "a",
+        "an",
+        "and",
+        "are",
+        "as",
+        "at",
+        "because",
+        "but",
+        "by",
+        "for",
+        "from",
+        "if",
+        "in",
+        "is",
+        "of",
+        "on",
+        "or",
+        "that",
+        "the",
+        "then",
+        "to",
+        "was",
+        "were",
+        "when",
+        "which",
+        "while",
+        "with",
+    }
+
     def __init__(self, active_config: AppConfig) -> None:
         self.pause_seconds = active_config.segmenter_pause_seconds
         self.max_words = active_config.segmenter_max_words
@@ -182,6 +215,9 @@ class LocalUtteranceAggregator:
             return None
         if time.perf_counter() - self.last_update_at < self.pause_seconds:
             return None
+        words = SubtitleTurnDetector._normalize_text(self.source_text).split()
+        if not self._is_ready_for_translation(self.source_text, words, is_idle=True):
+            return None
         return self.mark_ready()
 
     def _subtitle(self, is_final: bool, engine_suffix: str) -> SubtitleJob:
@@ -202,20 +238,41 @@ class LocalUtteranceAggregator:
     def _should_mark_ready(self, previous_end: float, item: TranscriptionResult) -> bool:
         text = self.source_text.strip()
         words = SubtitleTurnDetector._normalize_text(text).split()
-        if self._looks_sentence_complete(text, words):
+        if self._is_ready_for_translation(text, words):
             return True
-        if len(words) >= self.max_words:
+        if len(words) >= self.max_words and not self._has_dangling_end(words):
             return True
-        if self.end_seconds - self.start_seconds >= self.max_seconds:
+        if (
+            self.end_seconds - self.start_seconds >= self.max_seconds
+            and len(words) >= self.MIN_FORCED_READY_WORDS
+            and not self._has_dangling_end(words)
+        ):
             return True
         gap = item.start_seconds - previous_end if previous_end else 0.0
-        return gap >= self.pause_seconds and len(words) >= 4
+        return (
+            gap >= self.pause_seconds
+            and len(words) >= self.MIN_IDLE_READY_WORDS
+            and not self._has_dangling_end(words)
+        )
 
     @classmethod
     def _looks_sentence_complete(cls, text: str, words: list[str]) -> bool:
-        if len(words) < 7:
+        if len(words) < cls.MIN_READY_WORDS or cls._has_dangling_end(words):
             return False
         return bool(cls.SENTENCE_END_RE.search(text))
+
+    @classmethod
+    def _is_ready_for_translation(cls, text: str, words: list[str], is_idle: bool = False) -> bool:
+        if len(words) < cls.MIN_FORCED_READY_WORDS or cls._has_dangling_end(words):
+            return False
+        if cls._looks_sentence_complete(text, words):
+            return True
+        minimum_words = cls.MIN_IDLE_READY_WORDS if is_idle else cls.MIN_READY_WORDS
+        return len(words) >= minimum_words
+
+    @classmethod
+    def _has_dangling_end(cls, words: list[str]) -> bool:
+        return bool(words) and words[-1].lower().strip("'") in cls.DANGLING_END_WORDS
 
     @staticmethod
     def _merge_text(current: str, incoming: str) -> str:

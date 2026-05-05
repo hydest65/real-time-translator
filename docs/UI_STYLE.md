@@ -18,27 +18,25 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - notice
   - activity
   - performance
-- Main subtitle monitor:
+- Two-level subtitle workspace:
   - largest visual area on the screen
-  - soft raised outer shell
-  - recessed inner subtitle stream
-  - internal right-side scrollbar
-  - preserved subtitle history
-  - live row plus final bilingual rows
-- Azure and local modes share the same single bilingual subtitle monitor and scroll-review behavior.
-- Local mode labels the monitor as `LOCAL`; Azure labels it as `LIVE`.
+  - upper raised monitor for English live transcript
+  - lower raised monitor for polished Chinese translation
+  - recessed inner streams with internal right-side scrollbars
+  - preserved history in both panes
+  - live English row plus final English rows above; final translated Chinese rows below
 
 ## Subtitle Behavior
 
 - Chinese translation is visually emphasized.
-- English source stays visible above Chinese in each subtitle row.
-- In local mode, English live draft updates the current live row quickly while Chinese waits for a fuller utterance.
-- In local mode, the final bilingual row replaces the matching draft row instead of leaving a separate English draft line behind.
+- English live transcript stays in the upper pane and updates quickly.
+- Chinese translation stays in the lower pane and appears only after a fuller English utterance is ready.
+- The backend should avoid sending short fragments such as `and`, `in Vietnam`, or `the General Director of the` to the Chinese pane.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
-- Users can scroll up inside the subtitle monitor without losing incoming live subtitles.
-- If the user is at the bottom, new subtitles auto-follow.
-- If the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
+- Users can scroll up inside either subtitle pane without losing incoming subtitles.
+- If the user is at the bottom, new subtitles auto-follow in that pane.
+- If the user scrolls upward, auto-follow pauses for that pane until the user scrolls back to the bottom.
 
 ## Status Lamp Behavior
 
@@ -58,7 +56,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - Red is reserved for the small operating lamp and error state.
 - Control chrome stays compact so meeting attention remains on the subtitle display.
 - The top-level topbar shell is transparent; the brand block and toolbar keep their own soft raised cards.
-- The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
+- The subtitle monitors keep their soft raised outer shells because removing them made the page feel visually unfinished.
 
 ## Visual UI Editor
 

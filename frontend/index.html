@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=azure-style-local-monitor-20260505" />
+    <link rel="stylesheet" href="/static/style.css?v=dual-subtitle-polished-20260505" />
   </head>
   <body>
     <main class="studio">
@@ -99,20 +99,33 @@
           </div>
         </aside>
 
-        <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Subtitle history">
-          <div class="subtitle-box-header">
-            <div>
-              <p class="monitor-title" id="monitorTitle">Subtitle Monitor</p>
-              <p class="monitor-subtitle" id="monitorSubtitle">Local draft and final history · scroll to review</p>
+        <section class="subtitle-workspace" id="subtitleWorkspace" aria-label="Subtitle workspace">
+          <section class="subtitle-box english-subtitle-box" aria-label="English live transcript">
+            <div class="subtitle-box-header">
+              <div>
+                <p class="monitor-title" id="monitorTitle">English Live Transcript</p>
+                <p class="monitor-subtitle" id="monitorSubtitle">Continuous ASR above · current sentence updates live</p>
+              </div>
+              <span class="monitor-badge" id="monitorBadge">EN</span>
             </div>
-            <span class="monitor-badge" id="monitorBadge">LOCAL</span>
-          </div>
-          <div class="subtitle-stream" id="subtitleStack" aria-live="polite"></div>
+            <div class="subtitle-stream english-subtitle-stream" id="englishSubtitleStack" aria-live="polite"></div>
+          </section>
+
+          <section class="subtitle-box chinese-subtitle-box" aria-label="Chinese polished translation">
+            <div class="subtitle-box-header">
+              <div>
+                <p class="monitor-title">Chinese Polished Translation</p>
+                <p class="monitor-subtitle">Translated after a fuller English sentence is ready</p>
+              </div>
+              <span class="monitor-badge">ZH</span>
+            </div>
+            <div class="subtitle-stream chinese-subtitle-stream" id="chineseSubtitleStack" aria-live="polite"></div>
+          </section>
         </section>
       </section>
     </main>
 
-    <script src="/static/app.js?v=azure-style-local-monitor-20260505"></script>
+    <script src="/static/app.js?v=dual-subtitle-polished-20260505"></script>
   </body>
 </html>
 

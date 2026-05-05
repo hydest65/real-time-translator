@@ -355,6 +355,14 @@ select,
   background: linear-gradient(145deg, #e4ebf5, #eef3f9);
 }
 
+.subtitle-workspace {
+  min-height: 0;
+  height: 100%;
+  display: grid;
+  grid-template-rows: minmax(220px, 0.92fr) minmax(260px, 1.08fr);
+  gap: 16px;
+}
+
 .subtitle-box-header {
   display: flex;
   align-items: center;
@@ -412,7 +420,7 @@ select,
 
 .subtitle-row {
   width: 100%;
-  padding: 10px 12px;
+  padding: 12px 14px;
   background: linear-gradient(145deg, #edf2f8, #e3e9f2);
   border-radius: 16px;
   box-shadow: 5px 5px 10px #c7d0dd, -5px -5px 10px #f3f7fc;
@@ -446,7 +454,7 @@ select,
   margin: 0;
   color: #586577;
   font-size: var(--source-font-size);
-  line-height: 1.25;
+  line-height: 1.32;
   font-weight: 720;
 }
 
@@ -460,6 +468,32 @@ select,
 
 .subtitle-row.live .translation {
   color: #5367d8;
+}
+
+.english-subtitle-stream .translation {
+  display: none;
+}
+
+.english-subtitle-stream .source {
+  color: #2f3d52;
+  font-size: 17px;
+  line-height: 1.34;
+  font-weight: 820;
+}
+
+.english-subtitle-stream .subtitle-row.live .source {
+  color: #5367d8;
+}
+
+.chinese-subtitle-stream .source {
+  color: #6b7687;
+  font-size: 12px;
+}
+
+.chinese-subtitle-stream .translation {
+  margin-top: 5px;
+  font-size: calc(var(--subtitle-font-size) + 1px);
+  line-height: 1.28;
 }
 
 .timestamp {
@@ -493,6 +527,10 @@ select,
   .subtitle-box {
     min-height: 460px;
   }
+
+  .subtitle-workspace {
+    min-height: 720px;
+  }
 }
 
 @media (max-width: 640px) {
@@ -511,6 +549,10 @@ select,
 
   .subtitle-box {
     min-height: 420px;
+  }
+
+  .subtitle-workspace {
+    min-height: 700px;
   }
 
   .translation {
