@@ -19,14 +19,14 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 - Local steady preset: `2s` audio chunk, `0.3s` overlap, queue max size `1`
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
-- Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
-- Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
+- Frontend: Azure and local mode use the same fixed bilingual subtitle monitor
+- Local subtitles show fast English draft updates in the live row, then replace them with final bilingual history rows when Chinese translation completes
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, background-art toggles, and theme import/export
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English only, translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
-- Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
+- Local and Azure subtitle history both use the same internal monitor scrollbar and bottom auto-follow behavior
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
 - Mode: fast/direct translation only.
 
@@ -241,7 +241,7 @@ audio_capture_worker
 
 In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The high-end local edition uses a slightly longer `1.5s` ASR window and duplicate-phrase filtering so repeated loopback fragments are less likely to become repeated Chinese translations. The translation queue preserves ready utterances so completed sentences are not lost.
 
-For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
+For local mode, the frontend receives fast English draft updates first. The draft updates the current live row in the same bilingual monitor used by Azure. When an utterance is ready, the stable English text and Chinese translation replace the draft row and enter the scrollable subtitle history. This keeps local display behavior close to Azure while preserving the local backend's sentence-completion translation step.
 
 Azure mode uses a shorter cloud-streaming route:
 

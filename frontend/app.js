@@ -4,10 +4,9 @@ const statusText = document.querySelector("#statusText");
 const statusDot = document.querySelector("#statusDot");
 const subtitleStack = document.querySelector("#subtitleStack");
 const azureSubtitleBox = document.querySelector("#azureSubtitleBox");
-const localSubtitleLayout = document.querySelector("#localSubtitleLayout");
-const englishContextStack = document.querySelector("#englishContextStack");
-const englishDraftStack = document.querySelector("#englishDraftStack");
-const chineseSubtitleStack = document.querySelector("#chineseSubtitleStack");
+const monitorTitle = document.querySelector("#monitorTitle");
+const monitorSubtitle = document.querySelector("#monitorSubtitle");
+const monitorBadge = document.querySelector("#monitorBadge");
 const audioSource = document.querySelector("#audioSource");
 const modelSize = document.querySelector("#modelSize");
 const deviceType = document.querySelector("#deviceType");
@@ -22,14 +21,9 @@ const noticeText = document.querySelector("#noticeText");
 
 let socket = null;
 let finalSubtitleHistory = [];
-let englishContextHistory = [];
-let englishDraftById = new Map();
-let chineseTranslationHistory = [];
 let liveSubtitle = null;
 let autoFollowSubtitles = true;
-let autoFollowEnglishContext = true;
 const maxDisplayHistory = 80;
-const maxChineseFlowCharacters = 520;
 const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
 const uiThemeStorageKey = "subtitleStudioUiThemeCompact20260502";
@@ -76,32 +70,29 @@ function setStatus(status, detail = "") {
 }
 
 function renderSubtitle(item) {
-  if (translationEngine.value !== "azure") {
-    renderLocalSubtitle(item);
-    return;
-  }
-
   const wasFollowing = isSubtitleAtBottom();
-  const isCloudLiveRow = item.isFinal === false && item.sequenceId === "azure-live";
-  if (isCloudLiveRow) {
+  const isLiveRow = item.isFinal === false;
+  if (isLiveRow) {
     if (!item.sourceText || !item.sourceText.trim()) {
       return;
     }
-    liveSubtitle = item;
+    liveSubtitle = {
+      ...item,
+      translatedText: item.translatedText || "",
+    };
   } else {
-    const existingIndex = finalSubtitleHistory.findIndex(
-      (entry) => entry.sequenceId && entry.sequenceId === item.sequenceId,
-    );
-    if (existingIndex >= 0) {
-      finalSubtitleHistory[existingIndex] = {
-        ...finalSubtitleHistory[existingIndex],
-        ...item,
-      };
-    } else {
-      finalSubtitleHistory.push(item);
+    upsertHistory(finalSubtitleHistory, item);
+    if (finalSubtitleHistory.length > maxDisplayHistory) {
+      finalSubtitleHistory = finalSubtitleHistory.slice(-maxDisplayHistory);
     }
-    finalSubtitleHistory = finalSubtitleHistory.slice(-maxDisplayHistory);
-    liveSubtitle = null;
+    const shouldClearLiveRow =
+      !liveSubtitle?.sequenceId ||
+      liveSubtitle.sequenceId === item.sequenceId ||
+      liveSubtitle.sequenceId === "azure-live" ||
+      translationEngine.value === "azure";
+    if (shouldClearLiveRow) {
+      liveSubtitle = null;
+    }
   }
 
   const displayItems = liveSubtitle
@@ -138,56 +129,6 @@ function renderSubtitle(item) {
   }
 }
 
-function renderLocalSubtitle(item) {
-  if (item.sourceText && item.sourceText.trim()) {
-    const draftId = item.sequenceId || "local-current-draft";
-    if (item.isFinal === false) {
-      englishDraftById.set(draftId, {
-        ...(englishDraftById.get(draftId) || {}),
-        ...item,
-        translatedText: "",
-        sequenceId: draftId,
-        isFinal: false,
-      });
-      renderEnglishDraft();
-    } else {
-      upsertHistory(englishContextHistory, {
-        ...item,
-        translatedText: "",
-        sequenceId: draftId,
-        isFinal: true,
-      });
-      englishContextHistory = englishContextHistory.slice(-24);
-      englishDraftById.delete(draftId);
-      renderEnglishContext();
-      renderEnglishDraft();
-    }
-  }
-
-  if (item.isFinal !== false && item.translatedText && item.translatedText.trim()) {
-    upsertHistory(chineseTranslationHistory, item);
-    chineseTranslationHistory = chineseTranslationHistory.slice(-maxDisplayHistory);
-    renderTextFlow(chineseSubtitleStack, chineseTranslationHistory, "translatedText", maxChineseFlowCharacters, "translation");
-  }
-
-  if (item.perf) {
-    perfText.textContent = `Perf: audio ${item.perf.audioSeconds}s | ASR ${item.perf.asrMs}ms | translate ${item.perf.translateMs}ms | total ${item.perf.totalLatencyMs}ms | ${item.perf.engine}`;
-  }
-}
-
-function renderEnglishContext() {
-  const wasFollowing = isAtBottom(englishContextStack);
-  renderTextFlow(englishContextStack, englishContextHistory, "sourceText", null, "context");
-  if (autoFollowEnglishContext && wasFollowing) {
-    englishContextStack.scrollTop = englishContextStack.scrollHeight;
-  }
-}
-
-function renderEnglishDraft() {
-  const drafts = Array.from(englishDraftById.values()).slice(-2);
-  renderSubtitleList(englishDraftStack, drafts, "draft");
-}
-
 function upsertHistory(history, item) {
   const existingIndex = history.findIndex(
     (entry) => entry.sequenceId && entry.sequenceId === item.sequenceId,
@@ -200,59 +141,6 @@ function upsertHistory(history, item) {
   } else {
     history.push(item);
   }
-}
-
-function renderSubtitleList(target, entries, mode) {
-  target.innerHTML = "";
-  for (const entry of entries) {
-    const row = document.createElement("article");
-    row.className = `subtitle-row ${entry.isFinal === false ? "live" : ""} ${entry.isNewTurn ? "new-turn" : ""} ${entry.isNoise ? "noise" : ""}`.trim();
-
-    const source = document.createElement("p");
-    source.className = "source";
-    source.textContent = entry.sourceText;
-
-    const translation = document.createElement("p");
-    translation.className = "translation";
-    translation.textContent = entry.translatedText || "";
-
-    const timestamp = document.createElement("div");
-    timestamp.className = "timestamp";
-    const state = mode === "draft" ? " - draft" : "";
-    timestamp.textContent = `${formatTimestamp(entry.start)} - ${formatTimestamp(entry.end)}${state}`;
-
-    row.append(source, translation, timestamp);
-    target.append(row);
-  }
-}
-
-function renderTextFlow(target, entries, field, maxCharacters, mode) {
-  const joinedText = entries
-    .map((entry) => entry[field])
-    .filter(Boolean)
-    .join(" ");
-  const text = typeof maxCharacters === "number"
-    ? trimFlowText(joinedText, maxCharacters)
-    : joinedText.replace(/\s+/g, " ").trim();
-
-  target.innerHTML = "";
-  const paragraph = document.createElement("p");
-  paragraph.className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""} ${mode === "context" ? "english-flow-text" : ""}`.trim();
-  paragraph.textContent = text;
-  target.append(paragraph);
-}
-
-function trimFlowText(text, maxCharacters) {
-  const normalized = text.replace(/\s+/g, " ").trim();
-  if (normalized.length <= maxCharacters) {
-    return normalized;
-  }
-  const clipped = normalized.slice(-maxCharacters);
-  const firstSentenceBreak = clipped.search(/[.!?\u3002\uff01\uff1f]\s+/);
-  if (firstSentenceBreak > 0 && firstSentenceBreak < Math.floor(maxCharacters * 0.35)) {
-    return clipped.slice(firstSentenceBreak + 1).trim();
-  }
-  return clipped.trimStart();
 }
 
 function isSubtitleAtBottom() {
@@ -280,9 +168,19 @@ function updateEngineControls() {
   });
   perfText.textContent = isCloud
     ? "Azure mode: streaming live subtitles."
-    : "Local mode: English live transcript above, Chinese sentence translation below.";
-  azureSubtitleBox.classList.toggle("hidden", !isCloud);
-  localSubtitleLayout.classList.toggle("hidden", isCloud);
+    : "Local mode: Azure-style live subtitle monitor.";
+  azureSubtitleBox.classList.remove("hidden");
+  if (monitorTitle) {
+    monitorTitle.textContent = "Subtitle Monitor";
+  }
+  if (monitorSubtitle) {
+    monitorSubtitle.textContent = isCloud
+      ? "Azure live history - scroll to review"
+      : "Local draft and final history - scroll to review";
+  }
+  if (monitorBadge) {
+    monitorBadge.textContent = isCloud ? "LIVE" : "LOCAL";
+  }
   if (!isCloud) {
     applyLocalLatencyPreset();
   }
@@ -347,13 +245,7 @@ function start() {
   }
 
   subtitleStack.innerHTML = "";
-  englishContextStack.innerHTML = "";
-  englishDraftStack.innerHTML = "";
-  chineseSubtitleStack.innerHTML = "";
   finalSubtitleHistory = [];
-  englishContextHistory = [];
-  englishDraftById = new Map();
-  chineseTranslationHistory = [];
   liveSubtitle = null;
   autoFollowSubtitles = true;
   perfText.textContent = "Perf: waiting for first subtitle.";
@@ -450,9 +342,6 @@ deviceType.addEventListener("change", updateLanguageHints);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
 subtitleStack.addEventListener("scroll", () => {
   autoFollowSubtitles = isSubtitleAtBottom();
-});
-englishContextStack.addEventListener("scroll", () => {
-  autoFollowEnglishContext = isAtBottom(englishContextStack);
 });
 applySavedUiTheme();
 updateEngineControls();

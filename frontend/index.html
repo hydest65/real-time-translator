@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=high-end-stable-segments-20260505" />
+    <link rel="stylesheet" href="/static/style.css?v=azure-style-local-monitor-20260505" />
   </head>
   <body>
     <main class="studio">
@@ -99,47 +99,20 @@
           </div>
         </aside>
 
-        <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Cloud subtitle history">
+        <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Subtitle history">
           <div class="subtitle-box-header">
             <div>
-              <p class="monitor-title">Subtitle Monitor</p>
-              <p class="monitor-subtitle">Live history · scroll to review</p>
+              <p class="monitor-title" id="monitorTitle">Subtitle Monitor</p>
+              <p class="monitor-subtitle" id="monitorSubtitle">Local draft and final history · scroll to review</p>
             </div>
-            <span class="monitor-badge">LIVE</span>
+            <span class="monitor-badge" id="monitorBadge">LOCAL</span>
           </div>
           <div class="subtitle-stream" id="subtitleStack" aria-live="polite"></div>
-        </section>
-
-        <section class="local-subtitle-layout hidden" id="localSubtitleLayout" aria-label="Local subtitle workspace">
-          <section class="split-subtitle-box" aria-label="English live transcript">
-            <div class="subtitle-box-header compact">
-              <div>
-                <p class="monitor-title">English Live Transcript</p>
-                <p class="monitor-subtitle">Context above · live draft below</p>
-              </div>
-              <span class="monitor-badge">ASR</span>
-            </div>
-            <div class="english-pane">
-              <div class="subtitle-stream english-stream english-context-stream" id="englishContextStack" aria-live="polite"></div>
-              <div class="subtitle-stream english-stream english-draft-stream" id="englishDraftStack" aria-live="polite"></div>
-            </div>
-          </section>
-
-          <section class="split-subtitle-box" aria-label="Chinese translated subtitles">
-            <div class="subtitle-box-header compact">
-              <div>
-                <p class="monitor-title">Chinese Translation</p>
-                <p class="monitor-subtitle">Complete sentence translation · slightly delayed</p>
-              </div>
-              <span class="monitor-badge">ZH</span>
-            </div>
-            <div class="subtitle-stream chinese-stream" id="chineseSubtitleStack" aria-live="polite"></div>
-          </section>
         </section>
       </section>
     </main>
 
-    <script src="/static/app.js?v=high-end-stable-segments-20260505"></script>
+    <script src="/static/app.js?v=azure-style-local-monitor-20260505"></script>
   </body>
 </html>
 

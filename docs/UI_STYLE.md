@@ -18,30 +18,27 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - notice
   - activity
   - performance
-- Azure main subtitle monitor:
+- Main subtitle monitor:
   - largest visual area on the screen
   - soft raised outer shell
   - recessed inner subtitle stream
   - internal right-side scrollbar
   - preserved subtitle history
   - live row plus final bilingual rows
-- Azure mode keeps the single bilingual subtitle monitor and its scroll-review behavior.
-- Local mode uses two stacked monitors:
-  - upper monitor split into stable English context above and live ASR draft below
-  - lower monitor for slightly delayed complete Chinese sentence translation
+- Azure and local modes share the same single bilingual subtitle monitor and scroll-review behavior.
+- Local mode labels the monitor as `LOCAL`; Azure labels it as `LIVE`.
 
 ## Subtitle Behavior
 
 - Chinese translation is visually emphasized.
-- Azure mode keeps English source visible above the Chinese in each subtitle row.
-- In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
-- In local mode, stable English context and complete Chinese translation render as continuous text blocks. The English context pane should fill its readable area first and then scroll.
-- In local mode, the English live draft stays in its own lower English pane and updates quickly.
+- English source stays visible above Chinese in each subtitle row.
+- In local mode, English live draft updates the current live row quickly while Chinese waits for a fuller utterance.
+- In local mode, the final bilingual row replaces the matching draft row instead of leaving a separate English draft line behind.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
-- Azure users can scroll up inside the subtitle monitor without losing incoming live subtitles.
-- In Azure mode, if the user is at the bottom, new subtitles auto-follow.
-- In Azure mode, if the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
+- Users can scroll up inside the subtitle monitor without losing incoming live subtitles.
+- If the user is at the bottom, new subtitles auto-follow.
+- If the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
 
 ## Status Lamp Behavior
 
