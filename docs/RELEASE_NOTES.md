@@ -18,6 +18,7 @@ Date: 2026-05-05
 - Reordered the ASR selector to `medium.en`, `small.en`, then `base.en`.
 - Updated static asset versions for the high-end local build.
 - Reworked local mode into a two-level subtitle workspace: English live transcript above and polished Chinese translation below.
+- Changed both local subtitle panes from per-utterance cards to continuous long-text flows.
 - Tightened local utterance readiness so short fragments such as `and`, `in Vietnam`, or dangling phrases ending with `of the` do not become standalone Chinese subtitles.
 - Kept the UI editor import/export/CSS-copy tools added during this upgrade window.
 

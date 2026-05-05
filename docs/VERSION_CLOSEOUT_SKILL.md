@@ -66,5 +66,5 @@ Read these three files early when continuing product, architecture, or UI work:
 - Do not split long Azure final subtitles purely by time.
 - Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the Azure subtitle monitor scrollbar and scroll-review behavior.
-- Preserve the local two-level reading model: English live transcript above and polished Chinese translation below.
+- Preserve the local two-level continuous reading model: English live transcript above and polished Chinese translation below, both as long-text flows.
 - Keep true speaker diarization as a future feature unless explicitly implemented.

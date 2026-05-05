@@ -72,6 +72,7 @@ Test matrix:
 - Live subtitles appear without waiting for full paragraphs.
 - In local Low latency mode, the upper English pane updates while ASR is still forming the utterance.
 - In local Low latency mode, the lower Chinese pane only receives fuller translated utterances.
+- English and Chinese should render as continuous long text flows, not one card per utterance.
 - Short fragments such as `and`, `in Vietnam`, or `the General Director of the` should not become standalone Chinese rows.
 - Repeated loopback phrases should not be appended many times to either subtitle pane.
 - Azure mode keeps one bilingual subtitle monitor.

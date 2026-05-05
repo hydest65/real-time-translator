@@ -25,8 +25,8 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
   - MarianMT for local comparison / quality testing
   - NLLB for local comparison / non-realtime use
 - Local low-latency preset that uses shorter audio chunks, shows live English ASR draft immediately, and translates Chinese after sentence completion.
-- Two-level local subtitle workspace: English live transcript above, polished Chinese translation below.
-- Local drafts update the upper English pane immediately; fuller translated utterances enter the lower Chinese pane after sentence completion.
+- Two-level local subtitle workspace: continuous English live transcript above, continuous polished Chinese translation below.
+- Local drafts update inline in the upper English text flow immediately; fuller translated utterances append to the lower Chinese text flow after sentence completion.
 - Real-time live row plus final subtitle history.
 - Top-left red status lamp that remains visible when stopped and pulses while running.
 - Visual UI editor for local browser-side tuning of colors, subtitle size, panel width, corner radius, and background decoration.
@@ -37,7 +37,7 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 - `Fast` is the only active mode.
 - Azure Cloud streams live bilingual subtitles directly from Azure Speech Translation.
 - Local fallback translates each ASR result immediately without delayed polishing or quality-mode buffering.
-- Local fallback shows English ASR drafts continuously in the upper pane, then translates fuller utterances into polished Chinese rows in the lower pane.
+- Local fallback shows English ASR drafts continuously in the upper pane, then translates fuller utterances into polished Chinese text in the lower pane.
 
 ## Out Of Scope For This Version
 
@@ -58,6 +58,6 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 - The interface should not show MiniMax, Balanced, or Quality mode controls.
 - The status lamp should be visible when stopped and gently pulse after Start.
 - In Azure mode, user can scroll subtitle history inside the subtitle monitor while new subtitles continue to arrive.
-- In local mode, user can scan English live transcript above and read polished Chinese translations below.
+- In local mode, user can scan continuous English live transcript above and continuous polished Chinese translation below.
 - Local MarianMT and NLLB do not need to match Azure realtime behavior on this machine; they are comparison paths rather than the primary recommended route.
 - User can open `/static/ui-editor.html`, tune the visual style, save it locally, and see the saved style on the main subtitle page.

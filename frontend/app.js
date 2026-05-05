@@ -26,8 +26,8 @@ let chineseSubtitleHistory = [];
 let liveEnglishSubtitle = null;
 let autoFollowEnglish = true;
 let autoFollowChinese = true;
-const maxEnglishHistory = 18;
-const maxChineseHistory = 14;
+const maxEnglishCharacters = 1800;
+const maxChineseCharacters = 1600;
 const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
 const uiThemeStorageKey = "subtitleStudioUiThemeCompact20260502";
@@ -90,14 +90,18 @@ function renderSubtitle(item) {
       ...item,
       translatedText: "",
     });
-    if (englishSubtitleHistory.length > maxEnglishHistory) {
-      englishSubtitleHistory = englishSubtitleHistory.slice(-maxEnglishHistory);
-    }
+    englishSubtitleHistory = trimHistoryByCharacters(
+      englishSubtitleHistory,
+      "sourceText",
+      maxEnglishCharacters,
+    );
     if (item.translatedText && item.translatedText.trim()) {
       upsertHistory(chineseSubtitleHistory, item);
-      if (chineseSubtitleHistory.length > maxChineseHistory) {
-        chineseSubtitleHistory = chineseSubtitleHistory.slice(-maxChineseHistory);
-      }
+      chineseSubtitleHistory = trimHistoryByCharacters(
+        chineseSubtitleHistory,
+        "translatedText",
+        maxChineseCharacters,
+      );
     }
     const shouldClearLiveRow =
       !liveEnglishSubtitle?.sequenceId ||
@@ -113,8 +117,13 @@ function renderSubtitle(item) {
     ? [...englishSubtitleHistory, liveEnglishSubtitle]
     : englishSubtitleHistory;
 
-  renderSubtitleRows(englishSubtitleStack, englishItems, { showTranslation: false });
-  renderSubtitleRows(chineseSubtitleStack, chineseSubtitleHistory, { showTranslation: true });
+  renderTextFlow(englishSubtitleStack, englishItems, "sourceText", maxEnglishCharacters, {
+    className: "english-flow-text",
+    liveText: liveEnglishSubtitle?.sourceText,
+  });
+  renderTextFlow(chineseSubtitleStack, chineseSubtitleHistory, "translatedText", maxChineseCharacters, {
+    className: "chinese-flow-text",
+  });
 
   if (autoFollowEnglish && wasFollowingEnglish) {
     englishSubtitleStack.scrollTop = englishSubtitleStack.scrollHeight;
@@ -128,31 +137,36 @@ function renderSubtitle(item) {
   }
 }
 
-function renderSubtitleRows(target, entries, options) {
+function renderTextFlow(target, entries, field, maxCharacters, options = {}) {
+  const text = trimFlowText(
+    entries
+      .map((entry) => entry[field])
+      .filter(Boolean)
+      .join(" "),
+    maxCharacters,
+  );
+
   target.innerHTML = "";
-  for (const entry of entries) {
-    const row = document.createElement("article");
-    row.className = `subtitle-row ${entry.isFinal === false ? "live" : ""} ${entry.isNewTurn ? "new-turn" : ""} ${entry.isNoise ? "noise" : ""}`.trim();
-
-    const source = document.createElement("p");
-    source.className = "source";
-    source.textContent = entry.sourceText;
-
-    const timestamp = document.createElement("div");
-    timestamp.className = "timestamp";
-    const state = entry.isFinal === false ? " - live" : "";
-    timestamp.textContent = `${formatTimestamp(entry.start)} - ${formatTimestamp(entry.end)}${state}`;
-
-    if (options.showTranslation) {
-      const translation = document.createElement("p");
-      translation.className = "translation";
-      translation.textContent = entry.translatedText;
-      row.append(source, translation, timestamp);
-    } else {
-      row.append(source, timestamp);
-    }
-    target.append(row);
+  const paragraph = document.createElement("p");
+  paragraph.className = `subtitle-flow-text ${options.className || ""}`.trim();
+  paragraph.textContent = text || "Waiting for speech...";
+  if (options.liveText) {
+    paragraph.dataset.live = "true";
   }
+  target.append(paragraph);
+}
+
+function trimFlowText(text, maxCharacters) {
+  const normalized = text.replace(/\s+/g, " ").trim();
+  if (!normalized || normalized.length <= maxCharacters) {
+    return normalized;
+  }
+  const clipped = normalized.slice(-maxCharacters);
+  const firstBreak = clipped.search(/[.!?\u3002\uff01\uff1f]\s+/);
+  if (firstBreak > 0 && firstBreak < Math.floor(maxCharacters * 0.25)) {
+    return clipped.slice(firstBreak + 1).trim();
+  }
+  return clipped.trimStart();
 }
 
 function upsertHistory(history, item) {
@@ -169,15 +183,22 @@ function upsertHistory(history, item) {
   }
 }
 
-function isAtBottom(target) {
-  return target.scrollHeight - target.scrollTop - target.clientHeight < scrollBottomTolerance;
+function trimHistoryByCharacters(history, field, maxCharacters) {
+  let total = 0;
+  const kept = [];
+  for (let index = history.length - 1; index >= 0; index -= 1) {
+    const entry = history[index];
+    total += (entry[field] || "").length + 1;
+    kept.unshift(entry);
+    if (total >= maxCharacters) {
+      break;
+    }
+  }
+  return kept;
 }
 
-function formatTimestamp(value) {
-  const totalSeconds = Math.max(0, Math.floor(Number(value) || 0));
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = String(totalSeconds % 60).padStart(2, "0");
-  return `${minutes}:${seconds}`;
+function isAtBottom(target) {
+  return target.scrollHeight - target.scrollTop - target.clientHeight < scrollBottomTolerance;
 }
 
 function updateEngineControls() {

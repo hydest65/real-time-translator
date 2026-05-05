@@ -57,8 +57,7 @@ select,
 .toolbar,
 .side-panel,
 .subtitle-box,
-.panel-section,
-.subtitle-row {
+.panel-section {
   border: none;
   background: linear-gradient(145deg, var(--bg-soft), #e3e9f2);
   border-radius: var(--ui-radius);
@@ -386,10 +385,8 @@ select,
 .subtitle-stream {
   min-height: 0;
   margin: 0 16px 16px;
-  padding: 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+  padding: 18px 20px;
+  display: block;
   overflow-y: scroll;
   overflow-x: hidden;
   pointer-events: auto;
@@ -418,89 +415,24 @@ select,
   background: #aab7c7;
 }
 
-.subtitle-row {
-  width: 100%;
-  padding: 12px 14px;
-  background: linear-gradient(145deg, #edf2f8, #e3e9f2);
-  border-radius: 16px;
-  box-shadow: 5px 5px 10px #c7d0dd, -5px -5px 10px #f3f7fc;
-}
-
-.subtitle-row.live {
-  background: linear-gradient(145deg, #eaf0f8, #e1e7f0);
-  box-shadow: inset 5px 5px 10px var(--dark-shadow), inset -5px -5px 10px var(--light-shadow);
-}
-
-.subtitle-row.noise {
-  opacity: 0.58;
-}
-
-.subtitle-row.new-turn {
-  margin-top: 4px;
-}
-
-.subtitle-row.new-turn::before {
-  content: "";
-  display: block;
-  width: 44px;
-  height: 3px;
-  margin-bottom: 8px;
-  border-radius: 999px;
-  background: linear-gradient(90deg, var(--accent), var(--accent-soft));
-  box-shadow: 0 0 14px rgba(102, 126, 234, 0.28);
-}
-
-.source {
+.subtitle-flow-text {
   margin: 0;
-  color: #586577;
-  font-size: var(--source-font-size);
-  line-height: 1.32;
-  font-weight: 720;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
-.translation {
-  margin: 4px 0 0;
-  color: var(--accent-strong);
-  font-size: var(--subtitle-font-size);
-  line-height: 1.22;
-  font-weight: 950;
-}
-
-.subtitle-row.live .translation {
-  color: #5367d8;
-}
-
-.english-subtitle-stream .translation {
-  display: none;
-}
-
-.english-subtitle-stream .source {
+.english-flow-text {
   color: #2f3d52;
-  font-size: 17px;
-  line-height: 1.34;
+  font-size: 19px;
+  line-height: 1.48;
   font-weight: 820;
 }
 
-.english-subtitle-stream .subtitle-row.live .source {
-  color: #5367d8;
-}
-
-.chinese-subtitle-stream .source {
-  color: #6b7687;
-  font-size: 12px;
-}
-
-.chinese-subtitle-stream .translation {
-  margin-top: 5px;
+.chinese-flow-text {
+  color: var(--accent-strong);
   font-size: calc(var(--subtitle-font-size) + 1px);
-  line-height: 1.28;
-}
-
-.timestamp {
-  margin-top: 4px;
-  color: #8895a5;
-  font-size: 9px;
-  font-weight: 800;
+  line-height: 1.5;
+  font-weight: 930;
 }
 
 @media (max-width: 980px) {
@@ -555,7 +487,7 @@ select,
     min-height: 700px;
   }
 
-  .translation {
+  .chinese-flow-text {
     font-size: var(--subtitle-font-size);
   }
 }

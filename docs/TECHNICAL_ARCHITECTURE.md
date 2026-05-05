@@ -45,7 +45,7 @@ The `faster-whisper` module is loaded lazily when local ASR is actually requeste
 - `frontend/index.html`: main Subtitle Studio operating surface.
 - `frontend/style.css`: shared visual tokens, soft UI layout, subtitle monitor, controls, and saved-theme CSS variable hooks.
 - `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, and saved UI theme loading.
-- Frontend rendering uses a two-level local subtitle workspace. Draft events update the upper English live transcript, while final translated events append stable English history above and polished Chinese rows below.
+- Frontend rendering uses a two-level local subtitle workspace. Draft events update the upper continuous English live transcript, while final translated events append to the lower continuous polished Chinese text flow.
 - `frontend/ui-editor.html`: visual editor page for tuning the main UI.
 - `frontend/ui-editor.css`: editor layout and control styling.
 - `frontend/ui-editor.js`: editor preview, `localStorage` save/reset behavior, and generated CSS preview.
