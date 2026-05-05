@@ -1,5 +1,40 @@
 # Release Notes
 
+## 0.2.0 - High-End Local English Edition
+
+Date: 2026-05-05
+
+### Product
+
+- Repositioned the project as a dedicated high-end local English-to-Chinese subtitle workflow.
+- Removed Spanish from the active product surface so local mode can stay on English-only Whisper `.en` models.
+- Made `Argos` the default engine and kept Azure Cloud as an optional comparison/fallback route.
+- Promoted `medium.en` as the default local ASR model for RTX 5070 Ti 16GB class hardware.
+
+### Frontend
+
+- Removed the Source selector and fixed the runtime payload to `eng_Latn -> zho_Hans`.
+- Reordered the ASR selector to `medium.en`, `small.en`, then `base.en`.
+- Updated static asset versions for the high-end local build.
+- Kept the UI editor import/export/CSS-copy tools added during this upgrade window.
+
+### Backend
+
+- Changed the default app config to `medium.en + cuda + int8 + argos`.
+- Pinned PyTorch to `torch==2.11.0+cu128` in `backend/requirements.txt`.
+- Simplified runtime language mapping to English-only local and Azure paths.
+- Simplified local translation setup by removing the Spanish MarianMT model setting and Argos pivot path.
+
+### Verification
+
+- CUDA is active in the project virtual environment with `torch 2.11.0+cu128`.
+- `torch.cuda.is_available()` returned `true`.
+- `WhisperASR('base.en', 'cuda', 'int8')` loaded on `cuda`.
+- RTX 5070 Ti benchmark on a 13.3s English sample:
+- `base.en` warm ASR average: `191.8ms`, RTF `0.014`.
+- `small.en` warm ASR average: `301.3ms`, RTF `0.023`.
+- `medium.en` warm ASR average: `494.1ms`, RTF `0.037`.
+
 ## 0.1.5 - System Loopback and Local Realtime Tuning Closeout
 
 Date: 2026-05-04

@@ -33,6 +33,14 @@ Current closeout result on 2026-05-04:
 - Local realtime defaults were tightened to `1s` / `1.5s` chunk behavior depending on latency preset.
 - Argos remains the recommended local real-time engine on this environment.
 
+High-end local upgrade result on 2026-05-05:
+
+- CUDA PyTorch `2.11.0+cu128` installed in `.venv`.
+- `torch.cuda.is_available()` returned `true` on NVIDIA GeForce RTX 5070 Ti.
+- `WhisperASR` loaded on `cuda`.
+- `medium.en` warm ASR average was `494.1ms` for a `13.3s` sample, RTF `0.037`.
+- Frontend now defaults to `Argos`, `medium.en`, `cuda`, and English-only source.
+
 ## Runtime Smoke Test
 
 ```powershell
@@ -49,11 +57,10 @@ http://127.0.0.1:8000
 
 Test matrix:
 
-- Source: English, Input: Mic, Engine: Azure Cloud.
-- Source: Spanish, Input: Mic, Engine: Azure Cloud.
+- Input: Mic, Engine: Azure Cloud.
 - Input: System, Engine: Azure Cloud, if Windows supports system capture.
-- Source: English, Engine: Argos, Latency: Low, Chunk: 1s.
-- Source: Spanish, Engine: Argos or NLLB, if offline/local fallback is needed.
+- Engine: Argos, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1s.
+- Engine: Argos, ASR: small.en, Device: cuda, Latency: Low, Chunk: 1s.
 
 ## Manual UX Checks
 
@@ -69,7 +76,7 @@ Test matrix:
 - Azure mode still uses subtitle rows, internal scroll history, and bottom auto-follow.
 - Local mode shows English context, English draft, and Chinese complete translations as separate panes.
 - `Input: System` can capture the current active Windows playback device when loopback is available.
-- Switching Source to Spanish updates the subtitle direction and still starts the stream.
+- No Source selector is shown in the high-end English-only build.
 - Final subtitles enter history.
 - No MiniMax, Balanced, or Quality mode controls are visible.
 - Azure subtitle monitor has its own right-side scrollbar.

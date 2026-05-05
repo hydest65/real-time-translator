@@ -32,12 +32,12 @@ load_dotenv_file()
 
 @dataclass
 class AppConfig:
-    asr_model_size: str = "base.en"
+    asr_model_size: str = "medium.en"
     asr_device: DevicePreference = "cuda"
     asr_compute_type: str = "int8"
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
-    translation_engine: TranslationEngine = "azure"
+    translation_engine: TranslationEngine = "argos"
     audio_source: AudioSource = "microphone"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
@@ -48,7 +48,6 @@ class AppConfig:
     vad_rms_threshold: float = 0.008
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
-    marian_es_zh_model_name: str = "Helsinki-NLP/opus-mt-es-zh"
     azure_speech_key: str = ""
     azure_speech_region: str = ""
     azure_source_language: str = "en-US"

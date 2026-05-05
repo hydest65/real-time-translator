@@ -9,7 +9,6 @@ const englishContextStack = document.querySelector("#englishContextStack");
 const englishDraftStack = document.querySelector("#englishDraftStack");
 const chineseSubtitleStack = document.querySelector("#chineseSubtitleStack");
 const audioSource = document.querySelector("#audioSource");
-const sourceLanguage = document.querySelector("#sourceLanguage");
 const modelSize = document.querySelector("#modelSize");
 const deviceType = document.querySelector("#deviceType");
 const chunkSeconds = document.querySelector("#chunkSeconds");
@@ -120,7 +119,7 @@ function renderSubtitle(item) {
 
     const translation = document.createElement("p");
     translation.className = "translation";
-    translation.textContent = entry.translatedText || "翻译中...";
+    translation.textContent = entry.translatedText || "Translating...";
 
     const timestamp = document.createElement("div");
     timestamp.className = "timestamp";
@@ -331,16 +330,15 @@ function localRealtimeTuning() {
 }
 
 function updateLanguageHints() {
-  const isSpanish = sourceLanguage.value === "spa_Latn";
   const subtitle = document.querySelector("#brandSubtitle");
   if (subtitle) {
-    subtitle.textContent = isSpanish
-      ? "Spanish to Chinese - Local or Azure cloud"
-      : "English to Chinese - Local or Azure cloud";
+    subtitle.textContent = translationEngine.value === "azure"
+      ? "English to Chinese - Azure cloud"
+      : "English to Chinese - High-end local mode";
   }
-  perfText.textContent = isSpanish
-    ? "Spanish mode: local ASR uses multilingual Whisper automatically."
-    : "English mode: optimized English ASR is available.";
+  perfText.textContent = translationEngine.value === "azure"
+    ? "Azure mode: streaming live subtitles."
+    : `${modelSize.value} on ${deviceType.value}: optimized English ASR is available.`;
 }
 
 function start() {
@@ -382,7 +380,7 @@ function start() {
         asr_device: deviceType.value,
         asr_compute_type: "int8",
         audio_source: audioSource.value,
-        source_language: sourceLanguage.value,
+        source_language: "eng_Latn",
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
         chunk_seconds: effectiveChunk,
@@ -446,8 +444,10 @@ function stop() {
 startButton.addEventListener("click", start);
 stopButton.addEventListener("click", stop);
 translationEngine.addEventListener("change", updateEngineControls);
+translationEngine.addEventListener("change", updateLanguageHints);
+modelSize.addEventListener("change", updateLanguageHints);
+deviceType.addEventListener("change", updateLanguageHints);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
-sourceLanguage.addEventListener("change", updateLanguageHints);
 subtitleStack.addEventListener("scroll", () => {
   autoFollowSubtitles = isSubtitleAtBottom();
 });

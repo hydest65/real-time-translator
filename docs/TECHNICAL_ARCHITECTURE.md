@@ -11,8 +11,8 @@ Audio capture
   -> browser subtitle monitor
 ```
 
-This is the preferred low-latency route. Azure provides live partial subtitles and final bilingual subtitle results.
-The source language selector maps English to `en-US` and Spanish to `es-ES`; the target is fixed to `zh-Hans`.
+Azure provides live partial subtitles and final bilingual subtitle results as an optional cloud comparison/fallback route.
+The high-end local edition fixes the source language to English. Azure maps that source to `en-US`; the target is fixed to `zh-Hans`.
 
 ### Local Fallback Route
 
@@ -26,7 +26,7 @@ audio_capture_worker
 ```
 
 Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translation.
-English local mode can use English-only Whisper models such as `base.en` and `small.en`. Spanish local mode automatically maps those selections to multilingual `base` and `small`, then translates `spa_Latn -> zho_Hans`.
+English local mode defaults to `medium.en` on CUDA, with `small.en` and `base.en` available as lighter realtime profiles.
 The local default chunk is `1.5s`. The `Low` preset uses a `1s` chunk, `0.1s` overlap, queue size `1`, and tighter utterance segmentation so subtitles appear earlier. The `Steady` preset uses a `1.5s` chunk, `0.2s` overlap, queue size `1`, and slightly looser utterance segmentation for more stable wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a brief idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 
@@ -38,7 +38,7 @@ The `faster-whisper` module is loaded lazily when local ASR is actually requeste
 - `backend/asr.py`: faster-whisper wrapper.
 - `backend/translator.py`: Argos, MarianMT, and NLLB local translators.
 - `backend/config.py`: runtime defaults and selectable options.
-- Language handling: `eng_Latn` and `spa_Latn` are accepted source languages; `zho_Hans` remains the fixed target language.
+- Language handling: `eng_Latn` is the fixed source language; `zho_Hans` remains the fixed target language.
 
 ## Frontend Modules
 
@@ -62,7 +62,7 @@ Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCo
 - There is no MiniMax polish queue and no Balanced/Quality path.
 - The active translation mode is fixed to fast/direct output.
 - The local audio queue is size-limited so stale audio work is dropped rather than displayed late.
-- MarianMT and NLLB run through Transformers. In the current environment, the installed `torch` runtime is CPU-only, so those translators do not gain practical GPU acceleration even if local ASR is using CUDA.
+- MarianMT and NLLB run through Transformers. The high-end local environment pins CUDA PyTorch, but Argos remains the realtime default.
 
 ## Paragraph Turn Detection
 

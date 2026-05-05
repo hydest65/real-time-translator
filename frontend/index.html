@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=local-split-context-draft-20260502" />
+    <link rel="stylesheet" href="/static/style.css?v=high-end-local-20260505" />
   </head>
   <body>
     <main class="studio">
@@ -13,7 +13,7 @@
           <span class="status-dot" id="statusDot"></span>
           <div>
             <p class="brand-title">Subtitle Studio</p>
-            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - Local or Azure cloud</p>
+            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - High-end local mode</p>
           </div>
         </div>
 
@@ -27,18 +27,10 @@
           </label>
 
           <label>
-            Source
-            <select id="sourceLanguage">
-              <option value="eng_Latn" selected>English</option>
-              <option value="spa_Latn">Spanish</option>
-            </select>
-          </label>
-
-          <label>
             Engine
             <select id="translationEngine">
-              <option value="azure" selected>Azure Cloud</option>
-              <option value="argos">Argos</option>
+              <option value="argos" selected>Argos</option>
+              <option value="azure">Azure Cloud</option>
               <option value="marianmt">MarianMT</option>
               <option value="nllb">NLLB</option>
             </select>
@@ -51,8 +43,9 @@
           <label class="local-control local-extension local-extension-start">
             ASR
             <select id="modelSize">
-              <option value="base.en" selected>base.en</option>
+              <option value="medium.en" selected>medium.en</option>
               <option value="small.en">small.en</option>
+              <option value="base.en">base.en</option>
             </select>
           </label>
 
@@ -146,7 +139,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=local-split-context-draft-20260502"></script>
+    <script src="/static/app.js?v=high-end-local-20260505"></script>
   </body>
 </html>
 

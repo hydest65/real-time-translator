@@ -276,7 +276,6 @@ class Runtime:
                 or self.current_config.asr_device != next_config.asr_device
                 or self.current_config.nllb_model_name != next_config.nllb_model_name
                 or self.current_config.marian_en_zh_model_name != next_config.marian_en_zh_model_name
-                or self.current_config.marian_es_zh_model_name != next_config.marian_es_zh_model_name
             )
 
             if needs_asr:
@@ -301,7 +300,6 @@ class Runtime:
                     self.translator = await asyncio.to_thread(
                         MarianMTTranslator,
                         next_config.marian_en_zh_model_name,
-                        next_config.marian_es_zh_model_name,
                         next_config.asr_device,
                     )
                 else:
@@ -341,8 +339,7 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
         if key in merged and value not in (None, ""):
             merged[key] = value
 
-    if merged["source_language"] not in ("eng_Latn", "spa_Latn"):
-        merged["source_language"] = "eng_Latn"
+    merged["source_language"] = "eng_Latn"
     merged["target_language"] = "zho_Hans"
     merged["azure_source_language"] = azure_language_code(merged["source_language"])
     merged["azure_target_language"] = "zh-Hans"
@@ -367,21 +364,14 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
 
 
 def whisper_language(source_language: str) -> str:
-    if source_language == "spa_Latn":
-        return "es"
     return "en"
 
 
 def effective_asr_model(model_size: str, source_language: str) -> str:
-    if source_language == "spa_Latn":
-        if model_size.endswith(".en"):
-            return model_size.removesuffix(".en")
     return model_size
 
 
 def azure_language_code(source_language: str) -> str:
-    if source_language == "spa_Latn":
-        return "es-ES"
     return "en-US"
 
 

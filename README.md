@@ -1,18 +1,19 @@
 # Real Time Translator MVP
 
-Windows real-time subtitle translator. It supports English-to-Chinese and Spanish-to-Chinese subtitles through two routes:
+Windows real-time subtitle translator tuned for a high-end local English-to-Chinese workflow. It supports two routes:
 
-- `Azure Cloud`: lowest-latency streaming speech translation, similar to commercial meeting subtitle apps.
-- `Local`: private offline ASR + translation with faster-whisper and local translators.
+- `Local`: private offline ASR + translation with faster-whisper on CUDA and local translators.
+- `Azure Cloud`: optional cloud streaming speech translation for comparison or fallback.
 
 ## Current Low-Latency Defaults
 
-- Engine: `Azure Cloud` for lowest latency, or local engines when privacy/offline mode matters
+- Engine: `Argos` local by default for private high-end local use; `Azure Cloud` remains optional
 - Input: `Mic` by default; `System` first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input
 - Local ASR: `faster-whisper`
-- Whisper model: `base.en`
-- Accuracy option: `small.en`
+- Whisper model: `medium.en`
+- Faster options: `small.en` and `base.en`
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
+- GPU target: NVIDIA RTX 5070 Ti 16GB class hardware
 - Local default chunk: `1.5s`
 - Local low-latency preset: `1s` audio chunk, `0.1s` overlap, queue max size `1`
 - Local steady preset: `1.5s` audio chunk, `0.2s` overlap, queue max size `1`
@@ -20,9 +21,9 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Local translation engine: `argos`
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
 - Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
-- UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
+- UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, background-art toggles, and theme import/export
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
-- Source language: English or Spanish, both translated into Simplified Chinese
+- Source language: English only, translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
 - Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
@@ -38,13 +39,12 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 
 First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
 
-Spanish mode notes:
+High-end local notes:
 
-- Azure mode uses `es-ES` speech recognition and `zh-Hans` translation.
-- Local ASR automatically maps `base.en` to multilingual `base`, and `small.en` to multilingual `small`, because `.en` Whisper models cannot recognize Spanish.
-- Argos first tries a direct `es -> zh` package, then falls back to `es -> en -> zh` if the direct package is unavailable.
-- MarianMT uses a separate Spanish-to-Chinese model setting: `Helsinki-NLP/opus-mt-es-zh`.
-- NLLB uses `spa_Latn -> zho_Hans`.
+- The dedicated local default is `medium.en + cuda + int8 + Argos`.
+- The project environment is pinned to CUDA PyTorch through `torch==2.11.0+cu128`.
+- On RTX 5070 Ti 16GB, measured warm ASR speed for `medium.en` is about `0.037 RTF` on a 13.3s English sample, roughly 27x realtime.
+- `small.en` remains available when startup time or extra latency margin matters; `base.en` remains available as the fastest low-accuracy option.
 
 ## Project Structure
 
@@ -70,7 +70,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.1.5 - System Loopback and Local Realtime Tuning Closeout`.
+- Current closeout: `0.2.0 - High-End Local English Edition`.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
 - `docs/UI_STYLE.md`: Subtitle Studio layout and interaction rules.
@@ -89,6 +89,8 @@ py -3.11 -m venv .venv
 python -m pip install --upgrade pip
 python -m pip install -r backend\requirements.txt
 ```
+
+The high-end local edition installs CUDA PyTorch from the PyTorch CUDA 12.8 wheel index. The first install downloads a large GPU package.
 
 If your pip source says it cannot find `argostranslate`, install it from PyPI directly:
 
@@ -187,43 +189,42 @@ Visual UI editor:
 http://127.0.0.1:8000/static/ui-editor.html
 ```
 
-The UI editor previews the main page in a browser frame. Changes are stored in the browser's `localStorage` and applied by the main page on load. Use it for fast personal UI tuning before deciding whether a style should be written permanently into `frontend/style.css`.
+The UI editor previews the main page in a browser frame. Changes are stored in the browser's `localStorage` and applied by the main page on load. You can also copy the generated CSS or export/import a theme JSON file for reuse across browsers before deciding whether a style should be written permanently into `frontend/style.css`.
 
 Recommended first test:
 
 ```text
-Source: English
-ASR: base.en
+ASR: medium.en
 Device: cuda
-Chunk: 1s or 1.5s
-Engine: Azure Cloud
+Latency: Low
+Chunk: 1s
+Engine: Argos
 Input: System, if available for Teams audio
 ```
 
-Recommended Spanish test:
+Recommended faster local test:
 
 ```text
-Source: Spanish
-ASR: base.en
-Device: cuda
-Chunk: 1s or 1.5s
-Engine: Azure Cloud
-```
-
-Recommended private/offline test:
-
-```text
-ASR: base.en
+ASR: small.en
 Device: cuda
 Latency: Low
 Chunk: 1s
 Engine: Argos
 ```
 
-For better recognition accuracy:
+Recommended cloud comparison:
 
 ```text
-ASR: small.en
+Engine: Azure Cloud
+Input: System, if available for Teams audio
+```
+
+Local benchmark on RTX 5070 Ti 16GB:
+
+```text
+base.en warm ASR: 191.8ms for 13.3s audio, RTF 0.014
+small.en warm ASR: 301.3ms for 13.3s audio, RTF 0.023
+medium.en warm ASR: 494.1ms for 13.3s audio, RTF 0.037
 ```
 
 ## Runtime Pipeline
@@ -270,9 +271,9 @@ The browser shows this in the Perf line. If you see an `argos-asr` or similar en
 
 ## Notes
 
-- `azure` is the best choice when you want the lowest latency and can use a cloud service.
-- `argos` is the best local default for low latency.
+- `argos` is the best default for this high-end local English edition.
+- `azure` remains useful when you want a cloud comparison or do not want to load local models.
 - `marianmt` may be better when you can accept a bit more delay.
 - `nllb` is not recommended for real-time use on this machine.
-- English local mode can use `base.en` for speed and `small.en` for better accuracy. Spanish local mode automatically uses the matching multilingual Whisper model.
+- English local mode now defaults to `medium.en`; use `small.en` for a lighter realtime profile and `base.en` for the fastest low-accuracy profile.
 - Current MarianMT runs through Transformers, not CTranslate2 int8 yet.

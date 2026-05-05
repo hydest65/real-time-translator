@@ -27,8 +27,6 @@ class Translator(Protocol):
 def nllb_to_short_code(language: str | None) -> str:
     if language == "zho_Hans":
         return "zh"
-    if language == "spa_Latn":
-        return "es"
     return "en"
 
 
@@ -77,36 +75,10 @@ class ArgosTranslator:
         return source.get_translation(target)
 
     def _can_pivot(self, source_code: str, target_code: str, languages) -> bool:
-        if source_code == "en" or target_code != "zh":
-            return False
-        return (
-            self._find_translation(languages, source_code, "en") is not None
-            and self._find_translation(languages, "en", target_code) is not None
-        )
+        return False
 
     def _install_pivot_packages(self, source_code: str, target_code: str, available_packages) -> bool:
-        if source_code == "en" or target_code != "zh":
-            return False
-        needed_pairs = [(source_code, "en"), ("en", target_code)]
-        selected_packages = []
-        for from_code, to_code in needed_pairs:
-            installed = self.translate_module.get_installed_languages()
-            if self._find_translation(installed, from_code, to_code) is not None:
-                continue
-            package = next(
-                (
-                    item
-                    for item in available_packages
-                    if item.from_code == from_code and item.to_code == to_code
-                ),
-                None,
-            )
-            if package is None:
-                return False
-            selected_packages.append(package)
-        for package in selected_packages:
-            self.package.install_from_path(package.download())
-        return True
+        return False
 
     async def translate(
         self,
@@ -149,7 +121,6 @@ class MarianMTTranslator:
     def __init__(
         self,
         en_zh_model_name: str,
-        es_zh_model_name: str,
         device_preference: str = "cuda",
     ) -> None:
         import torch
@@ -158,10 +129,7 @@ class MarianMTTranslator:
         self.torch = torch
         self.AutoModelForSeq2SeqLM = AutoModelForSeq2SeqLM
         self.AutoTokenizer = AutoTokenizer
-        self.model_names = {
-            "eng_Latn": en_zh_model_name,
-            "spa_Latn": es_zh_model_name,
-        }
+        self.model_name = en_zh_model_name
         self.device = self._resolve_device(device_preference)
         self._models: dict[str, tuple[object, object]] = {}
 
@@ -171,7 +139,7 @@ class MarianMTTranslator:
         return "cuda" if self.torch.cuda.is_available() else "cpu"
 
     def _get_model(self, source_language: str):
-        model_name = self.model_names.get(source_language, self.model_names["eng_Latn"])
+        model_name = self.model_name
         if model_name not in self._models:
             tokenizer = self.AutoTokenizer.from_pretrained(model_name)
             model = self.AutoModelForSeq2SeqLM.from_pretrained(model_name)

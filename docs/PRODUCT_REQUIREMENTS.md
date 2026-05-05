@@ -2,7 +2,7 @@
 
 ## Product Goal
 
-Build a Windows real-time subtitle translator for meetings. The first usable version listens to microphone or system audio, recognizes English or Spanish speech, translates it into Simplified Chinese, and displays bilingual subtitles in a local browser window.
+Build a Windows real-time subtitle translator for meetings. The high-end local edition listens to microphone or system audio, recognizes English speech, translates it into Simplified Chinese, and displays bilingual subtitles in a local browser window.
 
 ## Target Users
 
@@ -15,11 +15,12 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 
 - Local browser subtitle window served by FastAPI.
 - Audio input from microphone, with `System` mode that prefers loopback from the current default Windows playback device and falls back to Stereo Mix / monitor input when needed.
-- Azure Speech Translation as the main low-latency route.
-- Source language selector for English or Spanish, with Simplified Chinese as the fixed target language.
+- High-end local English-to-Chinese as the main route.
+- Azure Speech Translation as an optional comparison/fallback route.
+- English source speech with Simplified Chinese as the fixed target language.
 - Local fallback engines for offline/private testing:
-  - faster-whisper `base.en` / `small.en` for English
-  - multilingual faster-whisper `base` / `small` automatically for Spanish
+  - faster-whisper `medium.en` by default on CUDA
+  - `small.en` and `base.en` as lighter English-only options
   - Argos Translate as the recommended local realtime engine
   - MarianMT for local comparison / quality testing
   - NLLB for local comparison / non-realtime use
@@ -51,7 +52,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 ## Success Criteria
 
 - User can open `http://127.0.0.1:8000`, click Start, and see live bilingual subtitles.
-- User can choose English or Spanish as the source language before starting.
+- User can run the dedicated English-to-Chinese workflow without choosing a source language.
 - Azure mode should feel close to real time during normal speech.
 - Local Low latency mode should keep the live ASR draft responsive while stable English context and Chinese complete sentences stay readable as continuous text flows.
 - The interface should not show MiniMax, Balanced, or Quality mode controls.
