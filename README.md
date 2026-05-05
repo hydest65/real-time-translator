@@ -15,8 +15,8 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
 - GPU target: NVIDIA RTX 5070 Ti 16GB class hardware
 - Local default chunk: `1.5s`
-- Local low-latency preset: `1s` audio chunk, `0.1s` overlap, queue max size `1`
-- Local steady preset: `1.5s` audio chunk, `0.2s` overlap, queue max size `1`
+- Local low-latency preset: `1.5s` audio chunk, `0.25s` overlap, queue max size `1`
+- Local steady preset: `2s` audio chunk, `0.3s` overlap, queue max size `1`
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
@@ -197,7 +197,7 @@ Recommended first test:
 ASR: medium.en
 Device: cuda
 Latency: Low
-Chunk: 1s
+Chunk: 1.5s
 Engine: Argos
 Input: System, if available for Teams audio
 ```
@@ -208,7 +208,7 @@ Recommended faster local test:
 ASR: small.en
 Device: cuda
 Latency: Low
-Chunk: 1s
+Chunk: 1.5s
 Engine: Argos
 ```
 
@@ -239,7 +239,7 @@ audio_capture_worker
   -> websocket_push_worker
 ```
 
-In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The translation queue preserves ready utterances so completed sentences are not lost.
+In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The high-end local edition uses a slightly longer `1.5s` ASR window and duplicate-phrase filtering so repeated loopback fragments are less likely to become repeated Chinese translations. The translation queue preserves ready utterances so completed sentences are not lost.
 
 For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
 

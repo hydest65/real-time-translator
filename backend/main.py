@@ -119,6 +119,7 @@ class LocalUtteranceAggregator:
         self.max_words = active_config.segmenter_max_words
         self.max_seconds = active_config.segmenter_max_seconds
         self.sequence_index = 0
+        self.recent_ready_signatures: list[str] = []
         self.reset()
 
     def reset(self) -> None:
@@ -158,6 +159,12 @@ class LocalUtteranceAggregator:
     def mark_ready(self) -> TranslateJob | None:
         if not self.has_text:
             return None
+        signature = self._text_signature(self.source_text)
+        if signature and signature in self.recent_ready_signatures:
+            self.reset()
+            return None
+        if signature:
+            self.recent_ready_signatures = [*self.recent_ready_signatures, signature][-8:]
         job = TranslateJob(
             sequence_id=self.sequence_id,
             source_text=self.source_text.strip(),
@@ -219,12 +226,19 @@ class LocalUtteranceAggregator:
         if not clean_incoming:
             return clean_current
 
+        current_signature = LocalUtteranceAggregator._text_signature(clean_current)
+        incoming_signature = LocalUtteranceAggregator._text_signature(clean_incoming)
+        if incoming_signature and incoming_signature in current_signature:
+            return clean_current
+        if current_signature and current_signature in incoming_signature:
+            return clean_incoming
+
         current_words = clean_current.split()
         incoming_words = clean_incoming.split()
-        max_overlap = min(6, len(current_words), len(incoming_words))
+        max_overlap = min(20, len(current_words), len(incoming_words))
         for overlap in range(max_overlap, 0, -1):
-            left = " ".join(current_words[-overlap:]).lower().strip(".,!?;:")
-            right = " ".join(incoming_words[:overlap]).lower().strip(".,!?;:")
+            left = LocalUtteranceAggregator._text_signature(" ".join(current_words[-overlap:]))
+            right = LocalUtteranceAggregator._text_signature(" ".join(incoming_words[:overlap]))
             if left == right:
                 return LocalUtteranceAggregator._normalize_local_text(" ".join([*current_words, *incoming_words[overlap:]]))
         return LocalUtteranceAggregator._normalize_local_text(f"{clean_current} {clean_incoming}")
@@ -241,7 +255,51 @@ class LocalUtteranceAggregator:
         cleaned = re.sub(r"\s+([,.!?;:])", r"\1", cleaned)
         cleaned = re.sub(r"([,.!?;:])([A-Za-z])", r"\1 \2", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        cleaned = LocalUtteranceAggregator._collapse_repeated_phrases(cleaned)
         return cleaned.strip()
+
+    @staticmethod
+    def _text_signature(text: str) -> str:
+        return " ".join(SubtitleTurnDetector._normalize_text(text).split())
+
+    @staticmethod
+    def _collapse_repeated_phrases(text: str) -> str:
+        words = text.split()
+        if len(words) < 6:
+            return text
+
+        result: list[str] = []
+        index = 0
+        while index < len(words):
+            collapsed = False
+            max_phrase_words = min(8, (len(words) - index) // 2)
+            for phrase_words in range(max_phrase_words, 1, -1):
+                phrase = words[index : index + phrase_words]
+                phrase_signature = LocalUtteranceAggregator._text_signature(" ".join(phrase))
+                if not phrase_signature:
+                    continue
+
+                repeat_count = 1
+                cursor = index + phrase_words
+                while cursor + phrase_words <= len(words):
+                    candidate = words[cursor : cursor + phrase_words]
+                    candidate_signature = LocalUtteranceAggregator._text_signature(" ".join(candidate))
+                    if candidate_signature != phrase_signature:
+                        break
+                    repeat_count += 1
+                    cursor += phrase_words
+
+                if repeat_count >= 2:
+                    result.extend(phrase)
+                    index = cursor
+                    collapsed = True
+                    break
+
+            if not collapsed:
+                result.append(words[index])
+                index += 1
+
+        return " ".join(result)
 
 
 class Runtime:

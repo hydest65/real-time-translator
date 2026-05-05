@@ -293,18 +293,18 @@ function applyLocalLatencyPreset() {
     return;
   }
   if (localLatencyPreset.value === "low") {
-    chunkSeconds.value = "1";
-  } else {
     chunkSeconds.value = "1.5";
+  } else {
+    chunkSeconds.value = "2";
   }
 }
 
 function effectiveLocalChunkSeconds(isLowLatencyLocal) {
   const selectedChunk = Number(chunkSeconds.value);
   if (!isLowLatencyLocal) {
-    return Math.min(selectedChunk || 1.5, 1.5);
+    return Math.min(selectedChunk || 2, 2);
   }
-  const cappedChunk = Math.min(selectedChunk || 1, 1);
+  const cappedChunk = Math.min(selectedChunk || 1.5, 1.5);
   chunkSeconds.value = String(cappedChunk);
   return cappedChunk;
 }
@@ -313,19 +313,19 @@ function localRealtimeTuning() {
   const isLowLatencyLocal = localLatencyPreset?.value === "low";
   if (isLowLatencyLocal) {
     return {
-      overlap_seconds: 0.1,
+      overlap_seconds: 0.25,
       queue_max_size: 1,
-      segmenter_pause_seconds: 0.35,
-      segmenter_max_words: 10,
-      segmenter_max_seconds: 2.6,
+      segmenter_pause_seconds: 0.8,
+      segmenter_max_words: 24,
+      segmenter_max_seconds: 6.0,
     };
   }
   return {
-    overlap_seconds: 0.2,
+    overlap_seconds: 0.3,
     queue_max_size: 1,
-    segmenter_pause_seconds: 0.55,
-    segmenter_max_words: 14,
-    segmenter_max_seconds: 3.8,
+    segmenter_pause_seconds: 1.1,
+    segmenter_max_words: 32,
+    segmenter_max_seconds: 8.0,
   };
 }
 

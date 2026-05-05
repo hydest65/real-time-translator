@@ -25,6 +25,8 @@ Date: 2026-05-05
 - Pinned PyTorch to `torch==2.11.0+cu128` in `backend/requirements.txt`.
 - Simplified runtime language mapping to English-only local and Azure paths.
 - Simplified local translation setup by removing the Spanish MarianMT model setting and Argos pivot path.
+- Retuned the high-end local Low preset to `1.5s` chunks with longer utterance boundaries to reduce fragmented drafts.
+- Added local repeated-phrase filtering so repeated loopback fragments do not become repeated Chinese translation flow.
 
 ### Verification
 

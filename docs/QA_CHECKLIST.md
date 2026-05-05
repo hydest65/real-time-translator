@@ -60,8 +60,8 @@ Test matrix:
 
 - Input: System, Engine: Azure Cloud.
 - Input: Mic, Engine: Azure Cloud, if microphone capture is needed.
-- Engine: Argos, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1s.
-- Engine: Argos, ASR: small.en, Device: cuda, Latency: Low, Chunk: 1s.
+- Engine: Argos, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1.5s.
+- Engine: Argos, ASR: small.en, Device: cuda, Latency: Low, Chunk: 1.5s.
 
 ## Manual UX Checks
 
@@ -73,6 +73,7 @@ Test matrix:
 - In local Low latency mode, the English upper area keeps continuous readable context and begins scrolling only after the pane fills.
 - In local Low latency mode, the lower English draft pane updates live while ASR is still forming the utterance.
 - In local Low latency mode, the Chinese monitor appends complete translated sentences as a continuous text flow.
+- Repeated loopback phrases should not be appended many times to the English context or Chinese translation.
 - Azure mode keeps one bilingual subtitle monitor.
 - Azure mode still uses subtitle rows, internal scroll history, and bottom auto-follow.
 - Local mode shows English context, English draft, and Chinese complete translations as separate panes.

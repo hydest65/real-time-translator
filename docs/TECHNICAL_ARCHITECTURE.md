@@ -27,7 +27,7 @@ audio_capture_worker
 
 Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translation.
 English local mode defaults to `medium.en` on CUDA, with `small.en` and `base.en` available as lighter realtime profiles.
-The local default chunk is `1.5s`. The `Low` preset uses a `1s` chunk, `0.1s` overlap, queue size `1`, and tighter utterance segmentation so subtitles appear earlier. The `Steady` preset uses a `1.5s` chunk, `0.2s` overlap, queue size `1`, and slightly looser utterance segmentation for more stable wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a brief idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
+The local default chunk is `1.5s`. The `Low` preset uses a `1.5s` chunk, `0.25s` overlap, queue size `1`, and medium-length utterance segmentation so subtitles stay realtime without fragmenting every short phrase. The `Steady` preset uses a `2s` chunk, `0.3s` overlap, queue size `1`, and looser utterance segmentation for more stable wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, filters repeated loopback fragments, then sends only ready utterances to translation after an idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 
 ## Key Backend Modules
@@ -57,7 +57,7 @@ Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCo
 - Azure route avoids fixed local time slicing.
 - Live Azure partials update the current subtitle row.
 - Final Azure results enter history.
-- Local low-latency mode reduces chunk size, overlap, and queue pressure, accumulates English ASR output into utterances, and translates only ready utterances.
+- Local low-latency mode balances chunk size, overlap, and queue pressure, accumulates English ASR output into utterances, filters repeated phrases, and translates only ready utterances.
 - Audio queues may drop stale chunks for responsiveness. The local translation queue is background-only and preserves ready utterances so completed sentences are not lost or allowed to block the English draft path.
 - There is no MiniMax polish queue and no Balanced/Quality path.
 - The active translation mode is fixed to fast/direct output.

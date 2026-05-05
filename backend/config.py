@@ -42,7 +42,7 @@ class AppConfig:
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
     chunk_seconds: float = 1.5
-    overlap_seconds: float = 0.2
+    overlap_seconds: float = 0.25
     max_subtitles: int = 1
     queue_max_size: int = 1
     vad_rms_threshold: float = 0.008
@@ -58,9 +58,9 @@ class AppConfig:
     noise_min_words: int = 2
     noise_phrases: str = "uh,um,ah,er,mm,hmm,ok,okay,yeah,yep,nope"
     segmenter_enabled: bool = True
-    segmenter_pause_seconds: float = 0.55
-    segmenter_max_words: int = 14
-    segmenter_max_seconds: float = 3.8
+    segmenter_pause_seconds: float = 0.8
+    segmenter_max_words: int = 24
+    segmenter_max_seconds: float = 6.0
 
 
 config = AppConfig()
