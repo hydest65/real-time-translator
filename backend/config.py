@@ -37,7 +37,7 @@ class AppConfig:
     asr_compute_type: str = "int8"
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
-    translation_engine: TranslationEngine = "argos"
+    translation_engine: TranslationEngine = "marianmt"
     audio_source: AudioSource = "system"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1

@@ -5,9 +5,9 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 - `Local`: private offline ASR + translation with faster-whisper on CUDA and local translators.
 - `Azure Cloud`: optional cloud streaming speech translation for comparison or fallback.
 
-## Current Low-Latency Defaults
+## Current High-Quality Local Defaults
 
-- Engine: `Argos` local by default for private high-end local use; `Azure Cloud` remains optional
+- Engine: `MarianMT` local by default for higher-quality offline Chinese; `Argos` remains the fastest fallback and `Azure Cloud` remains optional
 - Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input
 - Local ASR: `faster-whisper`
 - Whisper model: `medium.en`
@@ -18,7 +18,7 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 - Local low-latency preset: `1.5s` audio chunk, `0.25s` overlap, queue max size `1`
 - Local steady preset: `2s` audio chunk, `0.3s` overlap, queue max size `1`
 - VAD: skip low-RMS silence before ASR
-- Local translation engine: `argos`
+- Local translation engine: `marianmt`
 - Frontend: local mode uses two continuous long-text panes, with English live transcript above and polished Chinese translation below
 - Local subtitles show fast English draft updates inline in the upper text flow, then append fuller translated Chinese text to the lower flow
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, background-art toggles, and theme import/export
@@ -33,15 +33,16 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 ## Translation Engines
 
 - `azure`: cloud streaming speech translation through Azure Speech Translation. Best for Teams meetings and low latency.
-- `argos`: lowest latency local translation. Best offline/default local choice.
-- `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
+- `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Best current offline quality/default local choice on the RTX 5070 Ti profile.
+- `argos`: lowest latency local translation. Use it when you need speed more than wording quality.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
-First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
+First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`. First use of Argos may download and install the required language package.
 
 High-end local notes:
 
-- The dedicated local default is `medium.en + cuda + int8 + Argos`.
+- The dedicated local default is `medium.en + cuda + int8 + MarianMT`.
+- MarianMT uses beam search and light Chinese punctuation cleanup for more natural Chinese output.
 - The project environment is pinned to CUDA PyTorch through `torch==2.11.0+cu128`.
 - On RTX 5070 Ti 16GB, measured warm ASR speed for `medium.en` is about `0.037 RTF` on a 13.3s English sample, roughly 27x realtime.
 - `small.en` remains available when startup time or extra latency margin matters; `base.en` remains available as the fastest low-accuracy option.
@@ -198,11 +199,11 @@ ASR: medium.en
 Device: cuda
 Latency: Low
 Chunk: 1.5s
-Engine: Argos
+Engine: MarianMT
 Input: System, if available for Teams audio
 ```
 
-Recommended faster local test:
+Recommended faster local fallback:
 
 ```text
 ASR: small.en
@@ -266,14 +267,14 @@ Every subtitle includes:
 The browser shows this in the Perf line. If you see an `argos-asr` or similar engine name, that is the English-first local ASR row before Chinese translation completes. PowerShell also prints lines like:
 
 ```text
-[perf] {'audioSeconds': 3.0, 'asrMs': 420.5, 'translateMs': 35.2, 'totalLatencyMs': 620.1, 'engine': 'argos'}
+[perf] {'audioSeconds': 3.0, 'asrMs': 420.5, 'translateMs': 220.2, 'totalLatencyMs': 780.1, 'engine': 'marianmt'}
 ```
 
 ## Notes
 
-- `argos` is the best default for this high-end local English edition.
+- `marianmt` is the best default when Chinese wording quality matters.
+- `argos` is the best fallback when latency matters more than wording quality.
 - `azure` remains useful when you want a cloud comparison or do not want to load local models.
-- `marianmt` may be better when you can accept a bit more delay.
 - `nllb` is not recommended for real-time use on this machine.
 - English local mode now defaults to `medium.en`; use `small.en` for a lighter realtime profile and `base.en` for the fastest low-accuracy profile.
 - Current MarianMT runs through Transformers, not CTranslate2 int8 yet.

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import re
 from pathlib import Path
 from typing import Protocol
 
@@ -28,6 +29,20 @@ def nllb_to_short_code(language: str | None) -> str:
     if language == "zho_Hans":
         return "zh"
     return "en"
+
+
+def polish_chinese_output(text: str) -> str:
+    cleaned = text.strip()
+    if not cleaned:
+        return ""
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    cleaned = re.sub(r"([\u4e00-\u9fff])\s+([\u4e00-\u9fff])", r"\1\2", cleaned)
+    cleaned = re.sub(r"\s+([，。！？；：、])", r"\1", cleaned)
+    cleaned = re.sub(r"([（《“])\s+", r"\1", cleaned)
+    cleaned = re.sub(r"\s+([）》”])", r"\1", cleaned)
+    cleaned = cleaned.replace(",", "，").replace("?", "？").replace("!", "！")
+    cleaned = re.sub(r"([。！？]){2,}", r"\1", cleaned)
+    return cleaned.strip()
 
 
 class ArgosTranslator:
@@ -107,10 +122,10 @@ class ArgosTranslator:
             second_hop = self._find_translation(languages, "en", target_code)
             assert first_hop is not None
             assert second_hop is not None
-            return second_hop.translate(first_hop.translate(cleaned).strip()).strip()
+            return polish_chinese_output(second_hop.translate(first_hop.translate(cleaned).strip()).strip())
         if translation is None:
             raise RuntimeError(f"Argos translation unavailable for {source_code}->{target_code}.")
-        return translation.translate(cleaned).strip()
+        return polish_chinese_output(translation.translate(cleaned).strip())
 
 
 class MarianMTTranslator:
@@ -164,8 +179,15 @@ class MarianMTTranslator:
         inputs = tokenizer(cleaned, return_tensors="pt", truncation=True, max_length=128)
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with self.torch.inference_mode():
-            output_tokens = model.generate(**inputs, max_new_tokens=96, num_beams=1)
-        return tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0].strip()
+            output_tokens = model.generate(
+                **inputs,
+                max_new_tokens=128,
+                num_beams=4,
+                length_penalty=1.05,
+                no_repeat_ngram_size=3,
+                early_stopping=True,
+            )
+        return polish_chinese_output(tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0])
 
 
 class NLLBTranslator:
@@ -233,4 +255,4 @@ class NLLBTranslator:
                 max_new_tokens=96,
                 num_beams=1,
             )
-        return self.tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0].strip()
+        return polish_chinese_output(self.tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0])

@@ -31,7 +31,7 @@ Current closeout result on 2026-05-04:
 - Azure startup path now works without importing `faster-whisper` until a local engine is selected.
 - `Input: System` now prefers current-default-device loopback before Stereo Mix fallback.
 - Local realtime defaults were tightened to `1s` / `1.5s` chunk behavior depending on latency preset.
-- Argos remains the recommended local real-time engine on this environment.
+- MarianMT is the recommended local engine when Chinese wording quality matters; Argos remains the fastest fallback.
 
 High-end local upgrade result on 2026-05-05:
 
@@ -39,7 +39,7 @@ High-end local upgrade result on 2026-05-05:
 - `torch.cuda.is_available()` returned `true` on NVIDIA GeForce RTX 5070 Ti.
 - `WhisperASR` loaded on `cuda`.
 - `medium.en` warm ASR average was `494.1ms` for a `13.3s` sample, RTF `0.037`.
-- Frontend now defaults to `Argos`, `medium.en`, `cuda`, and English-only source.
+- Frontend now defaults to `MarianMT`, `medium.en`, `cuda`, and English-only source.
 - Input now defaults to `System`, with `Mic` available as the manual fallback.
 
 ## Runtime Smoke Test
@@ -60,7 +60,7 @@ Test matrix:
 
 - Input: System, Engine: Azure Cloud.
 - Input: Mic, Engine: Azure Cloud, if microphone capture is needed.
-- Engine: Argos, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1.5s.
+- Engine: MarianMT, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1.5s.
 - Engine: Argos, ASR: small.en, Device: cuda, Latency: Low, Chunk: 1.5s.
 
 ## Manual UX Checks

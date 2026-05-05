@@ -25,8 +25,9 @@ audio_capture_worker
   -> browser subtitle monitor
 ```
 
-Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translation.
+Local mode uses faster-whisper for ASR and MarianMT, Argos, or NLLB for translation.
 English local mode defaults to `medium.en` on CUDA, with `small.en` and `base.en` available as lighter realtime profiles.
+Translation defaults to MarianMT with beam search for better Chinese wording; Argos remains the low-latency fallback.
 The local default chunk is `1.5s`. The `Low` preset uses a `1.5s` chunk, `0.25s` overlap, queue size `1`, and medium-length utterance segmentation so subtitles stay realtime without fragmenting every short phrase. The `Steady` preset uses a `2s` chunk, `0.3s` overlap, queue size `1`, and looser utterance segmentation for more stable wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, filters repeated loopback fragments, then sends only ready utterances to translation after an idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 
@@ -62,7 +63,7 @@ Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCo
 - There is no MiniMax polish queue and no Balanced/Quality path.
 - The active translation mode is fixed to fast/direct output.
 - The local audio queue is size-limited so stale audio work is dropped rather than displayed late.
-- MarianMT and NLLB run through Transformers. The high-end local environment pins CUDA PyTorch, but Argos remains the realtime default.
+- MarianMT and NLLB run through Transformers. The high-end local environment pins CUDA PyTorch, and MarianMT is now the offline quality default.
 
 ## Paragraph Turn Detection
 

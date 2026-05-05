@@ -8,7 +8,7 @@ Date: 2026-05-05
 
 - Repositioned the project as a dedicated high-end local English-to-Chinese subtitle workflow.
 - Removed Spanish from the active product surface so local mode can stay on English-only Whisper `.en` models.
-- Made `Argos` the default engine and kept Azure Cloud as an optional comparison/fallback route.
+- Made `MarianMT` the default local engine for more natural offline Chinese output, with Argos kept as the fastest fallback and Azure Cloud kept as an optional comparison route.
 - Made `System` the default input for meeting/system-audio capture, with `Mic` as the manual fallback.
 - Promoted `medium.en` as the default local ASR model for RTX 5070 Ti 16GB class hardware.
 
@@ -24,7 +24,8 @@ Date: 2026-05-05
 
 ### Backend
 
-- Changed the default app config to `medium.en + cuda + int8 + argos`.
+- Changed the default app config to `medium.en + cuda + int8 + marianmt`.
+- Tuned MarianMT generation with beam search and light Chinese punctuation cleanup.
 - Pinned PyTorch to `torch==2.11.0+cu128` in `backend/requirements.txt`.
 - Simplified runtime language mapping to English-only local and Azure paths.
 - Simplified local translation setup by removing the Spanish MarianMT model setting and Argos pivot path.
