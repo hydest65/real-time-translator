@@ -12,6 +12,19 @@ DEFAULT_HF_CACHE.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("HF_HOME", str(DEFAULT_HF_CACHE))
 os.environ.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_CACHE / "hub"))
 
+CHINESE_TERM_FIXES = [
+    ("比利时的工业者", "比利时工业开发商"),
+    ("比利时工业者", "比利时工业开发商"),
+    ("开发者", "开发商"),
+    ("从海上填海造地", "填海造地"),
+    ("从海洋中收回土地", "填海造地"),
+    ("收回土地", "填海造地"),
+    ("填埋材料", "回填材料"),
+    ("土地填充材料", "回填材料"),
+    ("工业区", "工业园区"),
+    ("国内生产总值增长", "GDP增长"),
+]
+
 
 class Translator(Protocol):
     engine_name: str
@@ -31,6 +44,25 @@ def nllb_to_short_code(language: str | None) -> str:
     return "en"
 
 
+def apply_contextual_term_fixes(source_text: str, translated_text: str) -> str:
+    fixed = polish_chinese_output(translated_text)
+    source = source_text.lower()
+    if re.search(r"\bdeveloper(s)?\b", source):
+        fixed = fixed.replace("开发者", "开发商")
+    if re.search(r"\bland reclamation\b|\breclaim(ing)? land\b", source):
+        fixed = fixed.replace("从海洋中收回土地", "填海造地")
+        fixed = fixed.replace("收回土地", "填海造地")
+        fixed = fixed.replace("开垦土地", "填海造地")
+    if re.search(r"\bland ?filling materials\b", source):
+        fixed = fixed.replace("填埋材料", "回填材料")
+        fixed = fixed.replace("土地填充材料", "回填材料")
+    if re.search(r"\bindustrial zones?\b", source):
+        fixed = fixed.replace("工业区", "工业园区")
+    if re.search(r"\bGDP growth\b", source, flags=re.IGNORECASE):
+        fixed = fixed.replace("国内生产总值增长", "GDP增长")
+    return polish_chinese_output(fixed)
+
+
 def polish_chinese_output(text: str) -> str:
     cleaned = text.strip()
     if not cleaned:
@@ -42,6 +74,11 @@ def polish_chinese_output(text: str) -> str:
     cleaned = re.sub(r"\s+([）》”])", r"\1", cleaned)
     cleaned = cleaned.replace(",", "，").replace("?", "？").replace("!", "！")
     cleaned = re.sub(r"([。！？]){2,}", r"\1", cleaned)
+    for source, target in CHINESE_TERM_FIXES:
+        cleaned = cleaned.replace(source, target)
+    cleaned = re.sub(r"([\u4e00-\u9fff])\s+([\u4e00-\u9fff])", r"\1\2", cleaned)
+    cleaned = re.sub(r"\s+([\u3001\uff0c\u3002\uff01\uff1f\uff1b\uff1a])", r"\1", cleaned)
+    cleaned = re.sub(r"([\u3001\uff0c\uff1b\uff1a])\s+([\u4e00-\u9fff])", r"\1\2", cleaned)
     return cleaned.strip()
 
 
@@ -122,10 +159,11 @@ class ArgosTranslator:
             second_hop = self._find_translation(languages, "en", target_code)
             assert first_hop is not None
             assert second_hop is not None
-            return polish_chinese_output(second_hop.translate(first_hop.translate(cleaned).strip()).strip())
+            translated = second_hop.translate(first_hop.translate(cleaned).strip()).strip()
+            return apply_contextual_term_fixes(cleaned, translated)
         if translation is None:
             raise RuntimeError(f"Argos translation unavailable for {source_code}->{target_code}.")
-        return polish_chinese_output(translation.translate(cleaned).strip())
+        return apply_contextual_term_fixes(cleaned, translation.translate(cleaned).strip())
 
 
 class MarianMTTranslator:
@@ -187,7 +225,8 @@ class MarianMTTranslator:
                 no_repeat_ngram_size=3,
                 early_stopping=True,
             )
-        return polish_chinese_output(tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0])
+        translated = tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0]
+        return apply_contextual_term_fixes(cleaned, translated)
 
 
 class NLLBTranslator:
@@ -255,4 +294,5 @@ class NLLBTranslator:
                 max_new_tokens=96,
                 num_beams=1,
             )
-        return polish_chinese_output(self.tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0])
+        translated = self.tokenizer.batch_decode(output_tokens, skip_special_tokens=True)[0]
+        return apply_contextual_term_fixes(cleaned, translated)

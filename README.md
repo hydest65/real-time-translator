@@ -43,6 +43,7 @@ High-end local notes:
 
 - The dedicated local default is `medium.en + cuda + int8 + MarianMT`.
 - MarianMT uses beam search and light Chinese punctuation cleanup for more natural Chinese output.
+- The local translator applies a small engineering glossary after translation, including terms such as `developer -> 开发商`, `reclaiming land -> 填海造地`, `landfilling materials -> 回填材料`, and `industrial zone -> 工业园区`.
 - The project environment is pinned to CUDA PyTorch through `torch==2.11.0+cu128`.
 - On RTX 5070 Ti 16GB, measured warm ASR speed for `medium.en` is about `0.037 RTF` on a 13.3s English sample, roughly 27x realtime.
 - `small.en` remains available when startup time or extra latency margin matters; `base.en` remains available as the fastest low-accuracy option.

@@ -27,7 +27,7 @@ audio_capture_worker
 
 Local mode uses faster-whisper for ASR and MarianMT, Argos, or NLLB for translation.
 English local mode defaults to `medium.en` on CUDA, with `small.en` and `base.en` available as lighter realtime profiles.
-Translation defaults to MarianMT with beam search for better Chinese wording; Argos remains the low-latency fallback.
+Translation defaults to MarianMT with beam search for better Chinese wording; Argos remains the low-latency fallback. All local translators run through a small Chinese post-edit layer for punctuation cleanup and engineering glossary fixes such as `developer -> 开发商`, `reclaiming land -> 填海造地`, and `landfilling materials -> 回填材料`.
 The local default chunk is `1.5s`. The `Low` preset uses a `1.5s` chunk, `0.25s` overlap, queue size `1`, and medium-length utterance segmentation so subtitles stay realtime without fragmenting every short phrase. The `Steady` preset uses a `2s` chunk, `0.3s` overlap, queue size `1`, and looser utterance segmentation for more stable wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, filters repeated loopback fragments, then sends only ready utterances to translation after an idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 

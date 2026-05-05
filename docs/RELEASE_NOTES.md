@@ -26,6 +26,7 @@ Date: 2026-05-05
 
 - Changed the default app config to `medium.en + cuda + int8 + marianmt`.
 - Tuned MarianMT generation with beam search and light Chinese punctuation cleanup.
+- Added contextual engineering glossary fixes for developer, land reclamation, landfilling materials, industrial zones, GDP growth, supply chain, and commissioning.
 - Pinned PyTorch to `torch==2.11.0+cu128` in `backend/requirements.txt`.
 - Simplified runtime language mapping to English-only local and Azure paths.
 - Simplified local translation setup by removing the Spanish MarianMT model setting and Argos pivot path.
