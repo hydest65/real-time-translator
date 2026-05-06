@@ -1,5 +1,56 @@
 # Release Notes
 
+## 0.2.1 - Realtime Pipeline and Azure Live Chinese Closeout
+
+Date: 2026-05-06
+
+### Product
+
+- Kept the high-end local English-to-Chinese workflow as the primary architecture.
+- Added a more stable natural-sentence local subtitle chain so English ASR is not finalized in the middle of meaningful sentences as often.
+- Improved Azure Cloud usability by showing live Chinese partial translations as soon as Azure emits them, instead of waiting only for final results.
+- Added a permanent local Azure credential setup path through `.env` and `scripts/setup-azure-env.ps1`.
+- Expanded the editable professional glossary for semiconductor fab, cleanroom, pharmaceutical, HVAC, utility, validation, and project-delivery terms.
+
+### Backend
+
+- Added rolling pipeline metrics for capture, VAD, ASR, translation, glossary, polish, queue wait, total latency, GPU memory, dropped chunks, and queue length.
+- Added `/metrics` for recent 50-segment averages and queue/backlog visibility.
+- Added VAD front gating so silence does not go to ASR, continuous silence does not create empty subtitles, and low-volume speech reports a warning.
+- Added stale audio chunk dropping after `3s` and latest-only audio queue behavior to avoid subtitle backlog.
+- Added transcript stabilization and sentence building through `backend/transcript_stabilizer.py` and `backend/sentence_builder.py`.
+- Added overlap duplicate cleanup, repeated-word cleanup, false-period repair, short-fragment buffering, and sentence/pause/max-duration finalization.
+- Added protected-term handling for abbreviations, equipment IDs, room names, levels, numbers, and units before local translation post-processing.
+- Improved glossary matching with long-phrase priority, case-insensitive matching, duplicate detection, and phrase replacement before word replacement.
+- Reloaded `.env` before Azure session startup so stored Azure credentials work after restarting Subtitle Studio.
+
+### Frontend
+
+- Added `subtitle_update` handling for replacing an existing segment by `segment_id`.
+- Added a live Chinese subtitle row so Azure partial translations update the lower Chinese pane immediately.
+- Updated Azure-mode Chinese pane labels to describe live translation behavior.
+- Versioned the main app script cache key for the Azure live Chinese update.
+
+### Documentation
+
+- Added `docs/GLOSSARY_GUIDE.md`.
+- Updated README, architecture, product requirements, QA checklist, and closeout instructions for the local-first architecture and Azure credential setup.
+
+### Verification
+
+- Backend compile check passed on 2026-05-06.
+- Backend import check passed on 2026-05-06.
+- `node --check frontend/app.js` passed.
+- `node --check frontend/ui-editor.js` passed.
+- Local runtime smoke test passed for `GET /api/health` on port `8000`.
+- `/metrics` returned successfully on port `8000`.
+
+### Known Limitations
+
+- Azure live Chinese depends on Azure returning partial translated text; if Azure only returns source partials for a moment, the Chinese pane still waits for the next translated partial or final result.
+- Local sentence building is rule-based and tuned for engineering/cleanroom meeting speech, not true semantic diarization.
+- Local Chinese quality still depends on MarianMT plus glossary/post-editing; a future CTranslate2 or stronger local translation model could improve wording further without changing the main UI.
+
 ## 0.2.0 - High-End Local English Edition
 
 Date: 2026-05-05

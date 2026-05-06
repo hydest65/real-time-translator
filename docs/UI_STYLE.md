@@ -21,7 +21,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - Two-level subtitle workspace:
   - largest visual area on the screen
   - upper raised monitor for continuous English live transcript
-  - lower raised monitor for continuous polished Chinese translation
+  - lower raised monitor for continuous Chinese translation
   - recessed inner streams with internal right-side scrollbars
   - preserved long-text history in both panes
   - no per-sentence cards in local mode; each pane renders as one continuous text flow
@@ -31,6 +31,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - Chinese translation is visually emphasized.
 - English live transcript stays in the upper pane as continuous long text and updates quickly.
 - Chinese translation stays in the lower pane as continuous long text and appears only after a fuller English utterance is ready.
+- In Azure mode, the lower pane is live: Chinese partial translations update as Azure recognizes speech, then final results enter history.
 - The backend should avoid sending short fragments such as `and`, `in Vietnam`, or `the General Director of the` to the Chinese pane.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.

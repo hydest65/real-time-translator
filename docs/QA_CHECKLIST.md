@@ -42,6 +42,40 @@ High-end local upgrade result on 2026-05-05:
 - Frontend now defaults to `MarianMT`, `medium.en`, `cuda`, and English-only source.
 - Input now defaults to `System`, with `Mic` available as the manual fallback.
 
+Continuation check on 2026-05-06:
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- UI editor JavaScript syntax check passed for `frontend/ui-editor.js`.
+- Local runtime smoke test passed for `GET /` and `GET /api/health` on port `8765`.
+- Project-local closeout skill now matches the high-end local-first architecture.
+
+Glossary upgrade result on 2026-05-06:
+
+- Added editable `backend/glossary.csv` professional term table.
+- Added `docs/GLOSSARY_GUIDE.md` with step-by-step glossary editing instructions.
+- Glossary post-edit smoke test corrected sample outputs for `commissioning`, `FAT`, `developer`, and `land reclamation`.
+
+Pipeline optimization result on 2026-05-06:
+
+- Added `/metrics` rolling pipeline metrics endpoint.
+- Added VAD front gate, low-volume notices, stale chunk dropping, and latest-chunk audio queue behavior.
+- Added ASR de-duplication for overlap-driven repeated fragments.
+- Added short-fragment buffering with sentence, pause, and 2s max-buffer finalization.
+- Added protected-term handling for abbreviations, equipment IDs, rooms, levels, numbers, and units.
+- Added websocket support for `subtitle_update` replacement of the same segment within one second.
+
+Version 0.2.1 closeout result on 2026-05-06:
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- UI editor JavaScript syntax check passed for `frontend/ui-editor.js`.
+- Local runtime smoke test passed for `GET /api/health` on port `8000`.
+- `/metrics` returned successfully on port `8000`.
+- Azure live Chinese rendering now uses live translated partials in the lower Chinese pane when Azure emits them.
+
 ## Runtime Smoke Test
 
 ```powershell
@@ -75,8 +109,8 @@ Test matrix:
 - English and Chinese should render as continuous long text flows, not one card per utterance.
 - Short fragments such as `and`, `in Vietnam`, or `the General Director of the` should not become standalone Chinese rows.
 - Repeated loopback phrases should not be appended many times to either subtitle pane.
-- Azure mode keeps one bilingual subtitle monitor.
-- Azure and local mode both use subtitle rows, internal scroll history, and bottom auto-follow.
+- Azure mode uses the same two-pane workspace: live English above and live Chinese below.
+- Azure and local mode both use internal scroll history and bottom auto-follow.
 - Local mode shows English transcript above and polished Chinese translation below.
 - `Input: System` can capture the current active Windows playback device when loopback is available.
 - No Source selector is shown in the high-end English-only build.

@@ -21,10 +21,14 @@ Windows real-time subtitle translator tuned for a high-end local English-to-Chin
 - Local translation engine: `marianmt`
 - Frontend: local mode uses two continuous long-text panes, with English live transcript above and polished Chinese translation below
 - Local subtitles show fast English draft updates inline in the upper text flow, then append fuller translated Chinese text to the lower flow
+- Local pipeline records per-segment metrics for capture, VAD, ASR, translation, glossary, polish, queue wait, total latency, and GPU memory
+- Audio chunks older than `3s` are dropped before ASR; the audio queue keeps the latest chunk to avoid backlog
+- Local ASR output is de-duplicated across overlap windows before display or translation
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, background-art toggles, and theme import/export
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English only, translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
+- Azure Chinese subtitles: live translated partials update the lower Chinese pane immediately when Azure emits them
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
 - Local and Azure subtitle history both use the same internal monitor scrollbar and bottom auto-follow behavior
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
@@ -43,7 +47,8 @@ High-end local notes:
 
 - The dedicated local default is `medium.en + cuda + int8 + MarianMT`.
 - MarianMT uses beam search and light Chinese punctuation cleanup for more natural Chinese output.
-- The local translator applies a small engineering glossary after translation, including terms such as `developer -> 开发商`, `reclaiming land -> 填海造地`, `landfilling materials -> 回填材料`, and `industrial zone -> 工业园区`.
+- The local translator loads `backend/glossary.csv` after translation for professional post-editing, including terms such as `commissioning -> 调试`, `WFI -> 注射用水`, `FAT -> 工厂验收测试`, `developer -> 开发商`, and `land reclamation -> 填海造地`.
+- Glossary editing guide: `docs/GLOSSARY_GUIDE.md`.
 - The project environment is pinned to CUDA PyTorch through `torch==2.11.0+cu128`.
 - On RTX 5070 Ti 16GB, measured warm ASR speed for `medium.en` is about `0.037 RTF` on a 13.3s English sample, roughly 27x realtime.
 - `small.en` remains available when startup time or extra latency margin matters; `base.en` remains available as the fastest low-accuracy option.
@@ -60,6 +65,7 @@ real_time_translator/
     translator.py
     config.py
     requirements.txt
+    glossary.csv
   frontend/
     index.html
     style.css
@@ -72,13 +78,14 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.2.0 - High-End Local English Edition`.
+- Current closeout: `0.2.1 - Realtime Pipeline and Azure Live Chinese Closeout`.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
-- `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
+- `docs/TECHNICAL_ARCHITECTURE.md`: high-end local and Azure comparison/fallback architecture.
 - `docs/UI_STYLE.md`: Subtitle Studio layout and interaction rules.
 - `docs/RELEASE_NOTES.md`: current milestone release notes.
 - `docs/QA_CHECKLIST.md`: static checks and runtime smoke test checklist.
 - `docs/VERSION_CLOSEOUT_SKILL.md`: project-local version closeout workflow.
+- `docs/GLOSSARY_GUIDE.md`: how to add and maintain professional translation terms.
 
 ## Install
 
@@ -112,19 +119,27 @@ python -m pip install -r backend\requirements.txt
 
 ## Azure Cloud Setup
 
-Create an Azure Speech resource, then set these environment variables in the same PowerShell window before starting the backend:
+Create an Azure Speech resource. For a permanent local setup, run this once:
+
+```powershell
+.\scripts\setup-azure-env.ps1
+```
+
+The script writes `.env` in the project folder. That file is ignored by git and is loaded automatically when the backend starts, so you do not need to type the key every time.
+
+Temporary one-window setup is also supported:
 
 ```powershell
 $env:AZURE_SPEECH_KEY="your_speech_key"
 $env:AZURE_SPEECH_REGION="your_region"
 ```
 
-For a local test package, copy `.env.example` to `.env` and fill in your own Azure Speech values. Do not share your real `.env` file.
+Manual permanent setup is also fine: copy `.env.example` to `.env` and fill in your own Azure Speech values. Do not share your real `.env` file.
 
 Optional phrase list for better names and technical terms:
 
 ```powershell
-$env:AZURE_PHRASE_LIST="Teams,Codex,faster-whisper,MarianMT,Azure Speech"
+$env:AZURE_PHRASE_LIST="Teams,Codex,faster-whisper,MarianMT,Azure Speech,UPW,CDA,PCW,FFU,MAU,HEPA,VHP,P&ID,HAZOP"
 ```
 
 MiniMax polishing and Balanced/Quality modes have been removed. The app now keeps a single fast/direct live-subtitle path.
@@ -185,6 +200,12 @@ Open:
 http://127.0.0.1:8000
 ```
 
+Pipeline metrics:
+
+```text
+http://127.0.0.1:8000/metrics
+```
+
 Visual UI editor:
 
 ```text
@@ -236,12 +257,13 @@ Local mode runs four async workers:
 ```text
 audio_capture_worker
   -> asr_worker
-  -> LocalUtteranceAggregator
+  -> TranscriptStabilizer
+  -> SentenceBuilder
   -> translate_worker
   -> websocket_push_worker
 ```
 
-In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. The high-end local edition uses a slightly longer `1.5s` ASR window and duplicate-phrase filtering so repeated loopback fragments are less likely to become repeated Chinese translations. The translation queue preserves ready utterances so completed sentences are not lost.
+In the Low latency preset, the audio queue uses max size `1`. When it is full, the oldest audio item is dropped so the app stays close to real time instead of processing stale audio. Chunks waiting longer than `3s` are dropped before ASR. The high-end local edition uses a `1.5s` ASR window, duplicate-phrase filtering, false-period repair, and sentence buffering so repeated loopback fragments and broken mid-sentence finals are less likely to become repeated Chinese translations. The translation queue preserves ready utterances so completed sentences are not lost.
 
 For local mode, the frontend receives fast English draft updates first. The upper pane renders English as one continuous transcript rather than sentence cards, with the current sentence updating inline. The backend only sends fuller, less-fragmented English utterances to translation, so the lower Chinese pane appends a continuous polished translation slightly later.
 
@@ -253,7 +275,7 @@ microphone frames
   -> websocket_push_worker
 ```
 
-Azure returns live partial subtitles and final subtitles. The frontend updates the latest live line instead of waiting for a full local chunk to finish.
+Azure returns live partial subtitles and final subtitles. The frontend updates the latest English and Chinese live text instead of waiting for a full local chunk or final Azure segment to finish.
 
 ## Performance Logs
 

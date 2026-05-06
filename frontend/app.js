@@ -8,6 +8,8 @@ const chineseSubtitleStack = document.querySelector("#chineseSubtitleStack");
 const monitorTitle = document.querySelector("#monitorTitle");
 const monitorSubtitle = document.querySelector("#monitorSubtitle");
 const monitorBadge = document.querySelector("#monitorBadge");
+const chineseMonitorTitle = document.querySelector("#chineseMonitorTitle");
+const chineseMonitorSubtitle = document.querySelector("#chineseMonitorSubtitle");
 const audioSource = document.querySelector("#audioSource");
 const modelSize = document.querySelector("#modelSize");
 const deviceType = document.querySelector("#deviceType");
@@ -24,6 +26,7 @@ let socket = null;
 let englishSubtitleHistory = [];
 let chineseSubtitleHistory = [];
 let liveEnglishSubtitle = null;
+let liveChineseSubtitle = null;
 let autoFollowEnglish = true;
 let autoFollowChinese = true;
 const maxEnglishCharacters = 1800;
@@ -78,13 +81,20 @@ function renderSubtitle(item) {
   const wasFollowingChinese = isAtBottom(chineseSubtitleStack);
   const isLiveRow = item.isFinal === false;
   if (isLiveRow) {
-    if (!item.sourceText || !item.sourceText.trim()) {
+    const hasSourceText = item.sourceText && item.sourceText.trim();
+    const hasTranslatedText = item.translatedText && item.translatedText.trim();
+    if (!hasSourceText && !hasTranslatedText) {
       return;
     }
-    liveEnglishSubtitle = {
-      ...item,
-      translatedText: item.translatedText || "",
-    };
+    if (hasSourceText) {
+      liveEnglishSubtitle = {
+        ...item,
+        translatedText: item.translatedText || "",
+      };
+    }
+    if (hasTranslatedText) {
+      liveChineseSubtitle = item;
+    }
   } else {
     upsertHistory(englishSubtitleHistory, {
       ...item,
@@ -111,18 +121,30 @@ function renderSubtitle(item) {
     if (shouldClearLiveRow) {
       liveEnglishSubtitle = null;
     }
+    const shouldClearLiveChineseRow =
+      !liveChineseSubtitle?.sequenceId ||
+      liveChineseSubtitle.sequenceId === item.sequenceId ||
+      liveChineseSubtitle.sequenceId === "azure-live" ||
+      translationEngine.value === "azure";
+    if (shouldClearLiveChineseRow) {
+      liveChineseSubtitle = null;
+    }
   }
 
   const englishItems = liveEnglishSubtitle
     ? [...englishSubtitleHistory, liveEnglishSubtitle]
     : englishSubtitleHistory;
+  const chineseItems = liveChineseSubtitle
+    ? [...chineseSubtitleHistory, liveChineseSubtitle]
+    : chineseSubtitleHistory;
 
   renderTextFlow(englishSubtitleStack, englishItems, "sourceText", maxEnglishCharacters, {
     className: "english-flow-text",
     liveText: liveEnglishSubtitle?.sourceText,
   });
-  renderTextFlow(chineseSubtitleStack, chineseSubtitleHistory, "translatedText", maxChineseCharacters, {
+  renderTextFlow(chineseSubtitleStack, chineseItems, "translatedText", maxChineseCharacters, {
     className: "chinese-flow-text",
+    liveText: liveChineseSubtitle?.translatedText,
   });
 
   if (autoFollowEnglish && wasFollowingEnglish) {
@@ -133,7 +155,10 @@ function renderSubtitle(item) {
   }
 
   if (item.perf) {
-    perfText.textContent = `Perf: audio ${item.perf.audioSeconds}s | ASR ${item.perf.asrMs}ms | translate ${item.perf.translateMs}ms | total ${item.perf.totalLatencyMs}ms | ${item.perf.engine}`;
+    const extraPerf = item.perf.queueWaitMs !== undefined
+      ? ` | queue ${item.perf.queueWaitMs}ms | glossary ${item.perf.glossaryMs}ms`
+      : "";
+    perfText.textContent = `Perf: audio ${item.perf.audioSeconds}s | ASR ${item.perf.asrMs}ms | translate ${item.perf.translateMs}ms${extraPerf} | total ${item.perf.totalLatencyMs}ms | ${item.perf.engine}`;
   }
 }
 
@@ -224,6 +249,14 @@ function updateEngineControls() {
   if (monitorBadge) {
     monitorBadge.textContent = isCloud ? "CLOUD" : "EN";
   }
+  if (chineseMonitorTitle) {
+    chineseMonitorTitle.textContent = isCloud ? "Chinese Live Translation" : "Chinese Polished Translation";
+  }
+  if (chineseMonitorSubtitle) {
+    chineseMonitorSubtitle.textContent = isCloud
+      ? "Azure live translation updates as speech is recognized"
+      : "Continuous polished text - translated after fuller English is ready";
+  }
   if (!isCloud) {
     applyLocalLatencyPreset();
   }
@@ -292,6 +325,7 @@ function start() {
   englishSubtitleHistory = [];
   chineseSubtitleHistory = [];
   liveEnglishSubtitle = null;
+  liveChineseSubtitle = null;
   autoFollowEnglish = true;
   autoFollowChinese = true;
   perfText.textContent = "Perf: waiting for first subtitle.";
@@ -349,7 +383,7 @@ function start() {
       noticeText.title = payload.detail || "";
       return;
     }
-    if (payload.type === "subtitle") {
+    if (payload.type === "subtitle" || payload.type === "subtitle_update") {
       noticeText.textContent = payload.isFinal === false ? "Live" : "Final";
       renderSubtitle(payload);
     }

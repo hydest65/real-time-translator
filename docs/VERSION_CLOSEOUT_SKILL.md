@@ -7,7 +7,7 @@ Use this local project skill whenever closing a version of `real_time_translator
 Read these three files early when continuing product, architecture, or UI work:
 
 - `docs/PRODUCT_REQUIREMENTS.md`: product goal, target users, MVP scope, fast-only mode, and out-of-scope items.
-- `docs/TECHNICAL_ARCHITECTURE.md`: Azure cloud route, local fallback route, backend modules, and environment variables.
+- `docs/TECHNICAL_ARCHITECTURE.md`: high-end local route, Azure comparison/fallback route, backend modules, and environment variables.
 - `docs/UI_STYLE.md`: compact Subtitle Studio layout, subtitle monitor behavior, scrolling rules, and visual direction.
 
 ## Closeout Steps
@@ -31,8 +31,10 @@ Read these three files early when continuing product, architecture, or UI work:
    - `README.md`
 
 2. Confirm the active architecture:
-   - Azure Cloud is the primary low-latency path.
-   - Local ASR/translation remains a fallback path.
+   - High-end local English-to-Chinese is the primary workflow.
+   - Local mode defaults to `medium.en + cuda + int8 + MarianMT`.
+   - Azure Cloud remains an optional low-latency comparison/fallback path.
+   - Argos remains the fastest local fallback when latency matters more than wording quality.
    - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
    - Fast/direct translation is the only active mode.
    - The browser UI is the main operating surface.
@@ -64,7 +66,8 @@ Read these three files early when continuing product, architecture, or UI work:
 - Do not commit API keys.
 - Do not reintroduce MiniMax, Balanced, or Quality modes unless explicitly requested.
 - Do not split long Azure final subtitles purely by time.
-- Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the Azure subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the local two-level continuous reading model: English live transcript above and polished Chinese translation below, both as long-text flows.
+- Preserve local draft behavior: English updates inline immediately, Chinese appends only after fuller ready utterances.
+- Keep the source language fixed to English and target fixed to Simplified Chinese unless explicitly changing product scope.
 - Keep true speaker diarization as a future feature unless explicitly implemented.

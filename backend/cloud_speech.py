@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 import numpy as np
 
 from .audio_capture import MicrophoneAudioCapture
-from .config import AppConfig
+from .config import AppConfig, load_dotenv_file
 
 
 @dataclass
@@ -46,6 +46,7 @@ class AzureSpeechTranslationSession:
                 "Azure Speech SDK is not installed. Run: python -m pip install azure-cognitiveservices-speech"
             ) from exc
 
+        load_dotenv_file()
         key = active_config.azure_speech_key or os.getenv("AZURE_SPEECH_KEY", "")
         region = active_config.azure_speech_region or os.getenv("AZURE_SPEECH_REGION", "")
         if not key or not region:

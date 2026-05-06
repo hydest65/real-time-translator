@@ -18,7 +18,7 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 - High-end local English-to-Chinese as the main route.
 - Azure Speech Translation as an optional comparison/fallback route.
 - English source speech with Simplified Chinese as the fixed target language.
-- Local fallback engines for offline/private testing:
+- Local engines for offline/private testing:
   - faster-whisper `medium.en` by default on CUDA
   - `small.en` and `base.en` as lighter English-only options
   - MarianMT as the recommended high-quality local translation engine
@@ -28,6 +28,7 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 - Two-level local subtitle workspace: continuous English live transcript above, continuous polished Chinese translation below.
 - Local drafts update inline in the upper English text flow immediately; fuller translated utterances append to the lower Chinese text flow after sentence completion.
 - Real-time live row plus final subtitle history.
+- Azure mode shows live English and live Chinese partial updates in the two-pane subtitle workspace when Azure emits translated partials.
 - Top-left red status lamp that remains visible when stopped and pulses while running.
 - Visual UI editor for local browser-side tuning of colors, subtitle size, panel width, corner radius, and background decoration.
 - Lightweight paragraph turn detection by pause interval.
@@ -35,9 +36,9 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 ## Translation Mode
 
 - `Fast` is the only active mode.
-- Azure Cloud streams live bilingual subtitles directly from Azure Speech Translation.
-- Local fallback translates each ready utterance directly without a separate cloud polishing queue.
-- Local fallback shows English ASR drafts continuously in the upper pane, then translates fuller utterances into polished Chinese text in the lower pane.
+- Azure Cloud streams live bilingual subtitles directly from Azure Speech Translation; the browser displays live Chinese partial translations without waiting only for final Azure segments.
+- Local mode translates each ready utterance directly without a separate cloud polishing queue.
+- Local mode shows English ASR drafts continuously in the upper pane, then translates fuller utterances into polished Chinese text in the lower pane.
 
 ## Out Of Scope For This Version
 
@@ -54,6 +55,7 @@ Build a Windows real-time subtitle translator for meetings. The high-end local e
 - User can open `http://127.0.0.1:8000`, click Start, and see live bilingual subtitles.
 - User can run the dedicated English-to-Chinese workflow without choosing a source language.
 - Azure mode should feel close to real time during normal speech.
+- Azure Chinese subtitles should update live when translated partials are available.
 - Local Low latency mode should keep the upper English transcript responsive while lower Chinese output waits for fuller, less-fragmented utterances.
 - The interface should not show MiniMax, Balanced, or Quality mode controls.
 - The status lamp should be visible when stopped and gently pulse after Start.
