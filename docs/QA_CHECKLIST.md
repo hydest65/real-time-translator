@@ -31,7 +31,50 @@ Current closeout result on 2026-05-04:
 - Azure startup path now works without importing `faster-whisper` until a local engine is selected.
 - `Input: System` now prefers current-default-device loopback before Stereo Mix fallback.
 - Local realtime defaults were tightened to `1s` / `1.5s` chunk behavior depending on latency preset.
-- Argos remains the recommended local real-time engine on this environment.
+- MarianMT is the recommended local engine when Chinese wording quality matters; Argos remains the fastest fallback.
+
+High-end local upgrade result on 2026-05-05:
+
+- CUDA PyTorch `2.11.0+cu128` installed in `.venv`.
+- `torch.cuda.is_available()` returned `true` on NVIDIA GeForce RTX 5070 Ti.
+- `WhisperASR` loaded on `cuda`.
+- `medium.en` warm ASR average was `494.1ms` for a `13.3s` sample, RTF `0.037`.
+- Frontend now defaults to `MarianMT`, `medium.en`, `cuda`, and English-only source.
+- Input now defaults to `System`, with `Mic` available as the manual fallback.
+
+Continuation check on 2026-05-06:
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- UI editor JavaScript syntax check passed for `frontend/ui-editor.js`.
+- Local runtime smoke test passed for `GET /` and `GET /api/health` on port `8765`.
+- Project-local closeout skill now matches the high-end local-first architecture.
+
+Glossary upgrade result on 2026-05-06:
+
+- Added editable `backend/glossary.csv` professional term table.
+- Added `docs/GLOSSARY_GUIDE.md` with step-by-step glossary editing instructions.
+- Glossary post-edit smoke test corrected sample outputs for `commissioning`, `FAT`, `developer`, and `land reclamation`.
+
+Pipeline optimization result on 2026-05-06:
+
+- Added `/metrics` rolling pipeline metrics endpoint.
+- Added VAD front gate, low-volume notices, stale chunk dropping, and latest-chunk audio queue behavior.
+- Added ASR de-duplication for overlap-driven repeated fragments.
+- Added short-fragment buffering with sentence, pause, and 2s max-buffer finalization.
+- Added protected-term handling for abbreviations, equipment IDs, rooms, levels, numbers, and units.
+- Added websocket support for `subtitle_update` replacement of the same segment within one second.
+
+Version 0.2.1 closeout result on 2026-05-06:
+
+- Backend compile check passed.
+- Backend import check passed.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- UI editor JavaScript syntax check passed for `frontend/ui-editor.js`.
+- Local runtime smoke test passed for `GET /api/health` on port `8000`.
+- `/metrics` returned successfully on port `8000`.
+- Azure live Chinese rendering now uses live translated partials in the lower Chinese pane when Azure emits them.
 
 ## Runtime Smoke Test
 
@@ -49,11 +92,10 @@ http://127.0.0.1:8000
 
 Test matrix:
 
-- Source: English, Input: Mic, Engine: Azure Cloud.
-- Source: Spanish, Input: Mic, Engine: Azure Cloud.
-- Input: System, Engine: Azure Cloud, if Windows supports system capture.
-- Source: English, Engine: Argos, Latency: Low, Chunk: 1s.
-- Source: Spanish, Engine: Argos or NLLB, if offline/local fallback is needed.
+- Input: System, Engine: Azure Cloud.
+- Input: Mic, Engine: Azure Cloud, if microphone capture is needed.
+- Engine: MarianMT, ASR: medium.en, Device: cuda, Latency: Low, Chunk: 1.5s.
+- Engine: Argos, ASR: small.en, Device: cuda, Latency: Low, Chunk: 1.5s.
 
 ## Manual UX Checks
 
@@ -62,14 +104,16 @@ Test matrix:
 - Red status lamp is dim but visible when stopped.
 - Red status lamp pulses slowly while running or connecting.
 - Live subtitles appear without waiting for full paragraphs.
-- In local Low latency mode, the English upper area keeps continuous readable context and begins scrolling only after the pane fills.
-- In local Low latency mode, the lower English draft pane updates live while ASR is still forming the utterance.
-- In local Low latency mode, the Chinese monitor appends complete translated sentences as a continuous text flow.
-- Azure mode keeps one bilingual subtitle monitor.
-- Azure mode still uses subtitle rows, internal scroll history, and bottom auto-follow.
-- Local mode shows English context, English draft, and Chinese complete translations as separate panes.
+- In local Low latency mode, the upper English pane updates while ASR is still forming the utterance.
+- In local Low latency mode, the lower Chinese pane only receives fuller translated utterances.
+- English and Chinese should render as continuous long text flows, not one card per utterance.
+- Short fragments such as `and`, `in Vietnam`, or `the General Director of the` should not become standalone Chinese rows.
+- Repeated loopback phrases should not be appended many times to either subtitle pane.
+- Azure mode uses the same two-pane workspace: live English above and live Chinese below.
+- Azure and local mode both use internal scroll history and bottom auto-follow.
+- Local mode shows English transcript above and polished Chinese translation below.
 - `Input: System` can capture the current active Windows playback device when loopback is available.
-- Switching Source to Spanish updates the subtitle direction and still starts the stream.
+- No Source selector is shown in the high-end English-only build.
 - Final subtitles enter history.
 - No MiniMax, Balanced, or Quality mode controls are visible.
 - Azure subtitle monitor has its own right-side scrollbar.

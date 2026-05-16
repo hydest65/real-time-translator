@@ -32,23 +32,22 @@ load_dotenv_file()
 
 @dataclass
 class AppConfig:
-    asr_model_size: str = "base.en"
+    asr_model_size: str = "medium.en"
     asr_device: DevicePreference = "cuda"
     asr_compute_type: str = "int8"
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
-    translation_engine: TranslationEngine = "azure"
-    audio_source: AudioSource = "microphone"
+    translation_engine: TranslationEngine = "marianmt"
+    audio_source: AudioSource = "system"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
     chunk_seconds: float = 1.5
-    overlap_seconds: float = 0.2
+    overlap_seconds: float = 0.25
     max_subtitles: int = 1
     queue_max_size: int = 1
     vad_rms_threshold: float = 0.008
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
-    marian_es_zh_model_name: str = "Helsinki-NLP/opus-mt-es-zh"
     azure_speech_key: str = ""
     azure_speech_region: str = ""
     azure_source_language: str = "en-US"
@@ -59,9 +58,9 @@ class AppConfig:
     noise_min_words: int = 2
     noise_phrases: str = "uh,um,ah,er,mm,hmm,ok,okay,yeah,yep,nope"
     segmenter_enabled: bool = True
-    segmenter_pause_seconds: float = 0.55
-    segmenter_max_words: int = 14
-    segmenter_max_seconds: float = 3.8
+    segmenter_pause_seconds: float = 0.8
+    segmenter_max_words: int = 24
+    segmenter_max_seconds: float = 6.0
 
 
 config = AppConfig()

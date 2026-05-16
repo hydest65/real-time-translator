@@ -126,6 +126,7 @@ label span {
 
 .actions {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
 }
 
@@ -146,10 +147,35 @@ button.secondary {
   box-shadow: inset 4px 4px 8px #d1d9e6, inset -4px -4px 8px #ffffff;
 }
 
+button.ghost {
+  color: #697586;
+  background: transparent;
+  box-shadow: none;
+  border: 1px solid rgba(83, 97, 112, 0.18);
+}
+
+.status-message {
+  min-height: 20px;
+  margin: 12px 0 0;
+  color: #536170;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.css-label {
+  display: block;
+  margin-top: 10px;
+  color: #536170;
+  font-size: 12px;
+  font-weight: 900;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 textarea {
   width: 100%;
   min-height: 130px;
-  margin-top: 14px;
+  margin-top: 8px;
   padding: 12px;
   border: 0;
   border-radius: 14px;
@@ -180,5 +206,9 @@ iframe {
 
   .control-panel {
     max-height: none;
+  }
+
+  .actions > * {
+    flex: 1 1 160px;
   }
 }

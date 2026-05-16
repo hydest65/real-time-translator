@@ -22,6 +22,7 @@ class AudioChunk:
     start_seconds: float
     end_seconds: float
     rms: float
+    audio_capture_ms: float = 0.0
     captured_at: float = field(default_factory=time.perf_counter)
 
     @property
@@ -246,7 +247,16 @@ class MicrophoneAudioCapture:
                 rms = float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0
                 start = self._next_start_sample / self.sample_rate
                 end = start + (len(samples) / self.sample_rate)
-                yield AudioChunk(samples=samples, start_seconds=start, end_seconds=end, rms=rms)
+                duration_seconds = len(samples) / self.sample_rate
+                capture_finished_at = time.perf_counter()
+                yield AudioChunk(
+                    samples=samples,
+                    start_seconds=start,
+                    end_seconds=end,
+                    rms=rms,
+                    audio_capture_ms=duration_seconds * 1000,
+                    captured_at=capture_finished_at - duration_seconds,
+                )
 
                 buffer = buffer[step_samples:]
                 self._next_start_sample += step_samples

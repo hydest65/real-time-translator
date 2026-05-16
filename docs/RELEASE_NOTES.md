@@ -1,5 +1,99 @@
 # Release Notes
 
+## 0.2.1 - Realtime Pipeline and Azure Live Chinese Closeout
+
+Date: 2026-05-06
+
+### Product
+
+- Kept the high-end local English-to-Chinese workflow as the primary architecture.
+- Added a more stable natural-sentence local subtitle chain so English ASR is not finalized in the middle of meaningful sentences as often.
+- Improved Azure Cloud usability by showing live Chinese partial translations as soon as Azure emits them, instead of waiting only for final results.
+- Added a permanent local Azure credential setup path through `.env` and `scripts/setup-azure-env.ps1`.
+- Expanded the editable professional glossary for semiconductor fab, cleanroom, pharmaceutical, HVAC, utility, validation, and project-delivery terms.
+
+### Backend
+
+- Added rolling pipeline metrics for capture, VAD, ASR, translation, glossary, polish, queue wait, total latency, GPU memory, dropped chunks, and queue length.
+- Added `/metrics` for recent 50-segment averages and queue/backlog visibility.
+- Added VAD front gating so silence does not go to ASR, continuous silence does not create empty subtitles, and low-volume speech reports a warning.
+- Added stale audio chunk dropping after `3s` and latest-only audio queue behavior to avoid subtitle backlog.
+- Added transcript stabilization and sentence building through `backend/transcript_stabilizer.py` and `backend/sentence_builder.py`.
+- Added overlap duplicate cleanup, repeated-word cleanup, false-period repair, short-fragment buffering, and sentence/pause/max-duration finalization.
+- Added protected-term handling for abbreviations, equipment IDs, room names, levels, numbers, and units before local translation post-processing.
+- Improved glossary matching with long-phrase priority, case-insensitive matching, duplicate detection, and phrase replacement before word replacement.
+- Reloaded `.env` before Azure session startup so stored Azure credentials work after restarting Subtitle Studio.
+
+### Frontend
+
+- Added `subtitle_update` handling for replacing an existing segment by `segment_id`.
+- Added a live Chinese subtitle row so Azure partial translations update the lower Chinese pane immediately.
+- Updated Azure-mode Chinese pane labels to describe live translation behavior.
+- Versioned the main app script cache key for the Azure live Chinese update.
+
+### Documentation
+
+- Added `docs/GLOSSARY_GUIDE.md`.
+- Updated README, architecture, product requirements, QA checklist, and closeout instructions for the local-first architecture and Azure credential setup.
+
+### Verification
+
+- Backend compile check passed on 2026-05-06.
+- Backend import check passed on 2026-05-06.
+- `node --check frontend/app.js` passed.
+- `node --check frontend/ui-editor.js` passed.
+- Local runtime smoke test passed for `GET /api/health` on port `8000`.
+- `/metrics` returned successfully on port `8000`.
+
+### Known Limitations
+
+- Azure live Chinese depends on Azure returning partial translated text; if Azure only returns source partials for a moment, the Chinese pane still waits for the next translated partial or final result.
+- Local sentence building is rule-based and tuned for engineering/cleanroom meeting speech, not true semantic diarization.
+- Local Chinese quality still depends on MarianMT plus glossary/post-editing; a future CTranslate2 or stronger local translation model could improve wording further without changing the main UI.
+
+## 0.2.0 - High-End Local English Edition
+
+Date: 2026-05-05
+
+### Product
+
+- Repositioned the project as a dedicated high-end local English-to-Chinese subtitle workflow.
+- Removed Spanish from the active product surface so local mode can stay on English-only Whisper `.en` models.
+- Made `MarianMT` the default local engine for more natural offline Chinese output, with Argos kept as the fastest fallback and Azure Cloud kept as an optional comparison route.
+- Made `System` the default input for meeting/system-audio capture, with `Mic` as the manual fallback.
+- Promoted `medium.en` as the default local ASR model for RTX 5070 Ti 16GB class hardware.
+
+### Frontend
+
+- Removed the Source selector and fixed the runtime payload to `eng_Latn -> zho_Hans`.
+- Reordered the ASR selector to `medium.en`, `small.en`, then `base.en`.
+- Updated static asset versions for the high-end local build.
+- Reworked local mode into a two-level subtitle workspace: English live transcript above and polished Chinese translation below.
+- Changed both local subtitle panes from per-utterance cards to continuous long-text flows.
+- Tightened local utterance readiness so short fragments such as `and`, `in Vietnam`, or dangling phrases ending with `of the` do not become standalone Chinese subtitles.
+- Kept the UI editor import/export/CSS-copy tools added during this upgrade window.
+
+### Backend
+
+- Changed the default app config to `medium.en + cuda + int8 + marianmt`.
+- Tuned MarianMT generation with beam search and light Chinese punctuation cleanup.
+- Added contextual engineering glossary fixes for developer, land reclamation, landfilling materials, industrial zones, GDP growth, supply chain, and commissioning.
+- Pinned PyTorch to `torch==2.11.0+cu128` in `backend/requirements.txt`.
+- Simplified runtime language mapping to English-only local and Azure paths.
+- Simplified local translation setup by removing the Spanish MarianMT model setting and Argos pivot path.
+- Retuned the high-end local Low preset to `1.5s` chunks with longer utterance boundaries to reduce fragmented drafts.
+- Added local repeated-phrase filtering so repeated loopback fragments do not become repeated Chinese translation flow.
+
+### Verification
+
+- CUDA is active in the project virtual environment with `torch 2.11.0+cu128`.
+- `torch.cuda.is_available()` returned `true`.
+- `WhisperASR('base.en', 'cuda', 'int8')` loaded on `cuda`.
+- RTX 5070 Ti benchmark on a 13.3s English sample:
+- `base.en` warm ASR average: `191.8ms`, RTF `0.014`.
+- `small.en` warm ASR average: `301.3ms`, RTF `0.023`.
+- `medium.en` warm ASR average: `494.1ms`, RTF `0.037`.
+
 ## 0.1.5 - System Loopback and Local Realtime Tuning Closeout
 
 Date: 2026-05-04

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=local-split-context-draft-20260502" />
+    <link rel="stylesheet" href="/static/style.css?v=continuous-flow-subtitles-20260505" />
   </head>
   <body>
     <main class="studio">
@@ -13,7 +13,7 @@
           <span class="status-dot" id="statusDot"></span>
           <div>
             <p class="brand-title">Subtitle Studio</p>
-            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - Local or Azure cloud</p>
+            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - High-end local mode</p>
           </div>
         </div>
 
@@ -21,25 +21,17 @@
           <label>
             Input
             <select id="audioSource">
-              <option value="microphone" selected>Mic</option>
-              <option value="system">System</option>
-            </select>
-          </label>
-
-          <label>
-            Source
-            <select id="sourceLanguage">
-              <option value="eng_Latn" selected>English</option>
-              <option value="spa_Latn">Spanish</option>
+              <option value="system" selected>System</option>
+              <option value="microphone">Mic</option>
             </select>
           </label>
 
           <label>
             Engine
             <select id="translationEngine">
-              <option value="azure" selected>Azure Cloud</option>
+              <option value="marianmt" selected>MarianMT</option>
               <option value="argos">Argos</option>
-              <option value="marianmt">MarianMT</option>
+              <option value="azure">Azure Cloud</option>
               <option value="nllb">NLLB</option>
             </select>
           </label>
@@ -51,8 +43,9 @@
           <label class="local-control local-extension local-extension-start">
             ASR
             <select id="modelSize">
-              <option value="base.en" selected>base.en</option>
+              <option value="medium.en" selected>medium.en</option>
               <option value="small.en">small.en</option>
+              <option value="base.en">base.en</option>
             </select>
           </label>
 
@@ -77,8 +70,8 @@
             Chunk
             <select id="chunkSeconds">
               <option value="1">1s</option>
-              <option value="1.5">1.5s</option>
-              <option value="2" selected>2s</option>
+              <option value="1.5" selected>1.5s</option>
+              <option value="2">2s</option>
               <option value="3">3s</option>
               <option value="5">5s</option>
             </select>
@@ -106,47 +99,33 @@
           </div>
         </aside>
 
-        <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Cloud subtitle history">
-          <div class="subtitle-box-header">
-            <div>
-              <p class="monitor-title">Subtitle Monitor</p>
-              <p class="monitor-subtitle">Live history · scroll to review</p>
-            </div>
-            <span class="monitor-badge">LIVE</span>
-          </div>
-          <div class="subtitle-stream" id="subtitleStack" aria-live="polite"></div>
-        </section>
-
-        <section class="local-subtitle-layout hidden" id="localSubtitleLayout" aria-label="Local subtitle workspace">
-          <section class="split-subtitle-box" aria-label="English live transcript">
-            <div class="subtitle-box-header compact">
+        <section class="subtitle-workspace" id="subtitleWorkspace" aria-label="Subtitle workspace">
+          <section class="subtitle-box english-subtitle-box" aria-label="English live transcript">
+            <div class="subtitle-box-header">
               <div>
-                <p class="monitor-title">English Live Transcript</p>
-                <p class="monitor-subtitle">Context above · live draft below</p>
+                <p class="monitor-title" id="monitorTitle">English Live Transcript</p>
+                <p class="monitor-subtitle" id="monitorSubtitle">Continuous live transcript · current sentence updates inline</p>
               </div>
-              <span class="monitor-badge">ASR</span>
+              <span class="monitor-badge" id="monitorBadge">EN</span>
             </div>
-            <div class="english-pane">
-              <div class="subtitle-stream english-stream english-context-stream" id="englishContextStack" aria-live="polite"></div>
-              <div class="subtitle-stream english-stream english-draft-stream" id="englishDraftStack" aria-live="polite"></div>
-            </div>
+            <div class="subtitle-stream english-subtitle-stream" id="englishSubtitleStack" aria-live="polite"></div>
           </section>
 
-          <section class="split-subtitle-box" aria-label="Chinese translated subtitles">
-            <div class="subtitle-box-header compact">
+          <section class="subtitle-box chinese-subtitle-box" aria-label="Chinese polished translation">
+            <div class="subtitle-box-header">
               <div>
-                <p class="monitor-title">Chinese Translation</p>
-                <p class="monitor-subtitle">Complete sentence translation · slightly delayed</p>
+                <p class="monitor-title" id="chineseMonitorTitle">Chinese Polished Translation</p>
+                <p class="monitor-subtitle" id="chineseMonitorSubtitle">Continuous polished text - translated after fuller English is ready</p>
               </div>
               <span class="monitor-badge">ZH</span>
             </div>
-            <div class="subtitle-stream chinese-stream" id="chineseSubtitleStack" aria-live="polite"></div>
+            <div class="subtitle-stream chinese-subtitle-stream" id="chineseSubtitleStack" aria-live="polite"></div>
           </section>
         </section>
       </section>
     </main>
 
-    <script src="/static/app.js?v=local-split-context-draft-20260502"></script>
+    <script src="/static/app.js?v=azure-live-chinese-20260506"></script>
   </body>
 </html>
 

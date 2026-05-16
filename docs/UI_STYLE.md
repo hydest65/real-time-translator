@@ -18,30 +18,26 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - notice
   - activity
   - performance
-- Azure main subtitle monitor:
+- Two-level subtitle workspace:
   - largest visual area on the screen
-  - soft raised outer shell
-  - recessed inner subtitle stream
-  - internal right-side scrollbar
-  - preserved subtitle history
-  - live row plus final bilingual rows
-- Azure mode keeps the single bilingual subtitle monitor and its scroll-review behavior.
-- Local mode uses two stacked monitors:
-  - upper monitor split into stable English context above and live ASR draft below
-  - lower monitor for slightly delayed complete Chinese sentence translation
+  - upper raised monitor for continuous English live transcript
+  - lower raised monitor for continuous Chinese translation
+  - recessed inner streams with internal right-side scrollbars
+  - preserved long-text history in both panes
+  - no per-sentence cards in local mode; each pane renders as one continuous text flow
 
 ## Subtitle Behavior
 
 - Chinese translation is visually emphasized.
-- Azure mode keeps English source visible above the Chinese in each subtitle row.
-- In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
-- In local mode, stable English context and complete Chinese translation render as continuous text blocks. The English context pane should fill its readable area first and then scroll.
-- In local mode, the English live draft stays in its own lower English pane and updates quickly.
+- English live transcript stays in the upper pane as continuous long text and updates quickly.
+- Chinese translation stays in the lower pane as continuous long text and appears only after a fuller English utterance is ready.
+- In Azure mode, the lower pane is live: Chinese partial translations update as Azure recognizes speech, then final results enter history.
+- The backend should avoid sending short fragments such as `and`, `in Vietnam`, or `the General Director of the` to the Chinese pane.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
-- Azure users can scroll up inside the subtitle monitor without losing incoming live subtitles.
-- In Azure mode, if the user is at the bottom, new subtitles auto-follow.
-- In Azure mode, if the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
+- Users can scroll up inside either subtitle pane without losing incoming subtitles.
+- If the user is at the bottom, new subtitles auto-follow in that pane.
+- If the user scrolls upward, auto-follow pauses for that pane until the user scrolls back to the bottom.
 
 ## Status Lamp Behavior
 
@@ -61,7 +57,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - Red is reserved for the small operating lamp and error state.
 - Control chrome stays compact so meeting attention remains on the subtitle display.
 - The top-level topbar shell is transparent; the brand block and toolbar keep their own soft raised cards.
-- The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
+- The subtitle monitors keep their soft raised outer shells because removing them made the page feel visually unfinished.
 
 ## Visual UI Editor
 
