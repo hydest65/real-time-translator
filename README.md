@@ -8,22 +8,29 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 ## Current Low-Latency Defaults
 
 - Engine: `Azure Cloud` for lowest latency, or local engines when privacy/offline mode matters
-- Input: `Mic` by default; `System` tries to capture Stereo Mix / speaker-monitor input on Windows
+- Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input. Use `Mic` when you want room or headset microphone audio.
 - Local ASR: `faster-whisper`
-- Whisper model: `base.en`
-- Accuracy option: `small.en`
+- Local ASR preset: `Balanced`
+- Whisper model: `small.en`
+- Speed option: `base.en`
+- Accuracy experiment: `small.en + int8_float16`, or manual `medium.en + int8` if GPU memory allows
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
-- Audio chunk: `3s`
-- Overlap: `0.5s`
+- Local ASR decoding: `Fast` uses beam 1, `Balanced` uses beam 2, and `Accurate` uses beam 3
+- Local default chunk: `2s`
+- Local low-latency preset: `2s` audio chunk, `0.3s` overlap, queue max size `2`
+- Local steady preset: `3s` audio chunk, `0.5s` overlap, queue max size `2`
 - VAD: skip low-RMS silence before ASR
 - Local translation engine: `argos`
-- Queue max size: `2`; old chunks are dropped when work piles up
-- Frontend: Subtitle Studio layout with a fixed subtitle monitor and scrollable bilingual history
+- Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
+- Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
+- Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
+- Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English or Spanish, both translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
-- Long subtitles stay continuous; the UI adapts font size instead of cutting by time
+- Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
+- Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
 - Mode: fast/direct translation only.
 
@@ -31,7 +38,7 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 
 - `azure`: cloud streaming speech translation through Azure Speech Translation. Best for Teams meetings and low latency.
 - `argos`: lowest latency local translation. Best offline/default local choice.
-- `marianmt`: local neural translation through Helsinki-NLP MarianMT models.
+- `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
 First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
@@ -68,6 +75,8 @@ real_time_translator/
 
 ## Version Closeout Docs
 
+- Current closeout: `0.1.10-local-t600 - Guided Meeting Flow and Bilingual Word Notes`.
+- Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
 - `docs/UI_STYLE.md`: Subtitle Studio layout and interaction rules.
@@ -80,7 +89,7 @@ real_time_translator/
 Use Python 3.11 on Windows.
 
 ```powershell
-cd "C:\Users\lixin11190\Documents\New project 3\real_time_translator"
+cd path\to\real-time-translator
 py -3.11 -m venv .venv
 .\.venv\Scripts\Activate.ps1
 python -m pip install --upgrade pip
@@ -93,6 +102,8 @@ If your pip source says it cannot find `argostranslate`, install it from PyPI di
 python -m pip install argostranslate==1.9.6 -i https://pypi.org/simple
 python -m pip install sacremoses==0.0.53 -i https://pypi.org/simple
 ```
+
+If Windows cannot install the local `faster-whisper` stack immediately, you can still start and use the Azure Cloud route first. The backend now delays loading `faster-whisper` until a local engine is actually selected.
 
 If you already have the virtual environment, just run:
 
@@ -130,11 +141,62 @@ Engine: Azure Cloud
 
 In Azure mode, the app streams microphone audio to Azure Speech Translation and receives live source-language and Chinese subtitle results. It does not load Whisper, Argos, MarianMT, or NLLB for that run.
 
-Azure can sometimes return very long final segments. The app keeps them as one semantic subtitle and adapts the display size instead of forcing time-based cuts.
+Azure can sometimes return very long final segments. The app keeps them as one semantic subtitle with fixed subtitle sizing instead of forcing time-based cuts.
 
 The paragraph detector is intentionally lightweight. It uses the pause between final subtitles plus a short noise list such as `uh`, `um`, `ok`, and `yeah`. This is not true speaker diarization; it avoids noise-triggered paragraph breaks while keeping latency low.
 
-For Teams meetings, choose `Input: System` if your Windows audio device exposes Stereo Mix or speaker-monitor input. If the app reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
+Meeting export uses the final subtitle stream rather than the visible history window, so the downloaded transcript can keep the full meeting text even though the on-screen monitor only keeps a compact rolling display. Speaker labels in the export are pause-based `Turn` labels, not verified voiceprints.
+
+Each started session also writes a WAV file to `recordings/session-YYYYMMDD-HHMMSS.wav`. The folder is ignored by Git because meeting audio may contain private information.
+
+If you accidentally press Stop and then Start again within 5 minutes, the app continues appending to the same WAV file instead of creating a new meeting recording. After a longer break, it creates a new session file.
+
+Use `End Meeting` when the meeting is truly over. It closes the current recording session, so the next `Start` creates a new WAV even if it happens within 5 minutes.
+
+Optional post-meeting speaker diarization can be run against that WAV file in a separate Python environment with `pyannote.audio` installed:
+
+```powershell
+$env:HF_TOKEN="your_huggingface_token"
+python scripts\diarize-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
+```
+
+This writes `.speakers.rttm` and `.speakers.md` files with anonymous speaker clusters such as `SPEAKER_00`. Those labels are not real names and still need human review.
+
+To turn a recording into post-meeting transcript and minutes files, run:
+
+```powershell
+python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
+```
+
+This writes `.transcript.md` and `.minutes.md`. Add `--diarize` when `pyannote.audio` and `HF_TOKEN` are ready:
+
+The UI generates notes when the meeting is ended. After `End Meeting`, the app processes the latest `recordings/session-*.wav` file and writes a readable bilingual Word document. The document keeps the English professional meeting minutes first, then adds the Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
+
+Quality presets for this T600 4GB GPU machine:
+
+```powershell
+python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality fast
+python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality balanced
+python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality high
+```
+
+`balanced` uses `small.en + int8 + beam 2` and is the default. `high` uses `medium.en + int8 + beam 3`; use it only for post-meeting processing because it can be slow or may fall back if GPU memory is tight.
+
+Optional Alibaba/FunASR post-meeting ASR:
+
+```powershell
+python -m pip install funasr
+python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --asr-engine funasr
+```
+
+The FunASR path defaults to `iic/SenseVoiceSmall` with VAD and punctuation. It is intended for post-meeting experiments, not the realtime subtitle path.
+
+```powershell
+$env:HF_TOKEN="your_huggingface_token"
+python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --diarize
+```
+
+For Teams meetings, keep `Input: System`. The app now prefers the current default Windows playback device through loopback capture when available. If loopback is unavailable, it falls back to Stereo Mix / speaker-monitor input. If the app still reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
 
 ## Run
 
@@ -156,7 +218,7 @@ Double-click: Stop Subtitle Studio.bat
 PowerShell start:
 
 ```powershell
-cd "C:\Users\lixin11190\Documents\New project 3\real_time_translator"
+cd path\to\real-time-translator
 .\scripts\start-server.ps1
 ```
 
@@ -165,7 +227,7 @@ You can also double-click `start-server.bat` in the project folder. These option
 Manual developer start:
 
 ```powershell
-cd "C:\Users\lixin11190\Documents\New project 3\real_time_translator"
+cd path\to\real-time-translator
 .\.venv\Scripts\Activate.ps1
 python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000
 ```
@@ -188,9 +250,9 @@ Recommended first test:
 
 ```text
 Source: English
-ASR: base.en
+ASR: small.en
 Device: cuda
-Chunk: 3s
+Chunk: 2s
 Engine: Azure Cloud
 Input: System, if available for Teams audio
 ```
@@ -199,20 +261,32 @@ Recommended Spanish test:
 
 ```text
 Source: Spanish
-ASR: base.en
+ASR: small.en
 Device: cuda
-Chunk: 3s
+Chunk: 2s
 Engine: Azure Cloud
 ```
 
 Recommended private/offline test:
 
 ```text
-ASR: base.en
+ASR Preset: Balanced
+ASR: small.en
 Device: cuda
-Chunk: 3s
+Latency: Low
+Chunk: 2s
 Engine: Argos
 ```
+
+Local ASR presets:
+
+- `Fast`: `base.en + int8 + beam 1`, for lower latency when wording does not need to be perfect.
+- `Balanced`: `small.en + int8 + beam 2`, recommended default for the NVIDIA T600 Laptop GPU with 4GB VRAM.
+- `Accurate`: `small.en + int8_float16 + beam 3`, for a quality test when enough GPU memory is free.
+
+The local ASR presets also tune decoding behavior. `Fast` and `Balanced` do not condition on previous chunk text, which reduces repeated or drifting phrases during short streaming chunks. `Accurate` keeps previous-text conditioning for experiments where wording quality matters more than latency.
+
+Manual model note: `medium.en` is available in the ASR dropdown for experiments, but it is not the default on a 4GB GPU because it can load slowly or run out of memory during meetings.
 
 For better recognition accuracy:
 
@@ -227,11 +301,14 @@ Local mode runs four async workers:
 ```text
 audio_capture_worker
   -> asr_worker
+  -> LocalUtteranceAggregator
   -> translate_worker
   -> websocket_push_worker
 ```
 
-Each queue has max size `2`. When a queue is full, the oldest item is dropped so the app stays close to real time instead of translating stale audio.
+In the Low latency preset, the audio queue uses max size `2`. The English draft still updates quickly, but the local segmenter now waits longer before sending text to Chinese translation so short ASR fragments do not become broken Chinese sentences. The translation queue preserves ready utterances so completed sentences are not lost.
+
+For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
 
 Azure mode uses a shorter cloud-streaming route:
 
@@ -253,7 +330,7 @@ Every subtitle includes:
 - total latency
 - translation engine
 
-The browser shows this in the Perf line. PowerShell also prints lines like:
+The browser shows this in the Perf line. If you see an `argos-asr` or similar engine name, that is the English-first local ASR row before Chinese translation completes. PowerShell also prints lines like:
 
 ```text
 [perf] {'audioSeconds': 3.0, 'asrMs': 420.5, 'translateMs': 35.2, 'totalLatencyMs': 620.1, 'engine': 'argos'}
@@ -265,5 +342,5 @@ The browser shows this in the Perf line. PowerShell also prints lines like:
 - `argos` is the best local default for low latency.
 - `marianmt` may be better when you can accept a bit more delay.
 - `nllb` is not recommended for real-time use on this machine.
-- English local mode can use `base.en` for speed and `small.en` for better accuracy. Spanish local mode automatically uses the matching multilingual Whisper model.
+- English local mode can use `base.en` for speed, `small.en` for the recommended default, and `medium.en` for manual experiments. Spanish local mode automatically uses the matching multilingual Whisper model.
 - Current MarianMT runs through Transformers, not CTranslate2 int8 yet.

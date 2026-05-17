@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=monitor-shell-restore-20260430" />
+    <link rel="stylesheet" href="/static/style.css?v=guided-meeting-flow-20260517" />
   </head>
   <body>
     <main class="studio">
@@ -17,86 +17,125 @@
           </div>
         </div>
 
-        <section class="toolbar" aria-label="Controls">
+        <section class="toolbar" aria-label="Meeting controls">
           <label>
-            Input
+            Audio
             <select id="audioSource">
-              <option value="microphone" selected>Mic</option>
-              <option value="system">System</option>
+              <option value="system" selected>System</option>
+              <option value="microphone">Mic</option>
             </select>
           </label>
 
           <label>
-            Source
+            Speech
             <select id="sourceLanguage">
-              <option value="eng_Latn" selected>English</option>
-              <option value="spa_Latn">Spanish</option>
+              <option value="eng_Latn" selected>English (Azure en-US)</option>
+              <option value="spa_Latn">Spanish (Azure es-ES)</option>
             </select>
           </label>
 
-          <label>
-            Engine
-            <select id="translationEngine">
-              <option value="azure" selected>Azure Cloud</option>
-              <option value="argos">Argos</option>
-              <option value="marianmt">MarianMT</option>
-              <option value="nllb">NLLB</option>
-            </select>
-          </label>
+          <button id="startButton" class="primary-flow-button">Start Meeting</button>
+          <button id="endMeetingButton" class="end-flow-button" disabled>End Meeting</button>
+          <button id="stopButton" class="secondary-flow-button hidden" disabled>Pause Captions</button>
+          <button id="processMeetingButton" class="export-button hidden">Generate Notes</button>
+          <button id="openMinutesButton" class="export-button notes-flow-button" disabled>Open Bilingual Notes</button>
+          <a class="editor-link hidden" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
+          <button id="downloadTranscriptButton" class="export-button hidden" disabled>Transcript</button>
+          <button id="downloadMinutesButton" class="export-button hidden" disabled>Minutes</button>
 
-          <button id="startButton">Start</button>
-          <button id="stopButton" disabled>Stop</button>
-          <a class="editor-link" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
+          <details class="advanced-settings">
+            <summary>Advanced Settings</summary>
+            <div class="advanced-settings-grid">
+              <label>
+                Engine
+                <select id="translationEngine">
+                  <option value="azure" selected>Azure Cloud</option>
+                  <option value="argos">Argos</option>
+                  <option value="marianmt">MarianMT</option>
+                  <option value="nllb">NLLB</option>
+                </select>
+              </label>
 
-          <label class="local-control local-extension local-extension-start">
-            ASR
-            <select id="modelSize">
-              <option value="base.en" selected>base.en</option>
-              <option value="small.en">small.en</option>
-            </select>
-          </label>
+              <label class="local-control local-extension local-preset-control">
+                ASR Preset
+                <select id="localAsrPreset">
+                  <option value="fast">Fast</option>
+                  <option value="balanced" selected>Balanced</option>
+                  <option value="accurate">Accurate</option>
+                </select>
+              </label>
 
-          <label class="local-control local-extension">
-            Device
-            <select id="deviceType">
-              <option value="cuda" selected>cuda</option>
-              <option value="auto">auto</option>
-              <option value="cpu">cpu</option>
-            </select>
-          </label>
+              <label class="local-control local-extension">
+                ASR
+                <select id="modelSize">
+                  <option value="small.en" selected>small.en</option>
+                  <option value="base.en">base.en</option>
+                  <option value="medium.en">medium.en</option>
+                </select>
+              </label>
 
-          <label class="local-control local-extension">
-            Chunk
-            <select id="chunkSeconds">
-              <option value="2">2s</option>
-              <option value="3" selected>3s</option>
-              <option value="5">5s</option>
-            </select>
-          </label>
+              <label class="local-control local-extension">
+                Device
+                <select id="deviceType">
+                  <option value="cuda" selected>cuda</option>
+                  <option value="auto">auto</option>
+                  <option value="cpu">cpu</option>
+                </select>
+              </label>
+
+              <label class="local-control local-extension">
+                Latency
+                <select id="localLatencyPreset">
+                  <option value="low" selected>Low</option>
+                  <option value="steady">Steady</option>
+                </select>
+              </label>
+
+              <label class="local-control local-extension">
+                Chunk
+                <select id="chunkSeconds">
+                  <option value="1">1s</option>
+                  <option value="1.5">1.5s</option>
+                  <option value="2" selected>2s</option>
+                  <option value="3">3s</option>
+                  <option value="5">5s</option>
+                </select>
+              </label>
+            </div>
+          </details>
         </section>
       </header>
 
       <section class="studio-grid">
         <aside class="side-panel" aria-label="Runtime information">
           <div class="panel-section">
-            <p class="panel-label">Status</p>
+            <p class="panel-label">Current Step</p>
             <span class="notice-pill" id="statusText">Stopped</span>
           </div>
           <div class="panel-section">
-            <p class="panel-label">Notice</p>
+            <p class="panel-label">Captions</p>
             <span class="notice-pill muted" id="noticeText">Ready</span>
           </div>
           <div class="panel-section">
-            <p class="panel-label">Activity</p>
-            <p class="panel-line" id="logText">Ready.</p>
+            <p class="panel-label">Recording</p>
+            <span class="notice-pill muted" id="recordingStatusText">Off</span>
+            <p class="panel-line" id="recordingFileText">No recording yet.</p>
           </div>
           <div class="panel-section">
-            <p class="panel-label">Performance</p>
-            <p class="panel-line perf" id="perfText">Waiting for first subtitle.</p>
+            <p class="panel-label">Meeting Notes</p>
+            <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
+            <p class="panel-line" id="notesHintText">End the meeting to create one bilingual Word document.</p>
           </div>
+          <div class="panel-section">
+            <p class="panel-label">Delay Hint</p>
+            <span class="notice-pill muted" id="delayStatusText">Ready</span>
+            <p class="panel-line" id="delayHintText">No delay detected.</p>
+          </div>
+          <p class="panel-line hidden" id="logText">Ready.</p>
+          <p class="panel-line hidden" id="perfText">Waiting for first subtitle.</p>
         </aside>
 
-        <section class="subtitle-box" aria-label="Subtitle history">
+        <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Cloud subtitle history">
           <div class="subtitle-box-header">
             <div>
               <p class="monitor-title">Subtitle Monitor</p>
@@ -106,10 +145,37 @@
           </div>
           <div class="subtitle-stream" id="subtitleStack" aria-live="polite"></div>
         </section>
+
+        <section class="local-subtitle-layout hidden" id="localSubtitleLayout" aria-label="Local subtitle workspace">
+          <section class="split-subtitle-box" aria-label="English live transcript">
+            <div class="subtitle-box-header compact">
+              <div>
+                <p class="monitor-title">English Live Transcript</p>
+                <p class="monitor-subtitle">Context above · live draft below</p>
+              </div>
+              <span class="monitor-badge">ASR</span>
+            </div>
+            <div class="english-pane">
+              <div class="subtitle-stream english-stream english-context-stream" id="englishContextStack" aria-live="polite"></div>
+              <div class="subtitle-stream english-stream english-draft-stream" id="englishDraftStack" aria-live="polite"></div>
+            </div>
+          </section>
+
+          <section class="split-subtitle-box" aria-label="Chinese translated subtitles">
+            <div class="subtitle-box-header compact">
+              <div>
+                <p class="monitor-title">Chinese Translation</p>
+                <p class="monitor-subtitle">Complete sentence translation · slightly delayed</p>
+              </div>
+              <span class="monitor-badge">ZH</span>
+            </div>
+            <div class="subtitle-stream chinese-stream" id="chineseSubtitleStack" aria-live="polite"></div>
+          </section>
+        </section>
       </section>
     </main>
 
-    <script src="/static/app.js?v=source-language-es-zh-20260430"></script>
+    <script src="/static/app.js?v=guided-meeting-flow-20260517"></script>
   </body>
 </html>
 

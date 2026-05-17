@@ -32,17 +32,21 @@ load_dotenv_file()
 
 @dataclass
 class AppConfig:
-    asr_model_size: str = "base.en"
+    asr_model_size: str = "small.en"
     asr_device: DevicePreference = "cuda"
     asr_compute_type: str = "int8"
+    asr_beam_size: int = 3
+    asr_best_of: int = 3
+    asr_patience: float = 1.2
+    asr_condition_on_previous_text: bool = True
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
     translation_engine: TranslationEngine = "azure"
-    audio_source: AudioSource = "microphone"
+    audio_source: AudioSource = "system"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
-    chunk_seconds: float = 3.0
-    overlap_seconds: float = 0.5
+    chunk_seconds: float = 2.0
+    overlap_seconds: float = 0.3
     max_subtitles: int = 1
     queue_max_size: int = 2
     vad_rms_threshold: float = 0.008
@@ -60,8 +64,8 @@ class AppConfig:
     noise_phrases: str = "uh,um,ah,er,mm,hmm,ok,okay,yeah,yep,nope"
     segmenter_enabled: bool = True
     segmenter_pause_seconds: float = 0.9
-    segmenter_max_words: int = 22
-    segmenter_max_seconds: float = 10.0
+    segmenter_max_words: int = 28
+    segmenter_max_seconds: float = 8.0
 
 
 config = AppConfig()

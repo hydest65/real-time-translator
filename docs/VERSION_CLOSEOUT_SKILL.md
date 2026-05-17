@@ -62,7 +62,12 @@ Read these three files early when continuing product, architecture, or UI work:
 ## Version Discipline
 
 - Do not commit API keys.
+- Do not keep copied browser sessions, account exports, access tokens, or temporary login dumps in the repository.
 - Do not reintroduce MiniMax, Balanced, or Quality modes unless explicitly requested.
 - Do not split long Azure final subtitles purely by time.
 - Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
+- Preserve the Azure subtitle monitor scrollbar and scroll-review behavior.
+- Preserve the local split reading model: stable English context, live English draft, and complete Chinese translation.
+- Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then `Open Bilingual Notes`.
+- Preserve Word-first bilingual notes: English minutes first, Chinese reading version second, in one `.docx` file.
 - Keep true speaker diarization as a future feature unless explicitly implemented.

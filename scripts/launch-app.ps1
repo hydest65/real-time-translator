@@ -58,7 +58,7 @@ if (-not (Test-Path $python)) {
 
 if (-not $NoInstall) {
     Write-Step "Checking dependencies"
-    & $python -c "import fastapi, uvicorn, numpy, sounddevice" *> $null
+    & $python -c "import fastapi, uvicorn, numpy, sounddevice, azure.cognitiveservices.speech" *> $null
     if ($LASTEXITCODE -ne 0) {
         Write-Host "Installing dependencies. First run can take a while." -ForegroundColor Yellow
         & $python -m pip install --upgrade pip

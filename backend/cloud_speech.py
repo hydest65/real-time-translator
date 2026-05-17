@@ -167,9 +167,19 @@ async def stream_microphone_to_azure(
     session: AzureSpeechTranslationSession,
     stop_event: asyncio.Event,
 ) -> None:
+    last_audio_notice_at = 0.0
     async for frame in capture.frames():
         if stop_event.is_set():
             break
+        now = time.perf_counter()
+        if now - last_audio_notice_at >= 1.0:
+            rms = float(np.sqrt(np.mean(np.square(frame)))) if len(frame) else 0.0
+            label = "Audio OK" if rms >= 0.003 else "No system audio"
+            put_latest_threadsafe(
+                session.status_queue,
+                {"type": "notice", "label": label, "detail": f"rms={rms:.4f}"},
+            )
+            last_audio_notice_at = now
         session.write_audio(frame)
 
 

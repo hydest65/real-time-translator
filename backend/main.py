@@ -1,13 +1,18 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import re
+import sys
 import time
+import zipfile
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
+from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -21,6 +26,11 @@ from .translator import ArgosTranslator, MarianMTTranslator, NLLBTranslator, Tra
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT / "frontend"
+RECORDINGS_DIR = ROOT / "recordings"
+RECORDING_RESUME_SECONDS = 5 * 60
+DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+active_recording_path: Path | None = None
+last_recording_stop_at = 0.0
 
 app = FastAPI(title="Low Latency Real Time Translator")
 app.add_middleware(
@@ -40,6 +50,7 @@ class ASRJob:
 
 @dataclass
 class TranslateJob:
+    sequence_id: str
     source_text: str
     start_seconds: float
     end_seconds: float
@@ -51,6 +62,7 @@ class TranslateJob:
 
 @dataclass
 class SubtitleJob:
+    sequence_id: str
     source_text: str
     translated_text: str
     start_seconds: float
@@ -60,6 +72,13 @@ class SubtitleJob:
     translate_ms: float
     total_latency_ms: float
     engine: str
+    is_final: bool = True
+
+
+@dataclass
+class UtteranceUpdate:
+    draft: SubtitleJob | None = None
+    ready: TranslateJob | None = None
 
 
 @dataclass
@@ -102,6 +121,147 @@ class SubtitleTurnDetector:
         return re.sub(r"\s+", " ", re.sub(r"[^a-zA-Z0-9'\s]", " ", text.lower())).strip()
 
 
+class LocalUtteranceAggregator:
+    SENTENCE_END_RE = re.compile(r"[.!?。！？][\"')\]]*$")
+
+    def __init__(self, active_config: AppConfig) -> None:
+        self.pause_seconds = active_config.segmenter_pause_seconds
+        self.max_words = active_config.segmenter_max_words
+        self.max_seconds = active_config.segmenter_max_seconds
+        self.sequence_index = 0
+        self.reset()
+
+    def reset(self) -> None:
+        self.sequence_id = ""
+        self.source_text = ""
+        self.start_seconds = 0.0
+        self.end_seconds = 0.0
+        self.audio_duration_seconds = 0.0
+        self.captured_at = time.perf_counter()
+        self.last_update_at = 0.0
+        self.asr_ms = 0.0
+
+    @property
+    def has_text(self) -> bool:
+        return bool(self.source_text.strip())
+
+    def add_asr_result(self, item: TranscriptionResult, job: ASRJob, asr_ms: float) -> UtteranceUpdate:
+        if not self.has_text:
+            self.sequence_index += 1
+            self.sequence_id = f"local-utterance-{self.sequence_index}"
+            self.start_seconds = item.start_seconds
+            self.captured_at = job.chunk.captured_at
+
+        previous_end = self.end_seconds
+        self.source_text = self._merge_text(self.source_text, item.text)
+        self.end_seconds = max(self.end_seconds, item.end_seconds)
+        self.audio_duration_seconds = max(self.audio_duration_seconds, self.end_seconds - self.start_seconds)
+        self.last_update_at = time.perf_counter()
+        self.asr_ms += asr_ms
+
+        draft = self._subtitle(is_final=False, engine_suffix="draft")
+        if not self._should_mark_ready(previous_end, item):
+            return UtteranceUpdate(draft=draft)
+
+        return UtteranceUpdate(draft=draft, ready=self.mark_ready())
+
+    def mark_ready(self) -> TranslateJob | None:
+        if not self.has_text:
+            return None
+        job = TranslateJob(
+            sequence_id=self.sequence_id,
+            source_text=self.source_text.strip(),
+            start_seconds=self.start_seconds,
+            end_seconds=self.end_seconds,
+            audio_duration_seconds=max(0.0, self.audio_duration_seconds),
+            captured_at=self.captured_at,
+            asr_ms=self.asr_ms,
+        )
+        self.reset()
+        return job
+
+    def mark_ready_if_idle(self) -> TranslateJob | None:
+        if not self.has_text or not self.last_update_at:
+            return None
+        idle_seconds = time.perf_counter() - self.last_update_at
+        if idle_seconds < self.pause_seconds:
+            return None
+        text = self.source_text.strip()
+        words = SubtitleTurnDetector._normalize_text(text).split()
+        min_idle_words = max(5, min(10, self.max_words // 3))
+        if len(words) < min_idle_words and not self._looks_sentence_complete(text, words):
+            if idle_seconds < self.pause_seconds * 2.5:
+                return None
+        return self.mark_ready()
+
+    def _subtitle(self, is_final: bool, engine_suffix: str) -> SubtitleJob:
+        return SubtitleJob(
+            sequence_id=self.sequence_id,
+            source_text=self.source_text.strip(),
+            translated_text="",
+            start_seconds=self.start_seconds,
+            end_seconds=self.end_seconds,
+            audio_duration_seconds=max(0.0, self.audio_duration_seconds),
+            asr_ms=self.asr_ms,
+            translate_ms=0,
+            total_latency_ms=(time.perf_counter() - self.captured_at) * 1000,
+            engine=f"local-{engine_suffix}",
+            is_final=is_final,
+        )
+
+    def _should_mark_ready(self, previous_end: float, item: TranscriptionResult) -> bool:
+        text = self.source_text.strip()
+        words = SubtitleTurnDetector._normalize_text(text).split()
+        duration = self.end_seconds - self.start_seconds
+        if self._looks_sentence_complete(text, words):
+            return True
+        if len(words) >= self.max_words and duration >= self.pause_seconds * 2:
+            return True
+        if duration >= self.max_seconds and len(words) >= 8:
+            return True
+        gap = item.start_seconds - previous_end if previous_end else 0.0
+        return gap >= self.pause_seconds and len(words) >= 8
+
+    @classmethod
+    def _looks_sentence_complete(cls, text: str, words: list[str]) -> bool:
+        if len(words) < 10:
+            return False
+        return bool(cls.SENTENCE_END_RE.search(text))
+
+    @staticmethod
+    def _merge_text(current: str, incoming: str) -> str:
+        clean_current = LocalUtteranceAggregator._normalize_local_text(current)
+        clean_incoming = LocalUtteranceAggregator._normalize_local_text(incoming)
+        if not clean_current:
+            return clean_incoming
+        if not clean_incoming:
+            return clean_current
+
+        current_words = clean_current.split()
+        incoming_words = clean_incoming.split()
+        max_overlap = min(6, len(current_words), len(incoming_words))
+        for overlap in range(max_overlap, 0, -1):
+            left = " ".join(current_words[-overlap:]).lower().strip(".,!?;:")
+            right = " ".join(incoming_words[:overlap]).lower().strip(".,!?;:")
+            if left == right:
+                return LocalUtteranceAggregator._normalize_local_text(" ".join([*current_words, *incoming_words[overlap:]]))
+        return LocalUtteranceAggregator._normalize_local_text(f"{clean_current} {clean_incoming}")
+
+    @staticmethod
+    def _normalize_local_text(text: str) -> str:
+        cleaned = text.strip()
+        if not cleaned:
+            return ""
+
+        cleaned = re.sub(r"(?:\s*[\\/|]{2,}\s*)+", " ", cleaned)
+        cleaned = re.sub(r"(?:\s*\.\s*){3,}", "... ", cleaned)
+        cleaned = re.sub(r"([!?.,])(?:\s*\1){1,}", r"\1", cleaned)
+        cleaned = re.sub(r"\s+([,.!?;:])", r"\1", cleaned)
+        cleaned = re.sub(r"([,.!?;:])([A-Za-z])", r"\1 \2", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned)
+        return cleaned.strip()
+
+
 class Runtime:
     def __init__(self) -> None:
         self.asr: WhisperASR | None = None
@@ -125,6 +285,10 @@ class Runtime:
                 or current_asr_model != next_asr_model
                 or self.current_config.asr_device != next_config.asr_device
                 or self.current_config.asr_compute_type != next_config.asr_compute_type
+                or self.current_config.asr_beam_size != next_config.asr_beam_size
+                or self.current_config.asr_best_of != next_config.asr_best_of
+                or self.current_config.asr_patience != next_config.asr_patience
+                or self.current_config.asr_condition_on_previous_text != next_config.asr_condition_on_previous_text
             )
             needs_translator = (
                 self.translator is None
@@ -144,6 +308,10 @@ class Runtime:
                     next_asr_model,
                     next_config.asr_device,
                     next_config.asr_compute_type,
+                    next_config.asr_beam_size,
+                    next_config.asr_best_of,
+                    next_config.asr_patience,
+                    next_config.asr_condition_on_previous_text,
                 )
 
             if needs_translator:
@@ -180,17 +348,212 @@ runtime = Runtime()
 
 @app.get("/")
 async def index() -> FileResponse:
-    return FileResponse(FRONTEND_DIR / "index.html")
+    return FileResponse(
+        FRONTEND_DIR / "index.html",
+        headers={"Cache-Control": "no-store"},
+    )
 
 
 @app.get("/api/config")
 async def get_config() -> dict[str, Any]:
-    return asdict(runtime.current_config)
+    data = asdict(runtime.current_config)
+    data["azure_configured"] = bool(
+        (runtime.current_config.azure_speech_key or "").strip()
+        and (runtime.current_config.azure_speech_region or "").strip()
+    )
+    return data
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {"ok": True, "message": "Backend is running", "config": asdict(runtime.current_config)}
+
+
+@app.post("/api/end-meeting")
+async def end_meeting() -> dict[str, Any]:
+    global active_recording_path, last_recording_stop_at
+    ended_recording = str(active_recording_path) if active_recording_path is not None else ""
+    active_recording_path = None
+    last_recording_stop_at = 0.0
+    return {"ok": True, "message": "Meeting ended", "endedRecording": ended_recording}
+
+
+@app.post("/api/process-recording")
+async def process_recording() -> dict[str, Any]:
+    recordings = sorted(
+        RECORDINGS_DIR.glob("session-*.wav"),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    if not recordings:
+        raise HTTPException(status_code=404, detail="No session recording found.")
+
+    audio_path = recordings[0]
+    script_path = ROOT / "scripts" / "process-recording.py"
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script_path),
+        str(audio_path),
+        "--asr-engine",
+        "funasr",
+        "--device",
+        "auto",
+        cwd=str(ROOT),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    try:
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60 * 60)
+    except asyncio.TimeoutError as exc:
+        process.kill()
+        await process.communicate()
+        raise HTTPException(status_code=504, detail="Post-meeting processing timed out.") from exc
+
+    stdout_text = stdout.decode("utf-8", errors="replace")
+    stderr_text = stderr.decode("utf-8", errors="replace")
+    if process.returncode != 0:
+        detail = (stderr_text or stdout_text or "Post-meeting processing failed.").strip()
+        raise HTTPException(status_code=500, detail=detail[-2000:])
+
+    transcript_path = audio_path.with_suffix(".transcript.md")
+    minutes_path = audio_path.with_suffix(".minutes.md")
+    minutes_docx_path = audio_path.with_suffix(".minutes.docx")
+    if minutes_path.exists():
+        write_minutes_docx(minutes_path, minutes_docx_path)
+    return {
+        "ok": True,
+        "recording": str(audio_path),
+        "transcript": str(transcript_path),
+        "minutes": str(minutes_docx_path if minutes_docx_path.exists() else minutes_path),
+        "minutesMarkdown": str(minutes_path),
+        "minutesDocx": str(minutes_docx_path) if minutes_docx_path.exists() else "",
+        "transcriptText": transcript_path.read_text(encoding="utf-8") if transcript_path.exists() else "",
+        "minutesText": minutes_path.read_text(encoding="utf-8") if minutes_path.exists() else "",
+        "log": stdout_text.strip(),
+    }
+
+
+@app.post("/api/open-latest-minutes")
+async def open_latest_minutes() -> dict[str, Any]:
+    minutes_path = latest_minutes_file()
+    if minutes_path is None:
+        raise HTTPException(status_code=404, detail="No meeting minutes file found.")
+
+    try:
+        os.startfile(minutes_path)  # type: ignore[attr-defined]
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not open minutes file: {exc}") from exc
+
+    return {"ok": True, "minutes": str(minutes_path)}
+
+
+def latest_minutes_file() -> Path | None:
+    minutes_files = sorted(
+        [*RECORDINGS_DIR.glob("session-*.minutes.docx"), *RECORDINGS_DIR.glob("session-*.minutes.md")],
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+    return minutes_files[0] if minutes_files else None
+
+
+@app.get("/api/latest-minutes")
+async def latest_minutes() -> dict[str, Any]:
+    minutes_path = latest_minutes_file()
+    if minutes_path is None:
+        return {"ok": True, "available": False, "minutes": ""}
+    return {"ok": True, "available": True, "minutes": str(minutes_path)}
+
+
+@app.get("/api/latest-minutes-file")
+async def latest_minutes_file_response() -> FileResponse:
+    minutes_path = latest_minutes_file()
+    if minutes_path is None:
+        raise HTTPException(status_code=404, detail="No meeting minutes file found.")
+    return FileResponse(
+        minutes_path,
+        media_type=DOCX_MEDIA_TYPE if minutes_path.suffix.lower() == ".docx" else "text/markdown; charset=utf-8",
+        filename=minutes_path.name,
+    )
+
+
+def write_minutes_docx(markdown_path: Path, docx_path: Path) -> None:
+    paragraphs: list[str] = []
+    for raw_line in markdown_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        style = "Body"
+        text = line
+        if line.startswith("# "):
+            style = "Title"
+            text = line[2:].strip()
+        elif line.startswith("## "):
+            style = "Heading1"
+            text = line[3:].strip()
+        elif line.startswith("### "):
+            style = "Heading2"
+            text = line[4:].strip()
+        elif line.startswith("- [ ] "):
+            style = "Bullet"
+            text = "☐ " + line[6:].strip()
+        elif line.startswith("- "):
+            style = "Bullet"
+            text = line[2:].strip()
+        paragraphs.append(word_paragraph(text, style))
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(paragraphs)
+        + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/>'
+        "</w:sectPr></w:body></w:document>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    with zipfile.ZipFile(docx_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+
+
+def word_paragraph(text: str, style: str) -> str:
+    safe_text = escape(text)
+    if style == "Title":
+        props = '<w:jc w:val="center"/><w:spacing w:after="240"/><w:rPr><w:b/><w:sz w:val="44"/><w:color w:val="304E96"/></w:rPr>'
+        run_props = '<w:b/><w:sz w:val="44"/><w:color w:val="304E96"/>'
+    elif style == "Heading1":
+        props = '<w:spacing w:before="240" w:after="100"/><w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="304E96"/></w:rPr>'
+        run_props = '<w:b/><w:sz w:val="30"/><w:color w:val="304E96"/>'
+    elif style == "Heading2":
+        props = '<w:spacing w:before="140" w:after="80"/><w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="304E96"/></w:rPr>'
+        run_props = '<w:b/><w:sz w:val="24"/><w:color w:val="304E96"/>'
+    elif style == "Bullet":
+        props = '<w:ind w:left="360" w:hanging="180"/><w:spacing w:after="80"/>'
+        run_props = '<w:sz w:val="21"/><w:color w:val="1F2A3A"/>'
+        safe_text = safe_text if safe_text.startswith("☐") else "• " + safe_text
+    else:
+        props = '<w:spacing w:after="80"/>'
+        run_props = '<w:sz w:val="21"/><w:color w:val="1F2A3A"/>'
+
+    return (
+        f"<w:p><w:pPr>{props}</w:pPr><w:r><w:rPr>{run_props}"
+        '<w:rFonts w:ascii="Calibri" w:eastAsia="Microsoft YaHei" w:hAnsi="Calibri"/>'
+        f"</w:rPr><w:t>{safe_text}</w:t></w:r></w:p>"
+    )
 
 
 def build_config(payload: dict[str, Any]) -> AppConfig:
@@ -207,6 +570,12 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
 
     merged["chunk_seconds"] = max(1.0, min(5.0, float(merged["chunk_seconds"])))
     merged["overlap_seconds"] = max(0.0, min(1.0, float(merged["overlap_seconds"])))
+    if merged["asr_compute_type"] not in ("int8", "int8_float16", "float16", "float32"):
+        merged["asr_compute_type"] = "int8"
+    merged["asr_beam_size"] = max(1, min(5, int(merged["asr_beam_size"])))
+    merged["asr_best_of"] = max(1, min(5, int(merged["asr_best_of"])))
+    merged["asr_patience"] = max(0.8, min(1.5, float(merged["asr_patience"])))
+    merged["asr_condition_on_previous_text"] = bool(merged["asr_condition_on_previous_text"])
     merged["max_subtitles"] = max(1, min(5, int(merged["max_subtitles"])))
     merged["queue_max_size"] = max(1, min(4, int(merged["queue_max_size"])))
     merged["audio_sample_rate"] = int(merged["audio_sample_rate"])
@@ -220,7 +589,7 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["segmenter_enabled"] = bool(merged["segmenter_enabled"])
     merged["segmenter_pause_seconds"] = max(0.4, min(2.0, float(merged["segmenter_pause_seconds"])))
     merged["segmenter_max_words"] = max(8, min(40, int(merged["segmenter_max_words"])))
-    merged["segmenter_max_seconds"] = max(4.0, min(20.0, float(merged["segmenter_max_seconds"])))
+    merged["segmenter_max_seconds"] = max(3.0, min(20.0, float(merged["segmenter_max_seconds"])))
     return AppConfig(**merged)
 
 
@@ -243,6 +612,21 @@ def azure_language_code(source_language: str) -> str:
     return "en-US"
 
 
+def session_recording_path() -> Path:
+    global active_recording_path
+    now = time.time()
+    if (
+        active_recording_path is not None
+        and active_recording_path.exists()
+        and now - last_recording_stop_at <= RECORDING_RESUME_SECONDS
+    ):
+        return active_recording_path
+
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    active_recording_path = RECORDINGS_DIR / f"session-{timestamp}.wav"
+    return active_recording_path
+
+
 def create_queue(max_size: int) -> asyncio.Queue:
     return asyncio.Queue(maxsize=max_size)
 
@@ -254,6 +638,10 @@ def put_latest(queue_: asyncio.Queue, item: object) -> None:
             queue_.task_done()
         except asyncio.QueueEmpty:
             break
+    queue_.put_nowait(item)
+
+
+def enqueue_translation(queue_: asyncio.Queue, item: object) -> None:
     queue_.put_nowait(item)
 
 
@@ -300,15 +688,21 @@ async def audio_capture_worker(
 async def asr_worker(
     audio_queue: asyncio.Queue,
     translate_queue: asyncio.Queue,
+    subtitle_queue: asyncio.Queue,
     status_queue: asyncio.Queue,
     active_config: AppConfig,
     stop_event: asyncio.Event,
 ) -> None:
     assert runtime.asr is not None
+    aggregator = LocalUtteranceAggregator(active_config)
     while not stop_event.is_set():
         try:
             job: ASRJob = await asyncio.wait_for(audio_queue.get(), timeout=0.2)
         except asyncio.TimeoutError:
+            pending_job = aggregator.mark_ready_if_idle()
+            if pending_job is not None:
+                enqueue_translation(translate_queue, pending_job)
+                put_latest(status_queue, {"type": "status", "status": "Translating", "detail": "Translating completed sentence."})
             continue
 
         started = time.perf_counter()
@@ -322,21 +716,18 @@ async def asr_worker(
         audio_queue.task_done()
 
         if not transcriptions:
+            pending_job = aggregator.mark_ready_if_idle()
+            if pending_job is not None:
+                enqueue_translation(translate_queue, pending_job)
             put_latest(status_queue, {"type": "status", "status": "Listening", "detail": "No speech detected."})
             continue
 
         for item in transcriptions:
-            put_latest(
-                translate_queue,
-                TranslateJob(
-                    source_text=item.text,
-                    start_seconds=item.start_seconds,
-                    end_seconds=item.end_seconds,
-                    audio_duration_seconds=job.chunk.duration_seconds,
-                    captured_at=job.chunk.captured_at,
-                    asr_ms=asr_ms,
-                ),
-            )
+            update = aggregator.add_asr_result(item, job, asr_ms)
+            if update.draft is not None:
+                put_latest(subtitle_queue, update.draft)
+            if update.ready is not None:
+                enqueue_translation(translate_queue, update.ready)
 
 
 async def translate_worker(
@@ -362,6 +753,7 @@ async def translate_worker(
         put_latest(
             subtitle_queue,
             SubtitleJob(
+                sequence_id=job.sequence_id,
                 source_text=job.source_text,
                 translated_text=translated,
                 start_seconds=job.start_seconds,
@@ -371,8 +763,10 @@ async def translate_worker(
                 translate_ms=translate_ms,
                 total_latency_ms=total_latency_ms,
                 engine=runtime.translator.engine_name,
+                is_final=True,
             ),
         )
+        put_latest(status_queue, {"type": "status", "status": "Listening", "detail": "Waiting for speech."})
 
     while not stop_event.is_set():
         try:
@@ -380,8 +774,12 @@ async def translate_worker(
         except asyncio.TimeoutError:
             continue
 
-        translate_queue.task_done()
-        await process_translate_job(job)
+        try:
+            await process_translate_job(job)
+        except Exception as exc:
+            put_latest(status_queue, {"type": "status", "status": "Error", "detail": f"Translation failed: {exc}"})
+        finally:
+            translate_queue.task_done()
 
 
 async def websocket_push_worker(
@@ -411,6 +809,8 @@ async def websocket_push_worker(
 
         for task in pending:
             task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
         if not done:
             continue
 
@@ -427,11 +827,12 @@ async def websocket_push_worker(
                 await websocket.send_json(
                     {
                         "type": "subtitle",
-                        "sequenceId": "",
+                        "sequenceId": payload.sequence_id,
                         "sourceText": payload.source_text,
                         "translatedText": payload.translated_text,
                         "start": round(payload.start_seconds, 2),
                         "end": round(payload.end_seconds, 2),
+                        "isFinal": payload.is_final,
                         "perf": perf,
                     }
                 )
@@ -503,9 +904,9 @@ async def subtitles(websocket: WebSocket) -> None:
             await runtime.ensure_models(active_config)
 
         audio_queue = create_queue(active_config.queue_max_size)
-        translate_queue = create_queue(active_config.queue_max_size)
-        subtitle_queue = create_queue(active_config.queue_max_size)
-        status_queue = create_queue(active_config.queue_max_size)
+        translate_queue = asyncio.Queue()
+        subtitle_queue = create_queue(max(6, active_config.queue_max_size))
+        status_queue = create_queue(max(3, active_config.queue_max_size))
 
         capture = MicrophoneAudioCapture(
             sample_rate=active_config.audio_sample_rate,
@@ -513,8 +914,13 @@ async def subtitles(websocket: WebSocket) -> None:
             chunk_seconds=active_config.chunk_seconds,
             overlap_seconds=active_config.overlap_seconds,
             audio_source=active_config.audio_source,
+            recording_path=session_recording_path(),
         )
         capture.start()
+        put_latest(status_queue, capture.source_notice())
+        recording_notice = capture.recording_notice()
+        if recording_notice is not None:
+            put_latest(status_queue, recording_notice)
 
         if active_config.translation_engine == "azure":
             azure_session = AzureSpeechTranslationSession(
@@ -542,7 +948,7 @@ async def subtitles(websocket: WebSocket) -> None:
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
                 asyncio.create_task(audio_capture_worker(capture, audio_queue, status_queue, active_config, stop_event)),
-                asyncio.create_task(asr_worker(audio_queue, translate_queue, status_queue, active_config, stop_event)),
+                asyncio.create_task(asr_worker(audio_queue, translate_queue, subtitle_queue, status_queue, active_config, stop_event)),
                 asyncio.create_task(translate_worker(translate_queue, subtitle_queue, status_queue, active_config, stop_event)),
                 asyncio.create_task(websocket_push_worker(websocket, subtitle_queue, status_queue, stop_event)),
             ]
@@ -560,6 +966,8 @@ async def subtitles(websocket: WebSocket) -> None:
         except Exception:
             pass
     finally:
+        global last_recording_stop_at
+        last_recording_stop_at = time.time()
         stop_event.set()
         if azure_session is not None:
             await azure_session.stop()
@@ -567,3 +975,5 @@ async def subtitles(websocket: WebSocket) -> None:
             capture.stop()
         for task in tasks:
             task.cancel()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
