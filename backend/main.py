@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import os
 import re
 import sys
 import time
+import wave
 import zipfile
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
@@ -12,7 +14,7 @@ from html import escape
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +33,10 @@ RECORDING_RESUME_SECONDS = 5 * 60
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 active_recording_path: Path | None = None
 last_recording_stop_at = 0.0
+RECORDING_PATTERNS = ("rec-*.wav", "session-*.wav")
+MINUTES_PATTERNS = ("rec-*.minutes.docx", "rec-*.minutes.md", "session-*.minutes.docx", "session-*.minutes.md")
+POST_MEETING_TIMEOUT_SECONDS = 8 * 60
+active_post_meeting_process: asyncio.subprocess.Process | None = None
 
 app = FastAPI(title="Low Latency Real Time Translator")
 app.add_middleware(
@@ -346,6 +352,18 @@ class Runtime:
 runtime = Runtime()
 
 
+def public_config_payload(active_config: AppConfig) -> dict[str, Any]:
+    data = asdict(active_config)
+    azure_configured = bool(
+        (active_config.azure_speech_key or "").strip()
+        and (active_config.azure_speech_region or "").strip()
+    )
+    data["azure_speech_key"] = ""
+    data["azure_speech_key_set"] = bool((active_config.azure_speech_key or "").strip())
+    data["azure_configured"] = azure_configured
+    return data
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(
@@ -356,17 +374,12 @@ async def index() -> FileResponse:
 
 @app.get("/api/config")
 async def get_config() -> dict[str, Any]:
-    data = asdict(runtime.current_config)
-    data["azure_configured"] = bool(
-        (runtime.current_config.azure_speech_key or "").strip()
-        and (runtime.current_config.azure_speech_region or "").strip()
-    )
-    return data
+    return public_config_payload(runtime.current_config)
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
-    return {"ok": True, "message": "Backend is running", "config": asdict(runtime.current_config)}
+    return {"ok": True, "message": "Backend is running", "config": public_config_payload(runtime.current_config)}
 
 
 @app.post("/api/end-meeting")
@@ -379,41 +392,73 @@ async def end_meeting() -> dict[str, Any]:
 
 
 @app.post("/api/process-recording")
-async def process_recording() -> dict[str, Any]:
-    recordings = sorted(
-        RECORDINGS_DIR.glob("session-*.wav"),
-        key=lambda path: path.stat().st_mtime,
-        reverse=True,
-    )
-    if not recordings:
-        raise HTTPException(status_code=404, detail="No session recording found.")
-
-    audio_path = recordings[0]
+async def process_recording(request: Request) -> dict[str, Any]:
+    payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
+    audio_paths = resolve_recording_paths(payload.get("recordings") or payload.get("recording") or "")
     script_path = ROOT / "scripts" / "process-recording.py"
+    asr_engine = choose_post_meeting_asr_engine()
+    processed: list[dict[str, Any]] = []
+    logs: list[str] = []
+
+    for audio_path in audio_paths:
+        processed.append(await process_one_recording(audio_path, script_path, asr_engine, logs))
+
+    if len(processed) > 1:
+        combined = write_combined_minutes(processed)
+        return {
+            "ok": True,
+            "recordings": [item["recording"] for item in processed],
+            "recording": ", ".join(Path(item["recording"]).name for item in processed),
+            "transcript": "",
+            "minutes": str(combined["minutes"]),
+            "minutesMarkdown": str(combined["minutesMarkdown"]),
+            "minutesDocx": str(combined["minutesDocx"]),
+            "transcriptText": "",
+            "minutesText": combined["minutesText"],
+            "log": "\n".join(logs),
+            "asrEngine": asr_engine,
+        }
+
+    return {**processed[0], "log": "\n".join(logs), "asrEngine": asr_engine}
+
+
+async def process_one_recording(
+    audio_path: Path,
+    script_path: Path,
+    asr_engine: str,
+    logs: list[str],
+) -> dict[str, Any]:
+    global active_post_meeting_process
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         str(script_path),
         str(audio_path),
         "--asr-engine",
-        "funasr",
+        asr_engine,
         "--device",
         "auto",
         cwd=str(ROOT),
+        env=post_meeting_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
     )
+    active_post_meeting_process = process
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=60 * 60)
+        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=POST_MEETING_TIMEOUT_SECONDS)
     except asyncio.TimeoutError as exc:
         process.kill()
         await process.communicate()
-        raise HTTPException(status_code=504, detail="Post-meeting processing timed out.") from exc
+        raise HTTPException(status_code=504, detail="Post-meeting processing timed out. Try a shorter recording or cached local models.") from exc
+    finally:
+        if active_post_meeting_process is process:
+            active_post_meeting_process = None
 
     stdout_text = stdout.decode("utf-8", errors="replace")
     stderr_text = stderr.decode("utf-8", errors="replace")
     if process.returncode != 0:
         detail = (stderr_text or stdout_text or "Post-meeting processing failed.").strip()
         raise HTTPException(status_code=500, detail=detail[-2000:])
+    logs.append(stdout_text.strip())
 
     transcript_path = audio_path.with_suffix(".transcript.md")
     minutes_path = audio_path.with_suffix(".minutes.md")
@@ -429,7 +474,136 @@ async def process_recording() -> dict[str, Any]:
         "minutesDocx": str(minutes_docx_path) if minutes_docx_path.exists() else "",
         "transcriptText": transcript_path.read_text(encoding="utf-8") if transcript_path.exists() else "",
         "minutesText": minutes_path.read_text(encoding="utf-8") if minutes_path.exists() else "",
-        "log": stdout_text.strip(),
+    }
+
+
+@app.post("/api/cancel-process-recording")
+async def cancel_process_recording() -> dict[str, Any]:
+    process = active_post_meeting_process
+    if process is None or process.returncode is not None:
+        return {"ok": True, "cancelled": False}
+    process.kill()
+    return {"ok": True, "cancelled": True}
+
+
+def choose_post_meeting_asr_engine() -> str:
+    requested_engine = os.getenv("POST_MEETING_ASR_ENGINE", "faster-whisper").strip().lower()
+    if requested_engine != "funasr":
+        return "faster-whisper"
+    funasr_model_dir = ROOT / ".model-cache" / "models" / "iic" / "SenseVoiceSmall"
+    if funasr_model_dir.exists() and importlib.util.find_spec("funasr") is not None:
+        return "funasr"
+    return "faster-whisper"
+
+
+def post_meeting_env() -> dict[str, str]:
+    env = dict(os.environ)
+    cache_dir = ROOT / ".cache" / "huggingface"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    env["HF_HOME"] = str(cache_dir)
+    env["TRANSFORMERS_CACHE"] = str(cache_dir)
+    return env
+
+
+def resolve_recording_paths(requested_recordings: object) -> list[Path]:
+    if isinstance(requested_recordings, str):
+        requested_values = [requested_recordings] if requested_recordings else []
+    elif isinstance(requested_recordings, list):
+        requested_values = [str(item) for item in requested_recordings if str(item).strip()]
+    else:
+        requested_values = []
+
+    paths: list[Path] = []
+    for requested_recording in requested_values:
+        requested_path = Path(str(requested_recording))
+        if not requested_path.is_absolute():
+            requested_path = ROOT / requested_path
+        try:
+            requested_path = requested_path.resolve()
+            recordings_root = RECORDINGS_DIR.resolve()
+            if recordings_root == requested_path.parent and requested_path.suffix.lower() == ".wav" and requested_path.exists():
+                paths.append(requested_path)
+        except OSError:
+            pass
+    if paths:
+        return list(dict.fromkeys(paths))
+
+    recordings = sorted_recordings()
+    if not recordings:
+        raise HTTPException(status_code=404, detail="No session recording found.")
+    return [recordings[0]]
+
+
+@app.get("/api/recordings")
+async def list_recordings() -> dict[str, Any]:
+    recordings = sorted_recordings()
+    return {"ok": True, "recordings": [recording_payload(path) for path in recordings[:50]]}
+
+
+def sorted_recordings() -> list[Path]:
+    recordings: list[Path] = []
+    for pattern in RECORDING_PATTERNS:
+        recordings.extend(RECORDINGS_DIR.glob(pattern))
+    return sorted(
+        dict.fromkeys(recordings),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+
+def recording_payload(path: Path) -> dict[str, Any]:
+    stat = path.stat()
+    modified_at = datetime.fromtimestamp(stat.st_mtime)
+    duration_seconds = 0.0
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate:
+                duration_seconds = wav_file.getnframes() / frame_rate
+    except (OSError, wave.Error):
+        duration_seconds = 0.0
+    return {
+        "path": str(path),
+        "name": path.name,
+        "displayName": modified_at.strftime("%m/%d %H:%M"),
+        "sizeBytes": stat.st_size,
+        "modifiedAt": modified_at.isoformat(timespec="seconds"),
+        "durationSeconds": round(duration_seconds, 1),
+    }
+
+
+def write_combined_minutes(processed: list[dict[str, Any]]) -> dict[str, Any]:
+    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    markdown_path = RECORDINGS_DIR / f"combined-meeting-notes-{timestamp}.minutes.md"
+    docx_path = RECORDINGS_DIR / f"combined-meeting-notes-{timestamp}.minutes.docx"
+    lines = [
+        "# Combined Meeting Notes",
+        "",
+        "This document was generated from multiple selected meeting recordings.",
+        "",
+        "## Source Recordings",
+        "",
+    ]
+    for item in processed:
+        lines.append(f"- `{Path(item['recording']).name}`")
+    lines.extend(["", "## Integrated Notes", ""])
+    for index, item in enumerate(processed, start=1):
+        lines.append(f"### Source {index}: {Path(item['recording']).name}")
+        lines.append("")
+        text = str(item.get("minutesText") or "").strip()
+        if text:
+            lines.append(text)
+        else:
+            lines.append("- No readable notes were produced for this source.")
+        lines.append("")
+    minutes_text = "\n".join(lines).strip() + "\n"
+    markdown_path.write_text(minutes_text, encoding="utf-8")
+    write_minutes_docx(markdown_path, docx_path)
+    return {
+        "minutes": docx_path if docx_path.exists() else markdown_path,
+        "minutesMarkdown": markdown_path,
+        "minutesDocx": docx_path if docx_path.exists() else "",
+        "minutesText": minutes_text,
     }
 
 
@@ -449,7 +623,7 @@ async def open_latest_minutes() -> dict[str, Any]:
 
 def latest_minutes_file() -> Path | None:
     minutes_files = sorted(
-        [*RECORDINGS_DIR.glob("session-*.minutes.docx"), *RECORDINGS_DIR.glob("session-*.minutes.md")],
+        [path for pattern in MINUTES_PATTERNS for path in RECORDINGS_DIR.glob(pattern)],
         key=lambda path: path.stat().st_mtime,
         reverse=True,
     )
@@ -622,8 +796,8 @@ def session_recording_path() -> Path:
     ):
         return active_recording_path
 
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    active_recording_path = RECORDINGS_DIR / f"session-{timestamp}.wav"
+    timestamp = datetime.now().strftime("%m%d-%H%M%S")
+    active_recording_path = RECORDINGS_DIR / f"rec-{timestamp}.wav"
     return active_recording_path
 
 

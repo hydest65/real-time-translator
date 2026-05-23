@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=guided-meeting-flow-20260517" />
+    <link rel="stylesheet" href="/static/style.css?v=notes-cancel-fix-20260523" />
   </head>
   <body>
     <main class="studio">
@@ -37,72 +37,10 @@
           <button id="startButton" class="primary-flow-button">Start Meeting</button>
           <button id="endMeetingButton" class="end-flow-button" disabled>End Meeting</button>
           <button id="stopButton" class="secondary-flow-button hidden" disabled>Pause Captions</button>
-          <button id="processMeetingButton" class="export-button hidden">Generate Notes</button>
-          <button id="openMinutesButton" class="export-button notes-flow-button" disabled>Open Bilingual Notes</button>
           <a class="editor-link hidden" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
           <button id="downloadTranscriptButton" class="export-button hidden" disabled>Transcript</button>
           <button id="downloadMinutesButton" class="export-button hidden" disabled>Minutes</button>
 
-          <details class="advanced-settings">
-            <summary>Advanced Settings</summary>
-            <div class="advanced-settings-grid">
-              <label>
-                Engine
-                <select id="translationEngine">
-                  <option value="azure" selected>Azure Cloud</option>
-                  <option value="argos">Argos</option>
-                  <option value="marianmt">MarianMT</option>
-                  <option value="nllb">NLLB</option>
-                </select>
-              </label>
-
-              <label class="local-control local-extension local-preset-control">
-                ASR Preset
-                <select id="localAsrPreset">
-                  <option value="fast">Fast</option>
-                  <option value="balanced" selected>Balanced</option>
-                  <option value="accurate">Accurate</option>
-                </select>
-              </label>
-
-              <label class="local-control local-extension">
-                ASR
-                <select id="modelSize">
-                  <option value="small.en" selected>small.en</option>
-                  <option value="base.en">base.en</option>
-                  <option value="medium.en">medium.en</option>
-                </select>
-              </label>
-
-              <label class="local-control local-extension">
-                Device
-                <select id="deviceType">
-                  <option value="cuda" selected>cuda</option>
-                  <option value="auto">auto</option>
-                  <option value="cpu">cpu</option>
-                </select>
-              </label>
-
-              <label class="local-control local-extension">
-                Latency
-                <select id="localLatencyPreset">
-                  <option value="low" selected>Low</option>
-                  <option value="steady">Steady</option>
-                </select>
-              </label>
-
-              <label class="local-control local-extension">
-                Chunk
-                <select id="chunkSeconds">
-                  <option value="1">1s</option>
-                  <option value="1.5">1.5s</option>
-                  <option value="2" selected>2s</option>
-                  <option value="3">3s</option>
-                  <option value="5">5s</option>
-                </select>
-              </label>
-            </div>
-          </details>
         </section>
       </header>
 
@@ -121,10 +59,80 @@
             <span class="notice-pill muted" id="recordingStatusText">Off</span>
             <p class="panel-line" id="recordingFileText">No recording yet.</p>
           </div>
+          <div class="panel-section settings-panel">
+            <details class="advanced-settings">
+              <summary>Settings</summary>
+              <div class="advanced-settings-grid">
+                <label>
+                  Engine
+                  <select id="translationEngine">
+                    <option value="azure" selected>Azure Cloud</option>
+                    <option value="argos">Argos</option>
+                    <option value="marianmt">MarianMT</option>
+                    <option value="nllb">NLLB</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension local-preset-control">
+                  Performance
+                  <select id="localAsrPreset">
+                    <option value="fast">Fast</option>
+                    <option value="balanced" selected>Balanced</option>
+                    <option value="accurate">Accurate</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden">
+                  ASR
+                  <select id="modelSize">
+                    <option value="small.en" selected>small.en</option>
+                    <option value="base.en">base.en</option>
+                    <option value="medium.en">medium.en</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden">
+                  Device
+                  <select id="deviceType">
+                    <option value="cuda" selected>cuda</option>
+                    <option value="auto">auto</option>
+                    <option value="cpu">cpu</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden">
+                  Latency
+                  <select id="localLatencyPreset">
+                    <option value="low" selected>Low</option>
+                    <option value="steady">Steady</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden">
+                  Chunk
+                  <select id="chunkSeconds">
+                    <option value="1">1s</option>
+                    <option value="1.5">1.5s</option>
+                    <option value="2" selected>2s</option>
+                    <option value="3">3s</option>
+                    <option value="5">5s</option>
+                  </select>
+                </label>
+              </div>
+            </details>
+          </div>
           <div class="panel-section">
             <p class="panel-label">Meeting Notes</p>
             <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
-            <p class="panel-line" id="notesHintText">End the meeting to create one bilingual Word document.</p>
+            <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build bilingual notes.</p>
+            <div class="recording-picker" aria-label="Recorded meeting files">
+              <div class="recording-list" id="recordingList"></div>
+              <div class="panel-action-row">
+                <button class="panel-action-button is-primary" id="processMeetingButton" type="button">Build Notes</button>
+                <button class="panel-action-button" id="openMinutesButton" type="button" disabled>Open Notes</button>
+                <button class="panel-action-button" id="refreshRecordingsButton" type="button">Refresh</button>
+              </div>
+            </div>
           </div>
           <div class="panel-section">
             <p class="panel-label">Delay Hint</p>
@@ -175,7 +183,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=guided-meeting-flow-20260517"></script>
+    <script src="/static/app.js?v=notes-cancel-fix-20260523"></script>
   </body>
 </html>
 

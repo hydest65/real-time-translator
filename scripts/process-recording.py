@@ -1,8 +1,11 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import re
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -573,6 +576,462 @@ def translate_sentences_to_chinese(sentences: list[str]) -> list[str]:
         return [translation.translate(sentence).strip() for sentence in cleaned]
     except Exception:
         return []
+
+
+def build_natural_paragraphs(
+    transcript: list[TranscriptSegment],
+    max_words: int = 95,
+    max_seconds: int = 90,
+) -> list[tuple[float, float, str]]:
+    paragraphs: list[tuple[float, float, list[str]]] = []
+    current_start = 0.0
+    current_end = 0.0
+    current_words = 0
+    current_text: list[str] = []
+    previous_speaker = ""
+
+    for item in transcript:
+        text = clean_sentence(item.text)
+        if not text:
+            continue
+        words = len(text.split())
+        starts_new = (
+            bool(current_text)
+            and (
+                item.speaker != previous_speaker
+                or item.start - current_start >= max_seconds
+                or current_words + words > max_words
+            )
+        )
+        if starts_new:
+            paragraphs.append((current_start, current_end, current_text))
+            current_text = []
+            current_words = 0
+        if not current_text:
+            current_start = item.start
+        current_end = item.end
+        previous_speaker = item.speaker
+        current_words += words
+        current_text.append(text)
+
+    if current_text:
+        paragraphs.append((current_start, current_end, current_text))
+
+    return [
+        (start, end, polish_english_paragraph(join_transcript_parts(parts)))
+        for start, end, parts in paragraphs
+        if clean_sentence(" ".join(parts))
+    ]
+
+
+def join_transcript_parts(parts: list[str]) -> str:
+    sentences: list[str] = []
+    for part in parts:
+        text = clean_sentence(part)
+        if not text:
+            continue
+        if not re.search(r"[.!?]$", text):
+            text += "."
+        sentences.append(text)
+    return " ".join(sentences)
+
+
+def polish_english_paragraph(text: str) -> str:
+    polished = clean_sentence(text)
+    polished = re.sub(r"\b(and|but)\s+\1\b", r"\1", polished, flags=re.IGNORECASE)
+    polished = re.sub(r"\b(the|a|an)\s+\1\b", r"\1", polished, flags=re.IGNORECASE)
+    polished = re.sub(r"\b(like|you know),?\s+", "", polished, flags=re.IGNORECASE)
+    polished = re.sub(r"\s+", " ", polished)
+    return polished.strip()
+
+
+def extract_summary_points(paragraphs: list[tuple[float, float, str]], limit: int = 5) -> list[str]:
+    points: list[str] = []
+    seen: set[str] = set()
+    for _, _, paragraph in paragraphs:
+        sentences = split_readable_sentences(paragraph) or [paragraph]
+        candidate = sentences[0]
+        candidate = re.sub(r"^(so|and|but|well),?\s+", "", candidate, flags=re.IGNORECASE)
+        words = candidate.split()
+        if len(words) > 30:
+            candidate = " ".join(words[:30]).rstrip(" ,.;") + "."
+        key = candidate.lower()
+        if len(candidate.split()) >= 8 and key not in seen:
+            points.append(candidate)
+            seen.add(key)
+        if len(points) >= limit:
+            break
+    return points
+
+
+def extract_decisions(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"\bwe (decided|agreed|confirmed|approved|selected|chose)\b",
+        r"\bit was (decided|agreed|confirmed|approved)\b",
+        r"\bthe decision is\b",
+        r"\bfinal decision\b",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def extract_action_items(sentences: list[tuple[TranscriptSegment, str]], limit: int = 10) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"\b(can you|could you|please)\b.*\b(send|check|review|confirm|prepare|update|share|follow up)\b",
+        r"\b(i|we|they) (will|shall|need to|should|must|have to)\b.*\b(send|check|review|confirm|prepare|update|share|follow up|finish|submit)\b",
+        r"\b(action item|todo|next step|follow up)\b",
+        r"\bby (monday|tuesday|wednesday|thursday|friday|saturday|sunday|tomorrow|next week|today)\b",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def extract_risks(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"\b(risk|issue|problem|concern|blocked|blocker|delay|unclear|pending)\b",
+        r"\b(not enough|failed|missing)\b",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def pick_regex_items(
+    sentences: list[tuple[TranscriptSegment, str]],
+    patterns: list[str],
+    limit: int,
+) -> list[tuple[TranscriptSegment, str]]:
+    picked: list[tuple[TranscriptSegment, str]] = []
+    seen: set[str] = set()
+    for item, sentence in sentences:
+        normalized = clean_sentence(sentence)
+        lowered = normalized.lower()
+        if len(normalized.split()) < 5 or lowered in seen:
+            continue
+        if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns):
+            picked.append((item, normalized))
+            seen.add(lowered)
+        if len(picked) >= limit:
+            break
+    return picked
+
+
+def chinese_reading_lines(english_lines: list[str]) -> list[str]:
+    translated = translate_sentences_to_chinese(english_lines)
+    if not translated:
+        return []
+    return [polish_chinese_text(text) for text in translated]
+
+
+def polish_chinese_text(text: str) -> str:
+    polished = text.strip()
+    replacements = {
+        "读房间": "观察现场氛围",
+        "看看房间": "观察现场氛围",
+        "阅读房间": "观察现场氛围",
+        "有权利说不": "有拒绝的空间",
+        "没有权利拒绝": "缺少拒绝的空间",
+        "年轻人或年轻人": "年轻员工或初级员工",
+        "年假申请": "年假申请",
+        "嗡嗡作响的新公司": "热门的新兴公司",
+        "通过屋顶": "非常高",
+        "不能拒绝他们": "很难拒绝上级或公司要求",
+    }
+    for bad, good in replacements.items():
+        polished = polished.replace(bad, good)
+    polished = re.sub(r"\s+", "", polished)
+    return polished
+
+
+def ollama_notes_enabled() -> bool:
+    value = os.getenv("POST_MEETING_LLM_ENABLED", "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "rule", "rules"}
+
+
+def ollama_notes_model() -> str:
+    return os.getenv("OLLAMA_NOTES_MODEL", "gemma4:e2b").strip() or "gemma4:e2b"
+
+
+def ollama_notes_url() -> str:
+    host = os.getenv("OLLAMA_HOST", "http://127.0.0.1:11434").strip().rstrip("/")
+    return f"{host}/api/chat"
+
+
+def ollama_timeout_seconds() -> int:
+    try:
+        return max(10, int(os.getenv("POST_MEETING_LLM_TIMEOUT_SECONDS", "120")))
+    except ValueError:
+        return 120
+
+
+def transcript_for_writer(transcript: list[TranscriptSegment], max_chars: int = 14000) -> str:
+    rows: list[str] = []
+    for item in transcript:
+        text = clean_sentence(item.text)
+        if not text:
+            continue
+        rows.append(f"[{format_time(item.start)}-{format_time(item.end)}] {item.speaker}: {text}")
+    body = "\n".join(rows)
+    if len(body) <= max_chars:
+        return body
+    return body[:max_chars].rsplit("\n", 1)[0].rstrip()
+
+
+def ollama_minutes_markdown(
+    audio: Path,
+    transcript: list[TranscriptSegment],
+    total_start: float,
+    total_end: float,
+    speakers: list[str],
+) -> str:
+    if not ollama_notes_enabled():
+        return ""
+    source = transcript_for_writer(transcript)
+    if len(source.split()) < 80:
+        return ""
+    model = ollama_notes_model()
+    system_prompt = (
+        "You are a professional bilingual meeting-notes writer. "
+        "Create concise, faithful meeting minutes from an ASR transcript. "
+        "Do not invent decisions or action items. If none are explicit, say none detected. "
+        "Keep protected terms, acronyms, numbers, units, device IDs, and room/level labels unchanged. "
+        "Write natural English first, then a natural Simplified Chinese reading version. "
+        "Return Markdown only."
+    )
+    user_prompt = f"""
+Audio: {audio.name}
+Duration: {format_time(total_start)}-{format_time(total_end)}
+Speakers: {', '.join(speakers) if speakers else 'Not separated'}
+
+Required Markdown structure:
+# Meeting Notes
+
+## English Version
+- Audio: `{audio.name}`
+- Duration: {format_time(total_start)}-{format_time(total_end)}
+- Speakers: {', '.join(speakers) if speakers else 'Not separated'}
+- Source: post-meeting ASR transcript. Review before sharing.
+
+## 1. Executive Summary
+## 2. Key Discussion
+## 3. Decisions
+## 4. Action Items
+## 5. Risks / Open Questions
+## 6. Speaker Notes
+
+## 中文阅读版
+## 1. 摘要
+## 2. 讨论内容
+## 3. 决议
+## 4. 行动项
+## 5. 风险与待确认问题
+
+Rules:
+- Use bullet points under each section.
+- Do not treat generic statements as action items.
+- Include owners or timestamps only when the transcript clearly provides them.
+- Chinese should be rewritten naturally, not literal sentence-by-sentence translation.
+- If a section has no explicit evidence, write "No explicit ... detected." / "未检测到明确..."
+
+Transcript:
+{source}
+""".strip()
+    payload = {
+        "model": model,
+        "stream": False,
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ],
+        "options": {
+            "temperature": 0.2,
+            "num_ctx": 8192,
+        },
+    }
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        ollama_notes_url(),
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=ollama_timeout_seconds()) as response:
+            result = json.loads(response.read().decode("utf-8", errors="replace"))
+    except (OSError, urllib.error.URLError, TimeoutError, json.JSONDecodeError):
+        return ""
+
+    content = str((result.get("message") or {}).get("content") or "").strip()
+    if not content or "# Meeting Notes" not in content or "## English Version" not in content:
+        return ""
+    content = content.replace("```markdown", "").replace("```", "").strip()
+    print(f"Used Ollama notes writer: {model}")
+    return content + "\n\n---\n\nGenerated with Ollama model `" + model + "`.\n"
+
+
+def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+    cleaned_transcript = [
+        TranscriptSegment(
+            start=item.start,
+            end=item.end,
+            text=clean_sentence(item.text),
+            speaker=item.speaker,
+        )
+        for item in transcript
+    ]
+    usable = [item for item in cleaned_transcript if len(item.text.strip()) >= 8]
+    sentences = transcript_sentences(usable)
+    paragraphs = build_natural_paragraphs(usable)
+    total_start = min((item.start for item in usable), default=0.0)
+    total_end = max((item.end for item in usable), default=0.0)
+    sections = speaker_sections(usable)
+    speakers = sorted(sections)
+    summary_points = extract_summary_points(paragraphs)
+    decisions = extract_decisions(sentences)
+    actions = extract_action_items(sentences)
+    risks = extract_risks(sentences)
+    readable_word_count = sum(len(sentence.split()) for _, sentence in sentences)
+    is_substantive = readable_word_count >= 80 and len(sentences) >= 3
+    llm_minutes = ollama_minutes_markdown(audio, usable, total_start, total_end, speakers)
+    if llm_minutes:
+        return llm_minutes
+
+    lines = [
+        "# Meeting Notes",
+        "",
+        "This document is generated from post-meeting transcription. English is the master version; Chinese is a reading version for quick review.",
+        "",
+        "## English Version",
+        "",
+        f"- Audio: `{audio.name}`",
+        f"- Duration: {format_time(total_start)}-{format_time(total_end)}",
+        f"- Speakers: {', '.join(speakers) if speakers else 'Not separated'}",
+        "- Source: post-meeting ASR transcript. Review before sharing.",
+        "",
+        "## 1. Executive Summary",
+        "",
+    ]
+
+    if not is_substantive:
+        lines.append("- The recording did not contain enough clean discussion to generate reliable professional minutes.")
+    elif summary_points:
+        for point in summary_points:
+            lines.append(f"- {point}")
+    else:
+        lines.append("- No substantial transcript text was captured.")
+
+    lines.extend(["", "## 2. Discussion Notes", ""])
+    if paragraphs:
+        for start, end, paragraph in paragraphs:
+            lines.append(f"### {format_time(start)}-{format_time(end)}")
+            lines.append(paragraph)
+            lines.append("")
+    else:
+        lines.append("- No readable discussion blocks were detected.")
+
+    lines.extend(["", "## 3. Decisions", ""])
+    if not is_substantive:
+        lines.append("- Not enough clean meeting content to infer decisions safely.")
+    elif decisions:
+        for item, sentence in decisions:
+            lines.append(f"- [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- No explicit decisions were detected.")
+
+    lines.extend(["", "## 4. Action Items", ""])
+    if not is_substantive:
+        lines.append("- Not enough clean meeting content to infer action items safely.")
+    elif actions:
+        for item, sentence in actions:
+            lines.append(f"- [ ] [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- No explicit action items were detected.")
+
+    lines.extend(["", "## 5. Risks / Open Questions", ""])
+    if not is_substantive:
+        lines.append("- Main risk: the source recording is too short, unclear, or incomplete for dependable note extraction.")
+    elif risks:
+        for item, sentence in risks:
+            lines.append(f"- [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- No explicit risks or open questions were detected.")
+
+    lines.extend(["", "## 6. Speaker Notes", ""])
+    if sections:
+        for speaker, items in sections.items():
+            lines.append(f"### {speaker}")
+            for item in items[:18]:
+                lines.append(f"- {format_time(item.start)} {clean_sentence(item.text)}")
+            if len(items) > 18:
+                lines.append(f"- ... {len(items) - 18} more entries in full transcript")
+            lines.append("")
+    else:
+        lines.append("- Speaker separation is not available for this recording.")
+
+    lines.extend(["", "## 7. Full Transcript", ""])
+    for item in usable:
+        lines.append(f"- {format_time(item.start)}-{format_time(item.end)} `{item.speaker}` {item.text}")
+
+    lines.extend(["", "## 中文阅读版", ""])
+    lines.extend(
+        [
+            f"- 音频文件：`{audio.name}`",
+            f"- 时长：{format_time(total_start)}-{format_time(total_end)}",
+            f"- 说话人：{', '.join(speakers) if speakers else '未区分'}",
+            "- 说明：中文部分用于快速阅读，正式分享前建议以英文主版本复核。",
+            "",
+            "## 1. 摘要",
+            "",
+        ]
+    )
+
+    zh_summary = chinese_reading_lines(summary_points)
+    if not is_substantive:
+        lines.append("- 本段录音内容较短或不够完整，暂不能可靠生成正式会议纪要。")
+    elif zh_summary:
+        for point in zh_summary:
+            lines.append(f"- {point}")
+    else:
+        lines.append("- 中文翻译引擎不可用，请参考英文摘要。")
+
+    lines.extend(["", "## 2. 讨论内容", ""])
+    zh_discussion_source = summary_points[:3] if summary_points else [paragraph for _, _, paragraph in paragraphs[:2]]
+    zh_paragraphs = chinese_reading_lines(zh_discussion_source)
+    if zh_paragraphs:
+        for paragraph in zh_paragraphs:
+            lines.append(f"- {paragraph}")
+    elif paragraphs:
+        lines.append("- 中文翻译引擎不可用，请参考英文讨论内容。")
+    else:
+        lines.append("- 未检测到可读的讨论段落。")
+
+    lines.extend(["", "## 3. 决议", ""])
+    if not is_substantive:
+        lines.append("- 内容不足，不能安全推断会议决议。")
+    elif decisions:
+        zh_decisions = chinese_reading_lines([sentence for _, sentence in decisions])
+        for sentence in zh_decisions or [sentence for _, sentence in decisions]:
+            lines.append(f"- {sentence}")
+    else:
+        lines.append("- 未检测到明确决议。")
+
+    lines.extend(["", "## 4. 行动项", ""])
+    if not is_substantive:
+        lines.append("- 内容不足，不能安全推断行动项。")
+    elif actions:
+        zh_actions = chinese_reading_lines([sentence for _, sentence in actions])
+        for sentence in zh_actions or [sentence for _, sentence in actions]:
+            lines.append(f"- [ ] {sentence}")
+    else:
+        lines.append("- 未检测到明确行动项。")
+
+    lines.extend(["", "## 5. 风险与待确认问题", ""])
+    if not is_substantive:
+        lines.append("- 主要风险：录音过短、语音不清晰或内容不完整，纪要可靠性有限。")
+    elif risks:
+        zh_risks = chinese_reading_lines([sentence for _, sentence in risks])
+        for sentence in zh_risks or [sentence for _, sentence in risks]:
+            lines.append(f"- {sentence}")
+    else:
+        lines.append("- 未检测到明确风险或待确认问题。")
+
+    return "\n".join(lines)
 
 
 def write_outputs(

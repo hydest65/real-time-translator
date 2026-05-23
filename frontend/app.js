@@ -21,6 +21,8 @@ const downloadTranscriptButton = document.querySelector("#downloadTranscriptButt
 const downloadMinutesButton = document.querySelector("#downloadMinutesButton");
 const processMeetingButton = document.querySelector("#processMeetingButton");
 const openMinutesButton = document.querySelector("#openMinutesButton");
+const refreshRecordingsButton = document.querySelector("#refreshRecordingsButton");
+const recordingList = document.querySelector("#recordingList");
 const localControls = document.querySelectorAll(".local-control");
 const cloudControls = document.querySelectorAll(".cloud-control");
 const logText = document.querySelector("#logText");
@@ -52,6 +54,10 @@ let azureConfigured = false;
 let latestMinutesPath = "";
 let isRecordingActive = false;
 let isProcessingNotes = false;
+let notesAbortController = null;
+let notesTimeoutId = null;
+let availableRecordings = [];
+let selectedRecordingPaths = new Set();
 let lastSubtitleReceivedAt = 0;
 const maxDisplayHistory = 80;
 const maxChineseFlowCharacters = 520;
@@ -98,8 +104,80 @@ async function refreshLatestMinutesState() {
   }
 }
 
+async function refreshRecordings(preferredPath = "") {
+  if (!recordingList) {
+    return;
+  }
+  try {
+    const response = await fetch("/api/recordings");
+    if (!response.ok) {
+      throw new Error(`Recordings list failed: ${response.status}`);
+    }
+    const payload = await response.json();
+    availableRecordings = payload.recordings || [];
+    if (preferredPath) {
+      selectedRecordingPaths.add(preferredPath);
+    }
+    if (!selectedRecordingPaths.size && availableRecordings[0]) {
+      selectedRecordingPaths.add(availableRecordings[0].path);
+    }
+    renderRecordingList();
+  } catch (error) {
+    recordingList.textContent = "Could not load recordings.";
+  }
+  updateMeetingActionButtons();
+}
+
+function renderRecordingList() {
+  if (!recordingList) {
+    return;
+  }
+  recordingList.innerHTML = "";
+  if (!availableRecordings.length) {
+    const empty = document.createElement("p");
+    empty.className = "panel-line";
+    empty.textContent = "No recordings yet.";
+    recordingList.append(empty);
+    return;
+  }
+  availableRecordings.forEach((recording) => {
+    const label = document.createElement("label");
+    label.className = "recording-option";
+    const checkbox = document.createElement("input");
+    checkbox.type = "checkbox";
+    checkbox.value = recording.path;
+    checkbox.checked = selectedRecordingPaths.has(recording.path);
+    checkbox.addEventListener("change", () => {
+      if (checkbox.checked) {
+        selectedRecordingPaths.add(recording.path);
+      } else {
+        selectedRecordingPaths.delete(recording.path);
+      }
+      updateMeetingActionButtons();
+    });
+    const content = document.createElement("span");
+    const title = document.createElement("span");
+    title.className = "recording-title";
+    title.textContent = recording.displayName || recordingFileName(recording.path || recording.name);
+    const meta = document.createElement("div");
+    meta.className = "recording-meta";
+    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} · ${formatBytes(recording.sizeBytes || 0)}`;
+    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} | ${formatBytes(recording.sizeBytes || 0)}`;
+    content.append(title, meta);
+    label.append(checkbox, content);
+    recordingList.append(label);
+  });
+}
+
+function selectedRecordings() {
+  return availableRecordings
+    .filter((recording) => selectedRecordingPaths.has(recording.path))
+    .map((recording) => recording.path);
+}
+
 function updateMeetingActionButtons() {
   const isMeetingLive = Boolean(socket && socket.readyState === WebSocket.OPEN);
+  const hasSelectedRecordings = selectedRecordings().length > 0;
   startButton.textContent = "Start Meeting";
   startButton.classList.remove("is-danger", "is-ready");
   startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive;
@@ -107,29 +185,35 @@ function updateMeetingActionButtons() {
   openMinutesButton.classList.toggle("hidden", !latestMinutesPath && !isProcessingNotes);
 
   if (isProcessingNotes) {
+    processMeetingButton.textContent = "Cancel";
     openMinutesButton.textContent = "Creating Notes...";
     openMinutesButton.disabled = true;
     notesStatusText.textContent = "Creating";
     notesStatusText.classList.remove("muted");
-    notesHintText.textContent = "Please wait. The bilingual Word document will open when it is ready.";
+    notesHintText.textContent = "Please wait. Selected recordings are being transcribed and summarized.";
   } else if (isMeetingLive || isRecordingActive) {
+    processMeetingButton.textContent = "Build Notes";
     notesStatusText.textContent = "After meeting";
     notesStatusText.classList.add("muted");
-    notesHintText.textContent = "Ending the meeting will automatically create bilingual notes.";
+    notesHintText.textContent = "End the meeting first, then choose recordings and build notes.";
   } else if (latestMinutesPath) {
-    openMinutesButton.textContent = "Open Bilingual Notes";
+    processMeetingButton.textContent = "Build Notes";
+    openMinutesButton.textContent = "Open Notes";
     notesStatusText.textContent = "Ready";
     notesStatusText.classList.remove("muted");
     notesHintText.textContent = recordingFileName(latestMinutesPath);
   } else {
-    openMinutesButton.textContent = "Open Bilingual Notes";
-    notesStatusText.textContent = "Not created yet";
+    processMeetingButton.textContent = "Build Notes";
+    openMinutesButton.textContent = "Open Notes";
+    notesStatusText.textContent = hasSelectedRecordings ? "Ready to build" : "Select recordings";
     notesStatusText.classList.add("muted");
-    notesHintText.textContent = "End the meeting to create one bilingual Word document.";
+    notesHintText.textContent = hasSelectedRecordings
+      ? "Click Build Notes to create one bilingual document from selected recordings."
+      : "Choose one or more recordings as the source files.";
   }
 
   stopButton.disabled = !isMeetingLive || isProcessingNotes;
-  processMeetingButton.disabled = isRecordingActive || isProcessingNotes;
+  processMeetingButton.disabled = isRecordingActive || (!isProcessingNotes && !hasSelectedRecordings);
   openMinutesButton.disabled = isRecordingActive || isProcessingNotes || !latestMinutesPath;
 }
 
@@ -283,8 +367,27 @@ function formatDuration(milliseconds) {
   return `${minutes}:${seconds}`;
 }
 
+function formatBytes(bytes) {
+  if (!bytes) {
+    return "0 KB";
+  }
+  const units = ["B", "KB", "MB", "GB"];
+  let size = bytes;
+  let unitIndex = 0;
+  while (size >= 1024 && unitIndex < units.length - 1) {
+    size /= 1024;
+    unitIndex += 1;
+  }
+  return `${size.toFixed(unitIndex ? 1 : 0)} ${units[unitIndex]}`;
+}
+
 function recordingFileName(path) {
-  return String(path || "").split(/[\\/]/).pop() || "Recording file pending.";
+  const fileName = String(path || "").split(/[\\/]/).pop() || "";
+  const match = fileName.match(/(?:session-)?(\d{4})?(\d{2})(\d{2})-(\d{2})(\d{2})(\d{2})/);
+  if (match) {
+    return `${match[2]}/${match[3]} ${match[4]}:${match[5]}`;
+  }
+  return fileName || "Recording file pending.";
 }
 
 function updateRecordingPanel(state, path = currentRecordingPath) {
@@ -537,7 +640,7 @@ function formatTimestamp(value) {
 function updateEngineControls() {
   const isCloud = translationEngine.value === "azure";
   localControls.forEach((item) => {
-    item.classList.toggle("hidden", isCloud);
+    item.classList.toggle("hidden", isCloud || item.classList.contains("internal-control"));
   });
   cloudControls.forEach((item) => {
     item.classList.toggle("hidden", !isCloud);
@@ -754,8 +857,11 @@ function applyLocalAsrPreset() {
     return;
   }
   const profile = localAsrProfile();
+  deviceType.value = "cuda";
+  localLatencyPreset.value = localAsrPreset.value === "accurate" ? "steady" : "low";
   modelSize.value = profile.model;
   perfText.textContent = profile.label;
+  applyLocalLatencyPreset();
 }
 
 function applyLocalLatencyPreset() {
@@ -965,27 +1071,47 @@ async function endMeeting() {
       throw new Error(`End meeting failed: ${response.status}`);
     }
     noticeText.textContent = "Meeting ended";
-    logText.textContent = "Recording session closed. Next Start will create a new WAV file.";
+    const payload = await response.json().catch(() => ({}));
+    const endedRecording = payload.endedRecording || currentRecordingPath;
+    if (endedRecording) {
+      currentRecordingPath = endedRecording;
+      selectedRecordingPaths.add(endedRecording);
+    }
+    logText.textContent = "Recording session closed. Choose recordings and click Build Notes when ready.";
     updateRecordingPanel("ended");
-    setStatus("Creating notes", "Meeting ended. Creating one bilingual Word document.");
-    await processMeetingRecording();
+    setStatus("Stopped", "Meeting ended. Notes can be built later from selected recordings.");
+    await refreshRecordings(endedRecording);
   } catch (error) {
     setStatus("Error", error.message || "Could not end meeting.");
   }
 }
 
 async function processMeetingRecording() {
-  if (isRecordingActive || isProcessingNotes) {
+  if (isProcessingNotes) {
+    await cancelMeetingNotes();
+    return;
+  }
+  if (isRecordingActive) {
     return;
   }
   isProcessingNotes = true;
   latestMinutesPath = "";
+  notesAbortController = new AbortController();
+  notesTimeoutId = window.setTimeout(() => {
+    cancelMeetingNotes("Meeting notes timed out. Try a shorter recording.");
+  }, 8 * 60 * 1000);
   updateMeetingActionButtons();
   noticeText.textContent = "Processing meeting notes";
-  logText.textContent = "Running post-meeting transcription with FunASR. This can take a while on CPU.";
+  const recordings = selectedRecordings();
+  logText.textContent = `Building notes from ${recordings.length} selected recording(s). You can cancel this if it takes too long.`;
   updateDelayHintFromStatus("Creating notes", logText.textContent);
   try {
-    const response = await fetch("/api/process-recording", { method: "POST" });
+    const response = await fetch("/api/process-recording", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recordings }),
+      signal: notesAbortController.signal,
+    });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
       throw new Error(payload.detail || "Post-meeting processing failed.");
@@ -996,6 +1122,7 @@ async function processMeetingRecording() {
     noticeText.textContent = "Meeting notes ready";
     logText.textContent = [
       "Post-meeting files generated.",
+      `ASR engine: ${payload.asrEngine || "auto"}`,
       `Recording: ${payload.recording}`,
       `Transcript: ${payload.transcript}`,
       `Minutes: ${payload.minutes}`,
@@ -1004,13 +1131,37 @@ async function processMeetingRecording() {
     ].join("\n");
     setStatus("Stopped", "Meeting notes ready.");
   } catch (error) {
-    noticeText.textContent = "Meeting notes failed";
-    setStatus("Error", error.message || "Post-meeting processing failed.");
-    logText.textContent = error.message || "Post-meeting processing failed.";
+    if (error.name === "AbortError") {
+      noticeText.textContent = "Meeting notes cancelled";
+      setStatus("Stopped", "Meeting notes generation was cancelled.");
+      logText.textContent = "Post-meeting notes generation was cancelled. Choose recordings and build again when ready.";
+    } else {
+      noticeText.textContent = "Meeting notes failed";
+      setStatus("Error", error.message || "Post-meeting processing failed.");
+      logText.textContent = error.message || "Post-meeting processing failed.";
+    }
   } finally {
+    if (notesTimeoutId) {
+      window.clearTimeout(notesTimeoutId);
+      notesTimeoutId = null;
+    }
+    notesAbortController = null;
     isProcessingNotes = false;
     updateMeetingActionButtons();
   }
+}
+
+async function cancelMeetingNotes(message = "Meeting notes generation was cancelled.") {
+  try {
+    await fetch("/api/cancel-process-recording", { method: "POST" });
+  } catch (error) {
+    // The local abort below still releases the UI.
+  }
+  if (notesAbortController) {
+    notesAbortController.abort();
+  }
+  noticeText.textContent = "Meeting notes cancelled";
+  logText.textContent = message;
 }
 
 async function openLatestMinutes() {
@@ -1045,6 +1196,7 @@ stopButton.addEventListener("click", stop);
 endMeetingButton.addEventListener("click", endMeeting);
 processMeetingButton.addEventListener("click", processMeetingRecording);
 openMinutesButton.addEventListener("click", openLatestMinutes);
+refreshRecordingsButton?.addEventListener("click", () => refreshRecordings(currentRecordingPath));
 downloadTranscriptButton.addEventListener("click", () => {
   downloadMarkdown("meeting-transcript", transcriptMarkdown());
 });
@@ -1069,3 +1221,4 @@ updateEngineControls();
 updateLanguageHints();
 loadRuntimeConfig();
 refreshLatestMinutesState();
+refreshRecordings();

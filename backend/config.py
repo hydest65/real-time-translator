@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+import os
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
 
@@ -21,10 +22,8 @@ def load_dotenv_file() -> None:
         name, value = stripped.split("=", 1)
         name = name.strip()
         value = value.strip().strip('"').strip("'")
-        if name:
-            import os
-
-            os.environ.setdefault(name, value)
+        if name and value and not os.environ.get(name):
+            os.environ[name] = value
 
 
 load_dotenv_file()
@@ -53,11 +52,11 @@ class AppConfig:
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
     marian_es_zh_model_name: str = "Helsinki-NLP/opus-mt-es-zh"
-    azure_speech_key: str = ""
-    azure_speech_region: str = ""
+    azure_speech_key: str = field(default_factory=lambda: os.getenv("AZURE_SPEECH_KEY", ""))
+    azure_speech_region: str = field(default_factory=lambda: os.getenv("AZURE_SPEECH_REGION", ""))
     azure_source_language: str = "en-US"
     azure_target_language: str = "zh-Hans"
-    azure_phrase_list: str = ""
+    azure_phrase_list: str = field(default_factory=lambda: os.getenv("AZURE_PHRASE_LIST", ""))
     turn_detector_enabled: bool = True
     turn_pause_seconds: float = 1.6
     noise_min_words: int = 2
