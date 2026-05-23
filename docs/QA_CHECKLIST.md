@@ -46,6 +46,17 @@ Current closeout result on 2026-05-17:
 - Local realtime defaults now use `2s` / `3s` chunk behavior depending on latency preset, with fuller sentence aggregation before Chinese translation.
 - Argos remains the recommended local real-time engine on this environment.
 
+Current closeout result on 2026-05-24:
+
+- Python syntax checks passed for backend modules and post-meeting scripts.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- `git diff --check` passed.
+- Secret scan found only placeholders and documented environment-variable names, not live tokens or SAS signatures.
+- Azure Batch configuration smoke test currently reports `azure_batch_configured=False`, so this machine will use local post-meeting fallback until `AZURE_BATCH_CONTAINER_SAS_URL` is added.
+- Selected-engine meeting-notes routing was verified: Azure mode attempts Azure Batch when configured, and local engines use local faster-whisper without speaker separation.
+- Local fallback regression test completed on a real WAV recording and did not create a `.speakers.md` file for unverified pause-based turns.
+- Azure Fast Transcription diarization was tested and returned an endpoint-side 400 response, so it is not the chosen diarization route.
+
 ## Runtime Smoke Test
 
 ```powershell

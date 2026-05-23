@@ -9,6 +9,7 @@ import numpy as np
 
 from .audio_capture import MicrophoneAudioCapture
 from .config import AppConfig, load_dotenv_file
+from .terminology import build_azure_phrase_list
 
 
 @dataclass
@@ -76,8 +77,14 @@ class AzureSpeechTranslationSession:
             audio_config=audio_config,
         )
         phrase_list = speechsdk.PhraseListGrammar.from_recognizer(self.recognizer)
-        for phrase in parse_phrase_list(active_config.azure_phrase_list or os.getenv("AZURE_PHRASE_LIST", "")):
+        phrases = build_azure_phrase_list(
+            active_config.azure_phrase_list,
+            source_language=active_config.azure_source_language,
+        )
+        for phrase in phrases:
             phrase_list.addPhrase(phrase)
+        if phrases:
+            print(f"[terms] Azure phrase list loaded: {len(phrases)} terms", flush=True)
 
         self.target_language = active_config.azure_target_language
         self.recognizer.recognizing.connect(self._on_recognizing)
@@ -182,12 +189,3 @@ async def stream_microphone_to_azure(
             )
             last_audio_notice_at = now
         session.write_audio(frame)
-
-
-def parse_phrase_list(raw: str) -> list[str]:
-    phrases: list[str] = []
-    for piece in raw.replace("\n", ",").replace(";", ",").split(","):
-        phrase = piece.strip()
-        if phrase:
-            phrases.append(phrase)
-    return phrases

@@ -46,8 +46,32 @@ def main() -> int:
             "Set HF_TOKEN first. pyannote speaker diarization models require Hugging Face access."
         )
 
-    pipeline = Pipeline.from_pretrained(args.model, use_auth_token=args.token)
-    diarization = pipeline(str(args.audio))
+    try:
+        pipeline = Pipeline.from_pretrained(args.model, token=args.token)
+    except TypeError:
+        pipeline = Pipeline.from_pretrained(args.model, use_auth_token=args.token)
+
+    try:
+        import numpy as np
+        import torch
+        from scipy.io import wavfile
+    except ImportError:
+        diarization = pipeline(str(args.audio))
+    else:
+        sample_rate, samples = wavfile.read(str(args.audio))
+        samples = np.asarray(samples)
+        if samples.ndim == 1:
+            samples = samples[None, :]
+        else:
+            samples = samples.T
+        if np.issubdtype(samples.dtype, np.integer):
+            samples = samples.astype("float32") / float(np.iinfo(samples.dtype).max)
+        else:
+            samples = samples.astype("float32")
+        waveform = torch.from_numpy(samples)
+        diarization = pipeline({"waveform": waveform, "sample_rate": int(sample_rate)})
+    if hasattr(diarization, "speaker_diarization"):
+        diarization = diarization.speaker_diarization
 
     output_base = args.audio.with_suffix("")
     rttm_path = output_base.with_suffix(".speakers.rttm")

@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=notes-cancel-fix-20260523" />
+    <link rel="stylesheet" href="/static/style.css?v=notes-progress-chunk-20260523" />
   </head>
   <body>
     <main class="studio">
@@ -125,6 +125,15 @@
             <p class="panel-label">Meeting Notes</p>
             <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
             <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build bilingual notes.</p>
+            <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
+              <div class="notes-progress-header">
+                <span id="notesProgressStage">Preparing</span>
+                <span id="notesProgressPercent">0%</span>
+              </div>
+              <div class="notes-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                <div class="notes-progress-fill" id="notesProgressFill"></div>
+              </div>
+            </div>
             <div class="recording-picker" aria-label="Recorded meeting files">
               <div class="recording-list" id="recordingList"></div>
               <div class="panel-action-row">
@@ -183,7 +192,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=notes-cancel-fix-20260523"></script>
+    <script src="/static/app.js?v=notes-progress-chunk-20260523"></script>
   </body>
 </html>
 

@@ -38,7 +38,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 
 - `Fast` is the only active mode.
 - Azure Cloud streams live bilingual subtitles directly from Azure Speech Translation.
-- Local fallback translates each ASR result immediately without delayed polishing or quality-mode buffering.
+- Local fallback shows ASR drafts immediately, then translates complete ready utterances through a short contextual buffer rather than a slower polishing or quality-mode path.
 - Local fallback shows stable English context as a continuous text pane that fills first and then scrolls, keeps the current live draft in a separate lower English pane, then sends complete Chinese sentence translations to a continuous Chinese pane.
 
 ## Out Of Scope For This Version

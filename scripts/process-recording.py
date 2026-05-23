@@ -4,13 +4,24 @@ import argparse
 import json
 import os
 import re
+import sys
+import tempfile
+import time
 import urllib.error
+import urllib.parse
 import urllib.request
+import uuid
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from backend.terminology import build_hotword_text, build_meeting_prompt
+
 DEFAULT_MODEL_CACHE = PROJECT_ROOT / ".model-cache"
 DEFAULT_HF_CACHE = DEFAULT_MODEL_CACHE / "huggingface"
 DEFAULT_MODEL_CACHE.mkdir(parents=True, exist_ok=True)
@@ -19,11 +30,23 @@ os.environ.setdefault("HF_HOME", str(DEFAULT_HF_CACHE))
 os.environ.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_CACHE / "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", str(DEFAULT_HF_CACHE / "transformers"))
 
-DEFAULT_MEETING_PROMPT = (
-    "Engineering meeting transcript. Common terms include Teams, Codex, Azure, "
-    "Whisper, Argos, HVAC, MEP, BIM, cleanroom, commissioning, validation, "
-    "equipment, energy efficiency, maintenance, system, unit, decision, project."
-)
+
+def load_dotenv_file() -> None:
+    env_path = PROJECT_ROOT / ".env"
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        name, value = stripped.split("=", 1)
+        name = name.strip()
+        value = value.strip().strip('"').strip("'")
+        if name and value and not os.environ.get(name):
+            os.environ[name] = value
+
+
+load_dotenv_file()
 
 FUNASR_MODEL_BY_QUALITY = {
     "fast": "iic/SenseVoiceSmall",
@@ -51,6 +74,14 @@ class SpeakerSegment:
     start: float
     end: float
     speaker: str
+
+
+@dataclass
+class TopicSection:
+    title: str
+    start: float
+    end: float
+    bullets: list[str]
 
 
 QUALITY_PRESETS = {
@@ -87,9 +118,339 @@ def format_time(seconds: float) -> str:
 
 
 def transcribe_audio(args: argparse.Namespace) -> list[TranscriptSegment]:
+    if args.asr_engine == "azure-batch":
+        return transcribe_audio_azure_batch(args)
+    if args.asr_engine == "azure-fast":
+        return transcribe_audio_azure_fast(args)
     if args.asr_engine == "funasr":
         return transcribe_audio_funasr(args)
     return transcribe_audio_faster_whisper(args)
+
+
+def transcribe_audio_azure_fast(args: argparse.Namespace) -> list[TranscriptSegment]:
+    key = os.getenv("AZURE_SPEECH_KEY", "").strip()
+    region = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    endpoint = (
+        os.getenv("AZURE_FAST_TRANSCRIPTION_ENDPOINT", "").strip()
+        or os.getenv("AZURE_SPEECH_ENDPOINT", "").strip()
+    )
+    if not endpoint:
+        if not region:
+            raise SystemExit("Set AZURE_SPEECH_REGION or AZURE_FAST_TRANSCRIPTION_ENDPOINT for Azure Fast Transcription.")
+        endpoint = f"https://{region}.api.cognitive.microsoft.com"
+    if not key:
+        raise SystemExit("Set AZURE_SPEECH_KEY for Azure Fast Transcription.")
+
+    api_version = os.getenv("AZURE_FAST_TRANSCRIPTION_API_VERSION", "2024-11-15").strip() or "2024-11-15"
+    locale = azure_fast_locale(args.language)
+    max_speakers = max(2, min(35, int(args.azure_fast_max_speakers or 5)))
+    definition = {
+        "locales": [locale],
+        "diarization": {
+            "enabled": bool(args.azure_fast_diarization),
+            "maxSpeakers": max_speakers,
+        },
+    }
+    url = f"{endpoint.rstrip('/')}/speechtotext/transcriptions:transcribe?api-version={api_version}"
+    print(f"Using Azure Fast Transcription: locale={locale}, diarization={definition['diarization']['enabled']}, maxSpeakers={max_speakers}")
+    response = post_azure_fast_transcription(url, key, args.audio, definition, args.azure_fast_timeout_seconds)
+    return normalize_azure_fast_output(response)
+
+
+def azure_fast_locale(language: str) -> str:
+    language = (language or "").strip()
+    aliases = {
+        "": "en-US",
+        "auto": "en-US",
+        "en": "en-US",
+        "eng": "en-US",
+        "english": "en-US",
+        "zh": "zh-CN",
+        "zho": "zh-CN",
+        "chinese": "zh-CN",
+    }
+    return aliases.get(language.lower(), language)
+
+
+def post_azure_fast_transcription(
+    url: str,
+    key: str,
+    audio: Path,
+    definition: dict[str, object],
+    timeout_seconds: int,
+) -> dict[str, object]:
+    boundary = "----SubtitleStudioAzureFastBoundary"
+    audio_bytes = audio.read_bytes()
+    definition_json = json.dumps(definition, ensure_ascii=False)
+    body = b"".join(
+        [
+            f"--{boundary}\r\n".encode("utf-8"),
+            b'Content-Disposition: form-data; name="definition"\r\n',
+            b"Content-Type: application/json\r\n\r\n",
+            definition_json.encode("utf-8"),
+            b"\r\n",
+            f"--{boundary}\r\n".encode("utf-8"),
+            f'Content-Disposition: form-data; name="audio"; filename="{audio.name}"\r\n'.encode("utf-8"),
+            b"Content-Type: audio/wav\r\n\r\n",
+            audio_bytes,
+            b"\r\n",
+            f"--{boundary}--\r\n".encode("utf-8"),
+        ]
+    )
+    request = urllib.request.Request(
+        url,
+        data=body,
+        headers={
+            "Content-Type": f"multipart/form-data; boundary={boundary}",
+            "Ocp-Apim-Subscription-Key": key,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=max(30, timeout_seconds)) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"Azure Fast Transcription failed: HTTP {exc.code} {detail[:1200]}") from exc
+    except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Azure Fast Transcription failed: {exc}") from exc
+
+
+def normalize_azure_fast_output(output: dict[str, object]) -> list[TranscriptSegment]:
+    phrases = output.get("phrases")
+    if not isinstance(phrases, list):
+        return []
+    segments: list[TranscriptSegment] = []
+    for phrase in phrases:
+        if not isinstance(phrase, dict):
+            continue
+        text = str(phrase.get("text") or "").strip()
+        if not text:
+            continue
+        offset_ms = phrase.get("offsetMilliseconds", phrase.get("offset", 0))
+        duration_ms = phrase.get("durationMilliseconds", phrase.get("duration", 0))
+        try:
+            start = float(offset_ms or 0) / 1000.0
+            duration = float(duration_ms or 0) / 1000.0
+        except (TypeError, ValueError):
+            start = 0.0
+            duration = 0.0
+        speaker = phrase.get("speaker")
+        speaker_label = "Speaker ?"
+        if speaker is not None:
+            try:
+                speaker_label = f"SPEAKER_{int(speaker):02d}"
+            except (TypeError, ValueError):
+                speaker_label = f"SPEAKER_{speaker}"
+        segments.append(
+            TranscriptSegment(
+                start=start,
+                end=start + max(0.0, duration),
+                text=text,
+                speaker=speaker_label,
+            )
+        )
+    return segments
+
+
+def transcribe_audio_azure_batch(args: argparse.Namespace) -> list[TranscriptSegment]:
+    key = os.getenv("AZURE_SPEECH_KEY", "").strip()
+    region = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    endpoint = os.getenv("AZURE_BATCH_TRANSCRIPTION_ENDPOINT", "").strip()
+    container_sas = os.getenv("AZURE_BATCH_CONTAINER_SAS_URL", "").strip()
+    if not key:
+        raise SystemExit("Set AZURE_SPEECH_KEY for Azure Batch Transcription.")
+    if not endpoint:
+        if not region:
+            raise SystemExit("Set AZURE_SPEECH_REGION or AZURE_BATCH_TRANSCRIPTION_ENDPOINT for Azure Batch Transcription.")
+        endpoint = f"https://{region}.api.cognitive.microsoft.com"
+    if not container_sas:
+        raise SystemExit("Set AZURE_BATCH_CONTAINER_SAS_URL to an Azure Blob container SAS URL for Batch Transcription.")
+
+    locale = azure_fast_locale(args.language)
+    max_speakers = max(2, min(35, int(args.azure_batch_max_speakers or 5)))
+    print("Azure Batch: uploading recording")
+    audio_url = upload_audio_to_blob_container(args.audio, container_sas)
+    print(f"Using Azure Batch Transcription: locale={locale}, diarization=True, maxSpeakers={max_speakers}")
+    print("Azure Batch: submitting job")
+    job = submit_azure_batch_job(endpoint, key, audio_url, args.audio.name, locale, max_speakers, args.azure_batch_ttl_hours)
+    print("Azure Batch: waiting for transcription")
+    result = wait_for_azure_batch_job(job, key, args.azure_batch_poll_seconds, args.azure_batch_timeout_seconds)
+    print("Azure Batch: downloading result")
+    return normalize_azure_batch_output(result)
+
+
+def upload_audio_to_blob_container(audio: Path, container_sas_url: str) -> str:
+    parsed = urllib.parse.urlsplit(container_sas_url)
+    if not parsed.scheme or not parsed.netloc or not parsed.query:
+        raise SystemExit("AZURE_BATCH_CONTAINER_SAS_URL must be a full container SAS URL.")
+    safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "-", audio.name)
+    blob_name = f"subtitle-studio/{int(time.time())}-{uuid.uuid4().hex[:8]}-{safe_name}"
+    container_path = parsed.path.rstrip("/")
+    blob_path = f"{container_path}/{urllib.parse.quote(blob_name)}"
+    upload_url = urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, blob_path, parsed.query, ""))
+    request = urllib.request.Request(
+        upload_url,
+        data=audio.read_bytes(),
+        headers={
+            "x-ms-blob-type": "BlockBlob",
+            "Content-Type": "audio/wav",
+        },
+        method="PUT",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=300):
+            pass
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"Azure Blob upload failed: HTTP {exc.code} {detail[:1200]}") from exc
+    except (OSError, TimeoutError) as exc:
+        raise SystemExit(f"Azure Blob upload failed: {exc}") from exc
+    return upload_url
+
+
+def submit_azure_batch_job(
+    endpoint: str,
+    key: str,
+    audio_url: str,
+    audio_name: str,
+    locale: str,
+    max_speakers: int,
+    ttl_hours: int,
+) -> dict[str, object]:
+    api_version = os.getenv("AZURE_BATCH_TRANSCRIPTION_API_VERSION", "v3.2").strip() or "v3.2"
+    url = f"{endpoint.rstrip('/')}/speechtotext/{api_version}/transcriptions"
+    payload = {
+        "contentUrls": [audio_url],
+        "locale": locale,
+        "displayName": f"Subtitle Studio {audio_name} {int(time.time())}",
+        "properties": {
+            "diarizationEnabled": True,
+            "diarization": {
+                "speakers": {
+                    "minCount": 1,
+                    "maxCount": max_speakers,
+                }
+            },
+            "wordLevelTimestampsEnabled": False,
+            "displayFormWordLevelTimestampsEnabled": True,
+            "punctuationMode": "DictatedAndAutomatic",
+            "profanityFilterMode": "None",
+            "timeToLiveHours": max(6, min(744, int(ttl_hours or 48))),
+        },
+    }
+    data = json.dumps(payload).encode("utf-8")
+    request = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json",
+            "Ocp-Apim-Subscription-Key": key,
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=60) as response:
+            return json.loads(response.read().decode("utf-8", errors="replace"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")
+        raise SystemExit(f"Azure Batch submit failed: HTTP {exc.code} {detail[:1200]}") from exc
+    except (OSError, TimeoutError, json.JSONDecodeError) as exc:
+        raise SystemExit(f"Azure Batch submit failed: {exc}") from exc
+
+
+def wait_for_azure_batch_job(
+    job: dict[str, object],
+    key: str,
+    poll_seconds: int,
+    timeout_seconds: int,
+) -> dict[str, object]:
+    self_url = str(job.get("self") or "")
+    if not self_url:
+        raise SystemExit("Azure Batch submit response did not include a job URL.")
+    headers = {"Ocp-Apim-Subscription-Key": key}
+    deadline = time.time() + max(60, timeout_seconds)
+    poll_interval = max(5, min(60, int(poll_seconds or 10)))
+    while time.time() < deadline:
+        status_job = get_json(self_url, headers)
+        status = str(status_job.get("status") or "")
+        print(f"Azure Batch status: {status}")
+        if status.lower() == "succeeded":
+            files_url = str((status_job.get("links") or {}).get("files") or "")
+            return download_azure_batch_transcription(files_url, headers)
+        if status.lower() in {"failed", "failedvalidation"}:
+            raise SystemExit(f"Azure Batch transcription failed: {json.dumps(status_job)[:1200]}")
+        time.sleep(poll_interval)
+    raise SystemExit("Azure Batch transcription timed out.")
+
+
+def get_json(url: str, headers: dict[str, str]) -> dict[str, object]:
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    with urllib.request.urlopen(request, timeout=60) as response:
+        return json.loads(response.read().decode("utf-8", errors="replace"))
+
+
+def download_azure_batch_transcription(files_url: str, headers: dict[str, str]) -> dict[str, object]:
+    if not files_url:
+        raise SystemExit("Azure Batch job did not include a files URL.")
+    files = get_json(files_url, headers)
+    values = files.get("values")
+    if not isinstance(values, list):
+        raise SystemExit("Azure Batch files response did not include values.")
+    for item in values:
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").lower()
+        name = str(item.get("name") or "").lower()
+        content_url = str((item.get("links") or {}).get("contentUrl") or "")
+        if content_url and (kind == "transcription" or name.endswith(".json")):
+            return get_json(content_url, {})
+    raise SystemExit("Azure Batch transcription result file was not found.")
+
+
+def normalize_azure_batch_output(output: dict[str, object]) -> list[TranscriptSegment]:
+    phrases = output.get("recognizedPhrases") or output.get("phrases")
+    if not isinstance(phrases, list):
+        return []
+    segments: list[TranscriptSegment] = []
+    for phrase in phrases:
+        if not isinstance(phrase, dict):
+            continue
+        text = azure_batch_phrase_text(phrase)
+        if not text:
+            continue
+        start = azure_batch_seconds(phrase.get("offsetInTicks", phrase.get("offset", phrase.get("offsetMilliseconds", 0))))
+        duration = azure_batch_seconds(phrase.get("durationInTicks", phrase.get("duration", phrase.get("durationMilliseconds", 0))))
+        speaker = phrase.get("speaker")
+        speaker_label = "Speaker ?"
+        if speaker is not None:
+            try:
+                speaker_label = f"SPEAKER_{int(speaker):02d}"
+            except (TypeError, ValueError):
+                speaker_label = f"SPEAKER_{speaker}"
+        segments.append(TranscriptSegment(start=start, end=start + max(0.0, duration), text=text, speaker=speaker_label))
+    return sorted(segments, key=lambda item: (item.start, item.end))
+
+
+def azure_batch_phrase_text(phrase: dict[str, object]) -> str:
+    nbest = phrase.get("nBest")
+    if isinstance(nbest, list) and nbest:
+        first = nbest[0]
+        if isinstance(first, dict):
+            return str(first.get("display") or first.get("displayText") or first.get("lexical") or "").strip()
+    return str(phrase.get("text") or phrase.get("display") or "").strip()
+
+
+def azure_batch_seconds(value: object) -> float:
+    try:
+        number = float(value or 0)
+    except (TypeError, ValueError):
+        return 0.0
+    if number > 100000:
+        return number / 10_000_000.0
+    if number > 1000:
+        return number / 1000.0
+    return number
 
 
 def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[TranscriptSegment]:
@@ -100,9 +461,54 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
             "faster-whisper is not installed. Run: python -m pip install -r backend\\requirements.txt"
         ) from exc
 
+    meeting_prompt = build_meeting_prompt(limit=100)
+    hotword_text = build_hotword_text(limit=100)
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
+    duration = wav_duration_seconds(args.audio)
+    chunk_seconds = max(0, int(args.asr_chunk_seconds or 0))
+    if chunk_seconds and duration > chunk_seconds * 1.2:
+        return transcribe_audio_faster_whisper_chunked(model, args, chunk_seconds, meeting_prompt, hotword_text)
+    return transcribe_faster_whisper_path(model, args, args.audio, 0.0, meeting_prompt, hotword_text)
+
+
+def transcribe_audio_faster_whisper_chunked(
+    model: object,
+    args: argparse.Namespace,
+    chunk_seconds: int,
+    meeting_prompt: str,
+    hotword_text: str,
+) -> list[TranscriptSegment]:
+    with tempfile.TemporaryDirectory(prefix="meeting-asr-", dir=str(DEFAULT_MODEL_CACHE)) as temp_dir_name:
+        chunks = build_wav_chunks(args.audio, Path(temp_dir_name), chunk_seconds)
+        if not chunks:
+            return transcribe_faster_whisper_path(model, args, args.audio, 0.0, meeting_prompt, hotword_text)
+        print(f"Using chunked ASR: {len(chunks)} chunk(s), {chunk_seconds}s each")
+        results: list[TranscriptSegment] = []
+        for index, (chunk_path, offset_seconds) in enumerate(chunks, start=1):
+            print(f"ASR chunk {index}/{len(chunks)} at {format_time(offset_seconds)}")
+            results.extend(
+                transcribe_faster_whisper_path(
+                    model,
+                    args,
+                    chunk_path,
+                    offset_seconds,
+                    meeting_prompt,
+                    hotword_text,
+                )
+            )
+        return sorted(results, key=lambda item: (item.start, item.end))
+
+
+def transcribe_faster_whisper_path(
+    model: object,
+    args: argparse.Namespace,
+    audio_path: Path,
+    offset_seconds: float,
+    meeting_prompt: str,
+    hotword_text: str,
+) -> list[TranscriptSegment]:
     segments, _ = model.transcribe(
-        str(args.audio),
+        str(audio_path),
         language=args.language,
         vad_filter=True,
         beam_size=args.beam_size,
@@ -110,8 +516,8 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
         patience=args.patience,
         temperature=0,
         condition_on_previous_text=True,
-        initial_prompt=DEFAULT_MEETING_PROMPT if args.language == "en" else None,
-        hotwords=DEFAULT_MEETING_PROMPT if args.language == "en" else None,
+        initial_prompt=meeting_prompt if args.language == "en" else None,
+        hotwords=hotword_text if args.language == "en" else None,
         vad_parameters={
             "min_silence_duration_ms": 500,
             "speech_pad_ms": 250,
@@ -124,12 +530,49 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
         if text:
             results.append(
                 TranscriptSegment(
-                    start=float(segment.start),
-                    end=float(segment.end),
+                    start=offset_seconds + float(segment.start),
+                    end=offset_seconds + float(segment.end),
                     text=text,
                 )
             )
     return results
+
+
+def wav_duration_seconds(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate:
+                return wav_file.getnframes() / frame_rate
+    except (OSError, wave.Error):
+        return 0.0
+    return 0.0
+
+
+def build_wav_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
+    if chunk_seconds <= 0:
+        return []
+    chunks: list[tuple[Path, float]] = []
+    try:
+        with wave.open(str(audio), "rb") as source:
+            params = source.getparams()
+            frame_rate = source.getframerate()
+            total_frames = source.getnframes()
+            chunk_frames = max(1, int(chunk_seconds * frame_rate))
+            for chunk_index, start_frame in enumerate(range(0, total_frames, chunk_frames), start=1):
+                source.setpos(start_frame)
+                frames_to_read = min(chunk_frames, total_frames - start_frame)
+                frames = source.readframes(frames_to_read)
+                if not frames:
+                    continue
+                chunk_path = temp_dir / f"{audio.stem}.chunk-{chunk_index:04d}.wav"
+                with wave.open(str(chunk_path), "wb") as target:
+                    target.setparams(params)
+                    target.writeframes(frames)
+                chunks.append((chunk_path, start_frame / frame_rate if frame_rate else 0.0))
+    except (OSError, wave.Error):
+        return []
+    return chunks
 
 
 def transcribe_audio_funasr(args: argparse.Namespace) -> list[TranscriptSegment]:
@@ -215,8 +658,32 @@ def diarize_audio(args: argparse.Namespace) -> list[SpeakerSegment]:
             "pyannote.audio is not installed. Install it in a separate environment, or run without --diarize."
         ) from exc
 
-    pipeline = Pipeline.from_pretrained(args.diarization_model, use_auth_token=token)
-    diarization = pipeline(str(args.audio))
+    try:
+        pipeline = Pipeline.from_pretrained(args.diarization_model, token=token)
+    except TypeError:
+        pipeline = Pipeline.from_pretrained(args.diarization_model, use_auth_token=token)
+
+    try:
+        import numpy as np
+        import torch
+        from scipy.io import wavfile
+    except ImportError:
+        diarization = pipeline(str(args.audio))
+    else:
+        sample_rate, samples = wavfile.read(str(args.audio))
+        samples = np.asarray(samples)
+        if samples.ndim == 1:
+            samples = samples[None, :]
+        else:
+            samples = samples.T
+        if np.issubdtype(samples.dtype, np.integer):
+            samples = samples.astype("float32") / float(np.iinfo(samples.dtype).max)
+        else:
+            samples = samples.astype("float32")
+        waveform = torch.from_numpy(samples)
+        diarization = pipeline({"waveform": waveform, "sample_rate": int(sample_rate)})
+    if hasattr(diarization, "speaker_diarization"):
+        diarization = diarization.speaker_diarization
     speakers: list[SpeakerSegment] = []
     for turn, _, speaker in diarization.itertracks(yield_label=True):
         speakers.append(
@@ -664,6 +1131,99 @@ def extract_summary_points(paragraphs: list[tuple[float, float, str]], limit: in
     return points
 
 
+TOPIC_STOPWORDS = {
+    "about", "above", "after", "again", "against", "all", "also", "and", "another", "are", "because",
+    "been", "before", "being", "between", "both", "but", "can", "could", "did", "does", "doing",
+    "done", "for", "from", "get", "going", "got", "had", "has", "have", "here", "how", "into",
+    "item", "just", "like", "mean", "more", "move", "much", "need", "next", "now", "one", "only", "our", "out", "over",
+    "really", "right", "said", "same", "see", "should", "some", "something", "that", "the", "their",
+    "them", "then", "there", "these", "they", "thing", "things", "this", "those", "through", "time", "topic",
+    "too", "use", "very", "want", "was", "way", "well", "were", "what", "when", "where", "which",
+    "who", "why", "will", "with", "would", "yeah", "you", "your",
+}
+
+TOPIC_SHIFT_RE = re.compile(
+    r"^(next|now|moving on|let'?s move|let'?s talk|another topic|switching to|on the other hand|"
+    r"separately|the next question|the next item|for the next part)\b",
+    re.IGNORECASE,
+)
+
+
+def build_topic_sections(paragraphs: list[tuple[float, float, str]], limit: int = 8) -> list[TopicSection]:
+    groups: list[list[tuple[float, float, str]]] = []
+    current: list[tuple[float, float, str]] = []
+    current_keywords: set[str] = set()
+    previous_end = 0.0
+
+    for paragraph in paragraphs:
+        start, end, text = paragraph
+        keywords = set(topic_keywords(text, limit=8))
+        gap = start - previous_end if current else 0.0
+        overlap = len(current_keywords.intersection(keywords))
+        starts_new = bool(current) and (
+            gap >= 90
+            or TOPIC_SHIFT_RE.search(text.strip()) is not None
+            or (len(current_keywords) >= 4 and len(keywords) >= 4 and overlap <= 1)
+        )
+        if starts_new:
+            groups.append(current)
+            current = []
+            current_keywords = set()
+        current.append(paragraph)
+        current_keywords.update(keywords)
+        previous_end = end
+
+    if current:
+        groups.append(current)
+
+    sections: list[TopicSection] = []
+    for index, group in enumerate(groups[:limit], start=1):
+        combined = " ".join(text for _, _, text in group)
+        keywords = topic_keywords(combined, limit=3)
+        title = " / ".join(keyword.title() for keyword in keywords) if keywords else f"Topic {index}"
+        bullets = topic_bullets(group)
+        sections.append(
+            TopicSection(
+                title=f"Topic {index}: {title}",
+                start=group[0][0],
+                end=group[-1][1],
+                bullets=bullets,
+            )
+        )
+    return sections
+
+
+def topic_keywords(text: str, limit: int = 5) -> list[str]:
+    words = [
+        word.lower()
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9&+\-']{2,}", text)
+        if word.lower() not in TOPIC_STOPWORDS and len(word) >= 4
+    ]
+    counts: dict[str, int] = {}
+    first_seen: dict[str, int] = {}
+    for index, word in enumerate(words):
+        counts[word] = counts.get(word, 0) + 1
+        first_seen.setdefault(word, index)
+    ranked = sorted(counts, key=lambda word: (-counts[word], first_seen[word], word))
+    return ranked[:limit]
+
+
+def topic_bullets(group: list[tuple[float, float, str]], limit: int = 3) -> list[str]:
+    bullets: list[str] = []
+    seen: set[str] = set()
+    for _, _, paragraph in group:
+        for sentence in split_readable_sentences(paragraph) or [paragraph]:
+            cleaned = clean_sentence(sentence)
+            key = cleaned.lower()
+            if len(cleaned.split()) < 7 or key in seen:
+                continue
+            bullets.append(cleaned)
+            seen.add(key)
+            if len(bullets) >= limit:
+                return bullets
+    return bullets
+
+
 def extract_decisions(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
     patterns = [
         r"\bwe (decided|agreed|confirmed|approved|selected|chose)\b",
@@ -809,11 +1369,12 @@ Required Markdown structure:
 - Source: post-meeting ASR transcript. Review before sharing.
 
 ## 1. Executive Summary
-## 2. Key Discussion
-## 3. Decisions
-## 4. Action Items
-## 5. Risks / Open Questions
-## 6. Speaker Notes
+## 2. Topic Timeline
+## 3. Key Discussion
+## 4. Decisions
+## 5. Action Items
+## 6. Risks / Open Questions
+## 7. Speaker Notes
 
 ## 中文阅读版
 ## 1. 摘要
@@ -824,6 +1385,9 @@ Required Markdown structure:
 
 Rules:
 - Use bullet points under each section.
+- Under Topic Timeline, create a new topic when the transcript changes subject, moves to a new agenda item, or has a meaningful time gap.
+- Each topic should include an approximate time range, a short title, and 2-3 faithful bullets.
+- Keep the topic list concise; prefer 3-8 main topics over many tiny fragments.
 - Do not treat generic statements as action items.
 - Include owners or timestamps only when the transcript clearly provides them.
 - Chinese should be rewritten naturally, not literal sentence-by-sentence translation.
@@ -883,6 +1447,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     sections = speaker_sections(usable)
     speakers = sorted(sections)
     summary_points = extract_summary_points(paragraphs)
+    topic_sections = build_topic_sections(paragraphs)
     decisions = extract_decisions(sentences)
     actions = extract_action_items(sentences)
     risks = extract_risks(sentences)
@@ -916,7 +1481,19 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     else:
         lines.append("- No substantial transcript text was captured.")
 
-    lines.extend(["", "## 2. Discussion Notes", ""])
+    lines.extend(["", "## 2. Topic Timeline", ""])
+    if topic_sections:
+        for topic in topic_sections:
+            lines.append(f"### {format_time(topic.start)}-{format_time(topic.end)} | {topic.title}")
+            for bullet in topic.bullets:
+                lines.append(f"- {bullet}")
+            lines.append("")
+    elif is_substantive:
+        lines.append("- No clear topic shifts were detected automatically.")
+    else:
+        lines.append("- Not enough clean meeting content to segment topics reliably.")
+
+    lines.extend(["", "## 3. Discussion Notes", ""])
     if paragraphs:
         for start, end, paragraph in paragraphs:
             lines.append(f"### {format_time(start)}-{format_time(end)}")
@@ -925,7 +1502,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     else:
         lines.append("- No readable discussion blocks were detected.")
 
-    lines.extend(["", "## 3. Decisions", ""])
+    lines.extend(["", "## 4. Decisions", ""])
     if not is_substantive:
         lines.append("- Not enough clean meeting content to infer decisions safely.")
     elif decisions:
@@ -934,7 +1511,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     else:
         lines.append("- No explicit decisions were detected.")
 
-    lines.extend(["", "## 4. Action Items", ""])
+    lines.extend(["", "## 5. Action Items", ""])
     if not is_substantive:
         lines.append("- Not enough clean meeting content to infer action items safely.")
     elif actions:
@@ -943,7 +1520,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     else:
         lines.append("- No explicit action items were detected.")
 
-    lines.extend(["", "## 5. Risks / Open Questions", ""])
+    lines.extend(["", "## 6. Risks / Open Questions", ""])
     if not is_substantive:
         lines.append("- Main risk: the source recording is too short, unclear, or incomplete for dependable note extraction.")
     elif risks:
@@ -952,7 +1529,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     else:
         lines.append("- No explicit risks or open questions were detected.")
 
-    lines.extend(["", "## 6. Speaker Notes", ""])
+    lines.extend(["", "## 7. Speaker Notes", ""])
     if sections:
         for speaker, items in sections.items():
             lines.append(f"### {speaker}")
@@ -964,7 +1541,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     else:
         lines.append("- Speaker separation is not available for this recording.")
 
-    lines.extend(["", "## 7. Full Transcript", ""])
+    lines.extend(["", "## 8. Full Transcript", ""])
     for item in usable:
         lines.append(f"- {format_time(item.start)}-{format_time(item.end)} `{item.speaker}` {item.text}")
 
@@ -991,6 +1568,19 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
         lines.append("- 中文翻译引擎不可用，请参考英文摘要。")
 
     lines.extend(["", "## 2. 讨论内容", ""])
+    topic_lines: list[str] = []
+    for topic in topic_sections[:5]:
+        topic_lines.append(
+            f"{format_time(topic.start)}-{format_time(topic.end)} {topic.title}: "
+            + " ".join(topic.bullets[:2])
+        )
+    zh_topics = chinese_reading_lines(topic_lines)
+    if zh_topics:
+        lines.append("")
+        lines.append("### Main Topics")
+        for topic in zh_topics:
+            lines.append(f"- {topic}")
+
     zh_discussion_source = summary_points[:3] if summary_points else [paragraph for _, _, paragraph in paragraphs[:2]]
     zh_paragraphs = chinese_reading_lines(zh_discussion_source)
     if zh_paragraphs:
@@ -1047,6 +1637,8 @@ def write_outputs(
     print(f"Wrote {transcript_path}")
     print(f"Wrote {minutes_path}")
 
+    if not speakers:
+        speakers = speaker_segments_from_transcript(transcript)
     if speakers:
         speakers_path = output_base.with_suffix(".speakers.md")
         lines = [
@@ -1061,6 +1653,18 @@ def write_outputs(
         print(f"Wrote {speakers_path}")
 
 
+def speaker_segments_from_transcript(transcript: list[TranscriptSegment]) -> list[SpeakerSegment]:
+    segments: list[SpeakerSegment] = []
+    for item in transcript:
+        if item.speaker == "Speaker ?" or not item.speaker or not item.speaker.startswith("SPEAKER_"):
+            continue
+        if segments and segments[-1].speaker == item.speaker and item.start <= segments[-1].end + 0.8:
+            segments[-1].end = max(segments[-1].end, item.end)
+        else:
+            segments.append(SpeakerSegment(start=item.start, end=item.end, speaker=item.speaker))
+    return segments
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(
         description="Turn a recorded meeting WAV into transcript and meeting-minutes Markdown files.",
@@ -1068,7 +1672,7 @@ def main() -> int:
     parser.add_argument("audio", type=Path, help="Path to recordings/session-*.wav")
     parser.add_argument(
         "--asr-engine",
-        choices=["faster-whisper", "funasr"],
+        choices=["faster-whisper", "funasr", "azure-fast", "azure-batch"],
         default="faster-whisper",
         help="ASR backend. Default: faster-whisper",
     )
@@ -1096,6 +1700,19 @@ def main() -> int:
     parser.add_argument("--funasr-vad-model", default="", help="Override FunASR VAD model. Default: fsmn-vad")
     parser.add_argument("--funasr-punc-model", default="", help="Override FunASR punctuation model. Default: ct-punc")
     parser.add_argument("--funasr-batch-size", type=int, default=60, help="FunASR batch_size_s. Default: 60")
+    parser.add_argument(
+        "--asr-chunk-seconds",
+        type=int,
+        default=600,
+        help="Split long WAV files into ASR chunks. Use 0 to disable. Default: 600",
+    )
+    parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--azure-fast-max-speakers", type=int, default=5)
+    parser.add_argument("--azure-fast-timeout-seconds", type=int, default=600)
+    parser.add_argument("--azure-batch-max-speakers", type=int, default=5)
+    parser.add_argument("--azure-batch-poll-seconds", type=int, default=10)
+    parser.add_argument("--azure-batch-timeout-seconds", type=int, default=1800)
+    parser.add_argument("--azure-batch-ttl-hours", type=int, default=48)
     args = parser.parse_args()
 
     if not args.audio.exists():
@@ -1107,6 +1724,9 @@ def main() -> int:
     args.beam_size = args.beam_size or preset["beam_size"]
     args.best_of = args.best_of or preset["best_of"]
     args.patience = args.patience or preset["patience"]
+    if 0 < args.asr_chunk_seconds < 180:
+        print("ASR chunk size below 180s can reduce context; using 180s instead.")
+        args.asr_chunk_seconds = 180
     print(
         "Using quality preset "
         f"{args.quality}: engine={args.asr_engine}, "

@@ -35,8 +35,20 @@ active_recording_path: Path | None = None
 last_recording_stop_at = 0.0
 RECORDING_PATTERNS = ("rec-*.wav", "session-*.wav")
 MINUTES_PATTERNS = ("rec-*.minutes.docx", "rec-*.minutes.md", "session-*.minutes.docx", "session-*.minutes.md")
-POST_MEETING_TIMEOUT_SECONDS = 8 * 60
+POST_MEETING_TIMEOUT_SECONDS = 30 * 60
 active_post_meeting_process: asyncio.subprocess.Process | None = None
+post_meeting_progress: dict[str, Any] = {
+    "ok": True,
+    "running": False,
+    "percent": 0,
+    "stage": "idle",
+    "message": "No meeting-notes job is running.",
+    "recording": "",
+    "current": 0,
+    "total": 0,
+    "startedAt": 0.0,
+    "updatedAt": time.time(),
+}
 
 app = FastAPI(title="Low Latency Real Time Translator")
 app.add_middleware(
@@ -64,6 +76,13 @@ class TranslateJob:
     captured_at: float
     asr_ms: float
     transcribed_at: float = field(default_factory=time.perf_counter)
+    draft_sequence_ids: list[str] = field(default_factory=list)
+
+
+@dataclass
+class ContextBufferDecision:
+    ready: list[TranslateJob] = field(default_factory=list)
+    detail: str = ""
 
 
 @dataclass
@@ -79,6 +98,7 @@ class SubtitleJob:
     total_latency_ms: float
     engine: str
     is_final: bool = True
+    draft_sequence_ids: list[str] = field(default_factory=list)
 
 
 @dataclass
@@ -182,6 +202,7 @@ class LocalUtteranceAggregator:
             audio_duration_seconds=max(0.0, self.audio_duration_seconds),
             captured_at=self.captured_at,
             asr_ms=self.asr_ms,
+            draft_sequence_ids=[self.sequence_id],
         )
         self.reset()
         return job
@@ -213,6 +234,7 @@ class LocalUtteranceAggregator:
             total_latency_ms=(time.perf_counter() - self.captured_at) * 1000,
             engine=f"local-{engine_suffix}",
             is_final=is_final,
+            draft_sequence_ids=[self.sequence_id],
         )
 
     def _should_mark_ready(self, previous_end: float, item: TranscriptionResult) -> bool:
@@ -268,6 +290,93 @@ class LocalUtteranceAggregator:
         return cleaned.strip()
 
 
+class ContextualTranslationBuffer:
+    DEPENDENT_START_RE = re.compile(
+        r"^(and|but|so|then|also|because|which|that|this|these|those|it|they|he|she|we|you|"
+        r"its|their|his|her|our|your|therefore|however|meanwhile)\b",
+        re.IGNORECASE,
+    )
+
+    def __init__(self, active_config: AppConfig) -> None:
+        self.enabled = active_config.context_buffer_enabled
+        self.min_words = active_config.context_buffer_min_words
+        self.max_words = active_config.context_buffer_max_words
+        self.max_wait_seconds = active_config.context_buffer_max_wait_seconds
+        self.pending: TranslateJob | None = None
+        self.pending_since = 0.0
+
+    def add(self, job: TranslateJob) -> ContextBufferDecision:
+        if not self.enabled:
+            return ContextBufferDecision(ready=[job])
+
+        now = time.perf_counter()
+        if self.pending is None:
+            if self._should_hold(job):
+                self.pending = job
+                self.pending_since = now
+                return ContextBufferDecision(detail="Buffering short translation context.")
+            return ContextBufferDecision(ready=[job])
+
+        merged = self._merge_jobs(self.pending, job)
+        if self._word_count(merged.source_text) > self.max_words:
+            ready = [self.pending, job]
+            self.pending = None
+            self.pending_since = 0.0
+            return ContextBufferDecision(
+                ready=ready,
+                detail="Released buffered context without merging; translation window is full.",
+            )
+        self.pending = None
+        self.pending_since = 0.0
+        return ContextBufferDecision(
+            ready=[merged],
+            detail="Merged buffered context for translation.",
+        )
+
+    def flush_if_idle(self) -> ContextBufferDecision:
+        if self.pending is None:
+            return ContextBufferDecision()
+        if time.perf_counter() - self.pending_since < self.max_wait_seconds:
+            return ContextBufferDecision()
+        job = self.pending
+        self.pending = None
+        self.pending_since = 0.0
+        return ContextBufferDecision(
+            ready=[job],
+            detail="Flushed buffered context after short wait.",
+        )
+
+    def _should_hold(self, job: TranslateJob) -> bool:
+        text = job.source_text.strip()
+        words = SubtitleTurnDetector._normalize_text(text).split()
+        if not words:
+            return False
+        if len(words) >= self.max_words:
+            return False
+        if len(words) < self.min_words:
+            return True
+        return bool(self.DEPENDENT_START_RE.search(text))
+
+    @staticmethod
+    def _word_count(text: str) -> int:
+        return len(SubtitleTurnDetector._normalize_text(text).split())
+
+    @staticmethod
+    def _merge_jobs(left: TranslateJob, right: TranslateJob) -> TranslateJob:
+        source_text = LocalUtteranceAggregator._merge_text(left.source_text, right.source_text)
+        return TranslateJob(
+            sequence_id=f"{left.sequence_id}+{right.sequence_id}",
+            source_text=source_text,
+            start_seconds=min(left.start_seconds, right.start_seconds),
+            end_seconds=max(left.end_seconds, right.end_seconds),
+            audio_duration_seconds=max(left.end_seconds, right.end_seconds) - min(left.start_seconds, right.start_seconds),
+            captured_at=min(left.captured_at, right.captured_at),
+            asr_ms=left.asr_ms + right.asr_ms,
+            transcribed_at=max(left.transcribed_at, right.transcribed_at),
+            draft_sequence_ids=[*left.draft_sequence_ids, *right.draft_sequence_ids],
+        )
+
+
 class Runtime:
     def __init__(self) -> None:
         self.asr: WhisperASR | None = None
@@ -295,6 +404,14 @@ class Runtime:
                 or self.current_config.asr_best_of != next_config.asr_best_of
                 or self.current_config.asr_patience != next_config.asr_patience
                 or self.current_config.asr_condition_on_previous_text != next_config.asr_condition_on_previous_text
+                or self.current_config.asr_no_speech_threshold != next_config.asr_no_speech_threshold
+                or self.current_config.asr_log_prob_threshold != next_config.asr_log_prob_threshold
+                or self.current_config.asr_compression_ratio_threshold != next_config.asr_compression_ratio_threshold
+                or self.current_config.asr_hallucination_silence_threshold != next_config.asr_hallucination_silence_threshold
+                or self.current_config.asr_repetition_penalty != next_config.asr_repetition_penalty
+                or self.current_config.asr_no_repeat_ngram_size != next_config.asr_no_repeat_ngram_size
+                or self.current_config.asr_hotwords_enabled != next_config.asr_hotwords_enabled
+                or self.current_config.asr_use_default_hotwords != next_config.asr_use_default_hotwords
             )
             needs_translator = (
                 self.translator is None
@@ -318,6 +435,14 @@ class Runtime:
                     next_config.asr_best_of,
                     next_config.asr_patience,
                     next_config.asr_condition_on_previous_text,
+                    next_config.asr_no_speech_threshold,
+                    next_config.asr_log_prob_threshold,
+                    next_config.asr_compression_ratio_threshold,
+                    next_config.asr_hallucination_silence_threshold,
+                    next_config.asr_repetition_penalty,
+                    next_config.asr_no_repeat_ngram_size,
+                    next_config.asr_hotwords_enabled,
+                    next_config.asr_use_default_hotwords,
                 )
 
             if needs_translator:
@@ -358,9 +483,14 @@ def public_config_payload(active_config: AppConfig) -> dict[str, Any]:
         (active_config.azure_speech_key or "").strip()
         and (active_config.azure_speech_region or "").strip()
     )
+    post_meeting_asr_requested = requested_post_meeting_asr_engine()
+    azure_batch_configured = is_azure_batch_configured(active_config)
     data["azure_speech_key"] = ""
     data["azure_speech_key_set"] = bool((active_config.azure_speech_key or "").strip())
     data["azure_configured"] = azure_configured
+    data["azure_batch_configured"] = azure_batch_configured
+    data["post_meeting_asr_requested"] = post_meeting_asr_requested
+    data["post_meeting_asr_effective"] = choose_post_meeting_asr_engine()
     return data
 
 
@@ -396,30 +526,92 @@ async def process_recording(request: Request) -> dict[str, Any]:
     payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     audio_paths = resolve_recording_paths(payload.get("recordings") or payload.get("recording") or "")
     script_path = ROOT / "scripts" / "process-recording.py"
-    asr_engine = choose_post_meeting_asr_engine()
+    asr_engine = choose_post_meeting_asr_engine(payload.get("engine"))
     processed: list[dict[str, Any]] = []
     logs: list[str] = []
+    notes_mode_message = post_meeting_mode_message(payload.get("engine"), asr_engine)
 
-    for audio_path in audio_paths:
-        processed.append(await process_one_recording(audio_path, script_path, asr_engine, logs))
+    set_post_meeting_progress(
+        running=True,
+        percent=2,
+        stage="queued",
+        message=notes_mode_message,
+        current=0,
+        total=len(audio_paths),
+        recording="",
+        started_at=time.time(),
+    )
+    try:
+        for index, audio_path in enumerate(audio_paths, start=1):
+            processed.append(await process_one_recording(audio_path, script_path, asr_engine, logs, index, len(audio_paths)))
 
-    if len(processed) > 1:
-        combined = write_combined_minutes(processed)
+        if len(processed) > 1:
+            set_post_meeting_progress(
+                running=True,
+                percent=94,
+                stage="combining",
+                message="Combining selected recordings into one meeting-notes document.",
+                current=len(processed),
+                total=len(audio_paths),
+            )
+            combined = write_combined_minutes(processed)
+            set_post_meeting_progress(
+                running=False,
+                percent=100,
+                stage="complete",
+                message="Meeting notes are ready.",
+                current=len(processed),
+                total=len(audio_paths),
+            )
+            return {
+                "ok": True,
+                "recordings": [item["recording"] for item in processed],
+                "recording": ", ".join(Path(item["recording"]).name for item in processed),
+                "transcript": "",
+                "minutes": str(combined["minutes"]),
+                "minutesMarkdown": str(combined["minutesMarkdown"]),
+                "minutesDocx": str(combined["minutesDocx"]),
+                "transcriptText": "",
+                "minutesText": combined["minutesText"],
+                "log": "\n".join(logs),
+                "asrEngine": asr_engine,
+                "notesMode": notes_mode_message,
+            }
+
+        set_post_meeting_progress(
+            running=False,
+            percent=100,
+            stage="complete",
+            message="Meeting notes are ready.",
+            current=1,
+            total=len(audio_paths),
+        )
         return {
-            "ok": True,
-            "recordings": [item["recording"] for item in processed],
-            "recording": ", ".join(Path(item["recording"]).name for item in processed),
-            "transcript": "",
-            "minutes": str(combined["minutes"]),
-            "minutesMarkdown": str(combined["minutesMarkdown"]),
-            "minutesDocx": str(combined["minutesDocx"]),
-            "transcriptText": "",
-            "minutesText": combined["minutesText"],
+            **processed[0],
             "log": "\n".join(logs),
             "asrEngine": asr_engine,
+            "notesMode": notes_mode_message,
         }
+    except Exception:
+        set_post_meeting_progress(
+            running=False,
+            stage="failed",
+            message="Meeting notes generation failed.",
+            updated_at=time.time(),
+        )
+        raise
 
-    return {**processed[0], "log": "\n".join(logs), "asrEngine": asr_engine}
+
+@app.get("/api/process-recording-progress")
+async def process_recording_progress() -> dict[str, Any]:
+    return dict(post_meeting_progress)
+
+
+def set_post_meeting_progress(**updates: Any) -> None:
+    post_meeting_progress.update(updates)
+    post_meeting_progress["ok"] = True
+    post_meeting_progress["updatedAt"] = updates.get("updated_at", time.time())
+    post_meeting_progress["percent"] = max(0, min(100, int(post_meeting_progress.get("percent") or 0)))
 
 
 async def process_one_recording(
@@ -427,8 +619,25 @@ async def process_one_recording(
     script_path: Path,
     asr_engine: str,
     logs: list[str],
+    index: int,
+    total: int,
 ) -> dict[str, Any]:
     global active_post_meeting_process
+    per_recording_span = 88 / max(1, total)
+    base_percent = 4 + int((index - 1) * per_recording_span)
+    max_running_percent = min(92, base_percent + int(per_recording_span * 0.88))
+    duration_seconds = recording_duration_seconds(audio_path)
+    estimated_seconds = max(45.0, duration_seconds * 0.8)
+    started_at = time.time()
+    set_post_meeting_progress(
+        running=True,
+        percent=base_percent,
+        stage="processing",
+        message=f"Processing {audio_path.name} ({index}/{total}).",
+        recording=audio_path.name,
+        current=index,
+        total=total,
+    )
     process = await asyncio.create_subprocess_exec(
         sys.executable,
         str(script_path),
@@ -443,18 +652,51 @@ async def process_one_recording(
         stderr=asyncio.subprocess.PIPE,
     )
     active_post_meeting_process = process
+    stdout_lines: list[str] = []
+    stderr_lines: list[str] = []
+    stdout_task = asyncio.create_task(
+        collect_post_meeting_stream(
+            process.stdout,
+            stdout_lines,
+            audio_path.name,
+            index,
+            total,
+            base_percent,
+            max_running_percent,
+        )
+    )
+    stderr_task = asyncio.create_task(collect_post_meeting_stream(process.stderr, stderr_lines))
+    wait_task = asyncio.create_task(process.wait())
     try:
-        stdout, stderr = await asyncio.wait_for(process.communicate(), timeout=POST_MEETING_TIMEOUT_SECONDS)
+        while not wait_task.done():
+            elapsed = time.time() - started_at
+            if elapsed > POST_MEETING_TIMEOUT_SECONDS:
+                raise asyncio.TimeoutError()
+            fraction = min(0.95, elapsed / estimated_seconds)
+            percent = min(max_running_percent, base_percent + int((max_running_percent - base_percent) * fraction))
+            set_post_meeting_progress(
+                running=True,
+                percent=percent,
+                stage="processing",
+                message=f"Transcribing and summarizing {audio_path.name} ({format_progress_time(elapsed)} elapsed).",
+                recording=audio_path.name,
+                current=index,
+                total=total,
+            )
+            await asyncio.sleep(1)
+        await wait_task
+        await asyncio.gather(stdout_task, stderr_task)
     except asyncio.TimeoutError as exc:
         process.kill()
-        await process.communicate()
+        await wait_task
+        await asyncio.gather(stdout_task, stderr_task, return_exceptions=True)
         raise HTTPException(status_code=504, detail="Post-meeting processing timed out. Try a shorter recording or cached local models.") from exc
     finally:
         if active_post_meeting_process is process:
             active_post_meeting_process = None
 
-    stdout_text = stdout.decode("utf-8", errors="replace")
-    stderr_text = stderr.decode("utf-8", errors="replace")
+    stdout_text = "\n".join(stdout_lines)
+    stderr_text = "\n".join(stderr_lines)
     if process.returncode != 0:
         detail = (stderr_text or stdout_text or "Post-meeting processing failed.").strip()
         raise HTTPException(status_code=500, detail=detail[-2000:])
@@ -464,7 +706,25 @@ async def process_one_recording(
     minutes_path = audio_path.with_suffix(".minutes.md")
     minutes_docx_path = audio_path.with_suffix(".minutes.docx")
     if minutes_path.exists():
+        set_post_meeting_progress(
+            running=True,
+            percent=min(96, max_running_percent + 2),
+            stage="writing",
+            message=f"Writing Word document for {audio_path.name}.",
+            recording=audio_path.name,
+            current=index,
+            total=total,
+        )
         write_minutes_docx(minutes_path, minutes_docx_path)
+    set_post_meeting_progress(
+        running=True,
+        percent=min(96, base_percent + int(per_recording_span)),
+        stage="processed",
+        message=f"Finished {audio_path.name} ({index}/{total}).",
+        recording=audio_path.name,
+        current=index,
+        total=total,
+    )
     return {
         "ok": True,
         "recording": str(audio_path),
@@ -477,23 +737,171 @@ async def process_one_recording(
     }
 
 
+async def collect_post_meeting_stream(
+    stream: asyncio.StreamReader | None,
+    lines: list[str],
+    recording_name: str = "",
+    current: int = 0,
+    total: int = 0,
+    base_percent: int = 0,
+    max_percent: int = 92,
+) -> None:
+    if stream is None:
+        return
+    while True:
+        raw_line = await stream.readline()
+        if not raw_line:
+            break
+        line = raw_line.decode("utf-8", errors="replace").strip()
+        if not line:
+            continue
+        lines.append(line)
+        update_progress_from_script_line(line, recording_name, current, total, base_percent, max_percent)
+
+
+def update_progress_from_script_line(
+    line: str,
+    recording_name: str,
+    current: int,
+    total: int,
+    base_percent: int,
+    max_percent: int,
+) -> None:
+    lower = line.lower()
+    if "azure batch: uploading" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=max(base_percent, 8),
+            stage="uploading",
+            message=f"Uploading {recording_name} to Azure Blob.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "azure batch: submitting" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=max(base_percent, 16),
+            stage="submitting",
+            message="Submitting Azure Batch Transcription job.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "azure batch: waiting" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=max(base_percent, 24),
+            stage="waiting",
+            message="Waiting for Azure to transcribe and separate speakers.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif lower.startswith("azure batch status:"):
+        status = line.split(":", 1)[1].strip() if ":" in line else "Running"
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(base_percent + 20, int(post_meeting_progress.get("percent") or 0))),
+            stage="waiting",
+            message=f"Azure Batch status: {status}.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "azure batch: downloading" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, 86),
+            stage="downloading",
+            message="Downloading Azure transcription result.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif lower.startswith("asr chunk "):
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(base_percent + 10, int(post_meeting_progress.get("percent") or 0))),
+            stage="transcribing",
+            message=f"{line}.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+
+
+def recording_duration_seconds(path: Path) -> float:
+    try:
+        with wave.open(str(path), "rb") as wav_file:
+            frame_rate = wav_file.getframerate()
+            if frame_rate:
+                return wav_file.getnframes() / frame_rate
+    except (OSError, wave.Error):
+        return 0.0
+    return 0.0
+
+
+def format_progress_time(seconds: float) -> str:
+    total = max(0, int(seconds))
+    minutes = total // 60
+    remainder = total % 60
+    return f"{minutes}:{remainder:02d}"
+
+
 @app.post("/api/cancel-process-recording")
 async def cancel_process_recording() -> dict[str, Any]:
     process = active_post_meeting_process
     if process is None or process.returncode is not None:
         return {"ok": True, "cancelled": False}
     process.kill()
+    set_post_meeting_progress(
+        running=False,
+        stage="cancelled",
+        message="Meeting notes generation was cancelled.",
+    )
     return {"ok": True, "cancelled": True}
 
 
-def choose_post_meeting_asr_engine() -> str:
-    requested_engine = os.getenv("POST_MEETING_ASR_ENGINE", "faster-whisper").strip().lower()
+def choose_post_meeting_asr_engine(ui_engine: object = "") -> str:
+    if str(ui_engine or "").strip().lower() and str(ui_engine or "").strip().lower() != "azure":
+        return "faster-whisper"
+    requested_engine = requested_post_meeting_asr_engine()
+    if requested_engine == "azure-batch":
+        if is_azure_batch_configured(config):
+            return "azure-batch"
+        return "faster-whisper"
+    if requested_engine == "azure-fast":
+        if (config.azure_speech_key or "").strip() and (config.azure_speech_region or os.getenv("AZURE_SPEECH_ENDPOINT", "")).strip():
+            return "azure-fast"
+        return "faster-whisper"
     if requested_engine != "funasr":
         return "faster-whisper"
     funasr_model_dir = ROOT / ".model-cache" / "models" / "iic" / "SenseVoiceSmall"
     if funasr_model_dir.exists() and importlib.util.find_spec("funasr") is not None:
         return "funasr"
     return "faster-whisper"
+
+
+def post_meeting_mode_message(ui_engine: object, effective_engine: str) -> str:
+    selected_engine = str(ui_engine or "").strip().lower()
+    if selected_engine == "azure":
+        if effective_engine == "azure-batch":
+            return "Cloud mode: using Azure Batch transcription with speaker separation."
+        return "Cloud mode selected, but Azure Batch storage is not configured. Using local transcription without speaker separation."
+    return "Local mode: using local transcription without speaker separation."
+
+
+def requested_post_meeting_asr_engine() -> str:
+    return os.getenv("POST_MEETING_ASR_ENGINE", "azure-batch").strip().lower()
+
+
+def is_azure_batch_configured(active_config: AppConfig) -> bool:
+    return bool(
+        (active_config.azure_speech_key or "").strip()
+        and (active_config.azure_speech_region or os.getenv("AZURE_BATCH_TRANSCRIPTION_ENDPOINT", "")).strip()
+        and os.getenv("AZURE_BATCH_CONTAINER_SAS_URL", "").strip()
+    )
 
 
 def post_meeting_env() -> dict[str, str]:
@@ -554,14 +962,7 @@ def sorted_recordings() -> list[Path]:
 def recording_payload(path: Path) -> dict[str, Any]:
     stat = path.stat()
     modified_at = datetime.fromtimestamp(stat.st_mtime)
-    duration_seconds = 0.0
-    try:
-        with wave.open(str(path), "rb") as wav_file:
-            frame_rate = wav_file.getframerate()
-            if frame_rate:
-                duration_seconds = wav_file.getnframes() / frame_rate
-    except (OSError, wave.Error):
-        duration_seconds = 0.0
+    duration_seconds = recording_duration_seconds(path)
     return {
         "path": str(path),
         "name": path.name,
@@ -744,17 +1145,29 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
 
     merged["chunk_seconds"] = max(1.0, min(5.0, float(merged["chunk_seconds"])))
     merged["overlap_seconds"] = max(0.0, min(1.0, float(merged["overlap_seconds"])))
+    merged["adaptive_chunking_enabled"] = bool(merged["adaptive_chunking_enabled"])
+    merged["min_chunk_seconds"] = max(0.5, min(float(merged["chunk_seconds"]), float(merged["min_chunk_seconds"])))
+    merged["chunk_flush_silence_seconds"] = max(0.0, min(1.0, float(merged["chunk_flush_silence_seconds"])))
     if merged["asr_compute_type"] not in ("int8", "int8_float16", "float16", "float32"):
         merged["asr_compute_type"] = "int8"
     merged["asr_beam_size"] = max(1, min(5, int(merged["asr_beam_size"])))
     merged["asr_best_of"] = max(1, min(5, int(merged["asr_best_of"])))
     merged["asr_patience"] = max(0.8, min(1.5, float(merged["asr_patience"])))
     merged["asr_condition_on_previous_text"] = bool(merged["asr_condition_on_previous_text"])
+    merged["asr_no_speech_threshold"] = max(0.1, min(0.95, float(merged["asr_no_speech_threshold"])))
+    merged["asr_log_prob_threshold"] = max(-3.0, min(0.0, float(merged["asr_log_prob_threshold"])))
+    merged["asr_compression_ratio_threshold"] = max(1.2, min(4.0, float(merged["asr_compression_ratio_threshold"])))
+    merged["asr_hallucination_silence_threshold"] = max(0.2, min(3.0, float(merged["asr_hallucination_silence_threshold"])))
+    merged["asr_repetition_penalty"] = max(1.0, min(1.3, float(merged["asr_repetition_penalty"])))
+    merged["asr_no_repeat_ngram_size"] = max(0, min(5, int(merged["asr_no_repeat_ngram_size"])))
+    merged["asr_hotwords_enabled"] = bool(merged["asr_hotwords_enabled"])
+    merged["asr_use_default_hotwords"] = bool(merged["asr_use_default_hotwords"])
     merged["max_subtitles"] = max(1, min(5, int(merged["max_subtitles"])))
     merged["queue_max_size"] = max(1, min(4, int(merged["queue_max_size"])))
     merged["audio_sample_rate"] = int(merged["audio_sample_rate"])
     merged["audio_channels"] = int(merged["audio_channels"])
     merged["vad_rms_threshold"] = float(merged["vad_rms_threshold"])
+    merged["system_vad_rms_threshold"] = max(0.004, min(0.05, float(merged["system_vad_rms_threshold"])))
     if merged["audio_source"] not in ("microphone", "system"):
         merged["audio_source"] = "microphone"
     merged["turn_detector_enabled"] = bool(merged["turn_detector_enabled"])
@@ -764,6 +1177,10 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["segmenter_pause_seconds"] = max(0.4, min(2.0, float(merged["segmenter_pause_seconds"])))
     merged["segmenter_max_words"] = max(8, min(40, int(merged["segmenter_max_words"])))
     merged["segmenter_max_seconds"] = max(3.0, min(20.0, float(merged["segmenter_max_seconds"])))
+    merged["context_buffer_enabled"] = bool(merged["context_buffer_enabled"])
+    merged["context_buffer_min_words"] = max(4, min(24, int(merged["context_buffer_min_words"])))
+    merged["context_buffer_max_words"] = max(12, min(80, int(merged["context_buffer_max_words"])))
+    merged["context_buffer_max_wait_seconds"] = max(0.2, min(2.0, float(merged["context_buffer_max_wait_seconds"])))
     return AppConfig(**merged)
 
 
@@ -784,6 +1201,12 @@ def azure_language_code(source_language: str) -> str:
     if source_language == "spa_Latn":
         return "es-ES"
     return "en-US"
+
+
+def effective_vad_rms_threshold(active_config: AppConfig) -> float:
+    if active_config.audio_source == "system":
+        return max(active_config.vad_rms_threshold, active_config.system_vad_rms_threshold)
+    return active_config.vad_rms_threshold
 
 
 def session_recording_path() -> Path:
@@ -843,16 +1266,17 @@ async def audio_capture_worker(
     active_config: AppConfig,
     stop_event: asyncio.Event,
 ) -> None:
+    vad_rms_threshold = effective_vad_rms_threshold(active_config)
     async for chunk in capture.chunks():
         if stop_event.is_set():
             break
-        if chunk.rms < active_config.vad_rms_threshold:
+        if chunk.rms < vad_rms_threshold:
             put_latest(
                 status_queue,
                 {
                     "type": "notice",
                     "label": "Silent",
-                    "detail": f"rms={chunk.rms:.4f}",
+                    "detail": f"rms={chunk.rms:.4f}; gate={vad_rms_threshold:.4f}",
                 },
             )
             continue
@@ -912,6 +1336,7 @@ async def translate_worker(
     stop_event: asyncio.Event,
 ) -> None:
     assert runtime.translator is not None
+    context_buffer = ContextualTranslationBuffer(active_config)
 
     async def process_translate_job(job: TranslateJob) -> None:
         started = time.perf_counter()
@@ -938,18 +1363,33 @@ async def translate_worker(
                 total_latency_ms=total_latency_ms,
                 engine=runtime.translator.engine_name,
                 is_final=True,
+                draft_sequence_ids=job.draft_sequence_ids,
             ),
         )
         put_latest(status_queue, {"type": "status", "status": "Listening", "detail": "Waiting for speech."})
+
+    async def process_ready_jobs(jobs: list[TranslateJob]) -> None:
+        for ready_job in jobs:
+            await process_translate_job(ready_job)
 
     while not stop_event.is_set():
         try:
             job: TranslateJob = await asyncio.wait_for(translate_queue.get(), timeout=0.2)
         except asyncio.TimeoutError:
+            decision = context_buffer.flush_if_idle()
+            if decision.detail:
+                put_latest(status_queue, {"type": "status", "status": "Translating", "detail": decision.detail})
+            try:
+                await process_ready_jobs(decision.ready)
+            except Exception as exc:
+                put_latest(status_queue, {"type": "status", "status": "Error", "detail": f"Translation failed: {exc}"})
             continue
 
         try:
-            await process_translate_job(job)
+            decision = context_buffer.add(job)
+            if decision.detail:
+                put_latest(status_queue, {"type": "status", "status": "Translating", "detail": decision.detail})
+            await process_ready_jobs(decision.ready)
         except Exception as exc:
             put_latest(status_queue, {"type": "status", "status": "Error", "detail": f"Translation failed: {exc}"})
         finally:
@@ -1007,6 +1447,7 @@ async def websocket_push_worker(
                         "start": round(payload.start_seconds, 2),
                         "end": round(payload.end_seconds, 2),
                         "isFinal": payload.is_final,
+                        "draftSequenceIds": payload.draft_sequence_ids,
                         "perf": perf,
                     }
                 )
@@ -1087,6 +1528,10 @@ async def subtitles(websocket: WebSocket) -> None:
             channels=active_config.audio_channels,
             chunk_seconds=active_config.chunk_seconds,
             overlap_seconds=active_config.overlap_seconds,
+            adaptive_chunking_enabled=active_config.adaptive_chunking_enabled,
+            min_chunk_seconds=active_config.min_chunk_seconds,
+            chunk_flush_silence_seconds=active_config.chunk_flush_silence_seconds,
+            chunk_flush_rms_threshold=effective_vad_rms_threshold(active_config),
             audio_source=active_config.audio_source,
             recording_path=session_recording_path(),
         )

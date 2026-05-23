@@ -32,6 +32,10 @@ const recordingStatusText = document.querySelector("#recordingStatusText");
 const recordingFileText = document.querySelector("#recordingFileText");
 const notesStatusText = document.querySelector("#notesStatusText");
 const notesHintText = document.querySelector("#notesHintText");
+const notesProgress = document.querySelector("#notesProgress");
+const notesProgressStage = document.querySelector("#notesProgressStage");
+const notesProgressPercent = document.querySelector("#notesProgressPercent");
+const notesProgressFill = document.querySelector("#notesProgressFill");
 const delayStatusText = document.querySelector("#delayStatusText");
 const delayHintText = document.querySelector("#delayHintText");
 
@@ -51,11 +55,15 @@ let recordingStartedAt = null;
 let recordingTimer = null;
 let currentRecordingPath = "";
 let azureConfigured = false;
+let azureBatchConfigured = false;
+let postMeetingAsrRequested = "azure-batch";
+let postMeetingAsrEffective = "faster-whisper";
 let latestMinutesPath = "";
 let isRecordingActive = false;
 let isProcessingNotes = false;
 let notesAbortController = null;
 let notesTimeoutId = null;
+let notesProgressTimer = null;
 let availableRecordings = [];
 let selectedRecordingPaths = new Set();
 let lastSubtitleReceivedAt = 0;
@@ -77,6 +85,9 @@ async function loadRuntimeConfig() {
     }
     const payload = await response.json();
     azureConfigured = Boolean(payload.azure_configured);
+    azureBatchConfigured = Boolean(payload.azure_batch_configured);
+    postMeetingAsrRequested = payload.post_meeting_asr_requested || "azure-batch";
+    postMeetingAsrEffective = payload.post_meeting_asr_effective || "faster-whisper";
     if (!azureConfigured && translationEngine.value === "azure") {
       noticeText.textContent = "Azure not configured";
       logText.textContent = "Azure Speech key/region are empty. Azure mode will wait for valid cloud configuration.";
@@ -208,13 +219,73 @@ function updateMeetingActionButtons() {
     notesStatusText.textContent = hasSelectedRecordings ? "Ready to build" : "Select recordings";
     notesStatusText.classList.add("muted");
     notesHintText.textContent = hasSelectedRecordings
-      ? "Click Build Notes to create one bilingual document from selected recordings."
+      ? notesBuildHint()
       : "Choose one or more recordings as the source files.";
   }
 
   stopButton.disabled = !isMeetingLive || isProcessingNotes;
   processMeetingButton.disabled = isRecordingActive || (!isProcessingNotes && !hasSelectedRecordings);
   openMinutesButton.disabled = isRecordingActive || isProcessingNotes || !latestMinutesPath;
+}
+
+function notesBuildHint() {
+  if (translationEngine.value !== "azure") {
+    return "Local mode will build notes from the original recording without speaker separation.";
+  }
+  if (postMeetingAsrEffective === "azure-batch") {
+    return "Build Notes will use Azure Batch transcription with speaker separation.";
+  }
+  if (postMeetingAsrRequested === "azure-batch" && !azureBatchConfigured) {
+    return "Cloud mode selected, but Azure Batch storage is not configured. Build Notes will use local transcription without speaker separation.";
+  }
+  return "Click Build Notes to create one bilingual document from selected recordings.";
+}
+
+function setNotesProgress(percent = 0, stage = "", message = "", visible = false) {
+  if (!notesProgress || !notesProgressFill || !notesProgressPercent || !notesProgressStage) {
+    return;
+  }
+  const normalizedPercent = Math.max(0, Math.min(100, Number(percent) || 0));
+  notesProgress.classList.toggle("hidden", !visible);
+  notesProgressFill.style.width = `${normalizedPercent}%`;
+  notesProgressPercent.textContent = `${Math.round(normalizedPercent)}%`;
+  notesProgressStage.textContent = stage || "Preparing";
+  notesProgress.querySelector(".notes-progress-track")?.setAttribute("aria-valuenow", String(Math.round(normalizedPercent)));
+  if (message) {
+    notesHintText.textContent = message;
+  }
+}
+
+function stopNotesProgressPolling() {
+  if (notesProgressTimer) {
+    window.clearInterval(notesProgressTimer);
+    notesProgressTimer = null;
+  }
+}
+
+function startNotesProgressPolling() {
+  stopNotesProgressPolling();
+  setNotesProgress(2, "Queued", "Preparing selected recordings.", true);
+  notesProgressTimer = window.setInterval(refreshNotesProgress, 1000);
+  refreshNotesProgress();
+}
+
+async function refreshNotesProgress() {
+  try {
+    const response = await fetch("/api/process-recording-progress", { cache: "no-store" });
+    if (!response.ok) {
+      return;
+    }
+    const progress = await response.json();
+    const stage = progress.stage ? String(progress.stage).replace(/^\w/, (char) => char.toUpperCase()) : "Processing";
+    const current = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
+    setNotesProgress(progress.percent || 0, `${stage}${current}`, progress.message || "", isProcessingNotes || progress.running);
+    if (!progress.running && progress.stage === "complete") {
+      setNotesProgress(100, "Complete", progress.message || "Meeting notes are ready.", true);
+    }
+  } catch (error) {
+    // Progress is best-effort; the main request still controls success/failure.
+  }
 }
 
 function setDelayHint(label, detail, isWarning = false) {
@@ -524,7 +595,12 @@ function renderLocalSubtitle(item) {
         isFinal: true,
       });
       englishContextHistory = englishContextHistory.slice(-24);
-      englishDraftById.delete(draftId);
+      const draftIds = Array.isArray(item.draftSequenceIds) && item.draftSequenceIds.length
+        ? item.draftSequenceIds
+        : [draftId];
+      for (const id of draftIds) {
+        englishDraftById.delete(id);
+      }
       renderEnglishContext();
       renderEnglishDraft();
     }
@@ -819,6 +895,7 @@ function formatDateTime(value) {
 
 function localAsrProfile() {
   const preset = localAsrPreset?.value || "balanced";
+  const isSystemAudio = audioSource?.value === "system";
   if (preset === "fast") {
     return {
       model: "base.en",
@@ -827,6 +904,12 @@ function localAsrProfile() {
       bestOf: 1,
       patience: 1.0,
       conditionOnPreviousText: false,
+      noSpeechThreshold: isSystemAudio ? 0.72 : 0.62,
+      logProbThreshold: isSystemAudio ? -0.75 : -1.0,
+      compressionRatioThreshold: 2.35,
+      hallucinationSilenceThreshold: isSystemAudio ? 0.7 : 1.0,
+      repetitionPenalty: 1.1,
+      noRepeatNgramSize: 3,
       label: "Fast ASR: base.en / int8 / beam 1",
     };
   }
@@ -837,7 +920,13 @@ function localAsrProfile() {
       beamSize: 3,
       bestOf: 3,
       patience: 1.2,
-      conditionOnPreviousText: true,
+      conditionOnPreviousText: false,
+      noSpeechThreshold: isSystemAudio ? 0.66 : 0.55,
+      logProbThreshold: isSystemAudio ? -0.9 : -1.2,
+      compressionRatioThreshold: 2.4,
+      hallucinationSilenceThreshold: isSystemAudio ? 0.9 : 1.5,
+      repetitionPenalty: 1.06,
+      noRepeatNgramSize: 3,
       label: "Accurate ASR: small.en / int8_float16 / beam 3",
     };
   }
@@ -848,6 +937,12 @@ function localAsrProfile() {
     bestOf: 2,
     patience: 1.0,
     conditionOnPreviousText: false,
+    noSpeechThreshold: isSystemAudio ? 0.68 : 0.58,
+    logProbThreshold: isSystemAudio ? -0.85 : -1.1,
+    compressionRatioThreshold: 2.4,
+    hallucinationSilenceThreshold: isSystemAudio ? 0.8 : 1.2,
+    repetitionPenalty: 1.08,
+    noRepeatNgramSize: 3,
     label: "Balanced ASR: small.en / int8 / beam 2",
   };
 }
@@ -887,21 +982,36 @@ function effectiveLocalChunkSeconds(isLowLatencyLocal) {
 
 function localRealtimeTuning() {
   const isLowLatencyLocal = localLatencyPreset?.value === "low";
+  const isSystemAudio = audioSource?.value === "system";
   if (isLowLatencyLocal) {
     return {
-      overlap_seconds: 0.3,
+      overlap_seconds: isSystemAudio ? 0.15 : 0.3,
+      adaptive_chunking_enabled: !isSystemAudio,
+      min_chunk_seconds: isSystemAudio ? 2 : 1,
+      chunk_flush_silence_seconds: isSystemAudio ? 0 : 0.35,
       queue_max_size: 2,
-      segmenter_pause_seconds: 0.9,
-      segmenter_max_words: 28,
-      segmenter_max_seconds: 8,
+      segmenter_pause_seconds: isSystemAudio ? 1.1 : 0.9,
+      segmenter_max_words: isSystemAudio ? 22 : 28,
+      segmenter_max_seconds: isSystemAudio ? 6 : 8,
+      context_buffer_enabled: false,
+      context_buffer_min_words: 10,
+      context_buffer_max_words: 42,
+      context_buffer_max_wait_seconds: 0.8,
     };
   }
   return {
-    overlap_seconds: 0.5,
+    overlap_seconds: isSystemAudio ? 0.2 : 0.5,
+    adaptive_chunking_enabled: !isSystemAudio,
+    min_chunk_seconds: isSystemAudio ? 3 : 1.5,
+    chunk_flush_silence_seconds: isSystemAudio ? 0 : 0.45,
     queue_max_size: 2,
     segmenter_pause_seconds: 1.2,
-    segmenter_max_words: 36,
-    segmenter_max_seconds: 12,
+    segmenter_max_words: isSystemAudio ? 30 : 36,
+    segmenter_max_seconds: isSystemAudio ? 9 : 12,
+    context_buffer_enabled: false,
+    context_buffer_min_words: 14,
+    context_buffer_max_words: 52,
+    context_buffer_max_wait_seconds: 1.1,
   };
 }
 
@@ -984,18 +1094,34 @@ function start() {
         asr_beam_size: asrProfile?.beamSize ?? 3,
         asr_best_of: asrProfile?.bestOf ?? 3,
         asr_patience: asrProfile?.patience ?? 1.2,
-        asr_condition_on_previous_text: asrProfile?.conditionOnPreviousText ?? true,
+        asr_condition_on_previous_text: asrProfile?.conditionOnPreviousText ?? false,
+        asr_no_speech_threshold: asrProfile?.noSpeechThreshold ?? 0.58,
+        asr_log_prob_threshold: asrProfile?.logProbThreshold ?? -1.1,
+        asr_compression_ratio_threshold: asrProfile?.compressionRatioThreshold ?? 2.4,
+        asr_hallucination_silence_threshold: asrProfile?.hallucinationSilenceThreshold ?? 1.2,
+        asr_repetition_penalty: asrProfile?.repetitionPenalty ?? 1.08,
+        asr_no_repeat_ngram_size: asrProfile?.noRepeatNgramSize ?? 3,
+        asr_hotwords_enabled: false,
+        asr_use_default_hotwords: false,
         audio_source: audioSource.value,
         source_language: sourceLanguage.value,
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
+        system_vad_rms_threshold: 0.016,
         chunk_seconds: effectiveChunk,
         overlap_seconds: realtimeTuning?.overlap_seconds ?? 0.5,
+        adaptive_chunking_enabled: realtimeTuning?.adaptive_chunking_enabled ?? true,
+        min_chunk_seconds: realtimeTuning?.min_chunk_seconds ?? 1,
+        chunk_flush_silence_seconds: realtimeTuning?.chunk_flush_silence_seconds ?? 0.35,
         max_subtitles: serverSubtitleWindow,
         queue_max_size: realtimeTuning?.queue_max_size ?? 2,
         segmenter_pause_seconds: realtimeTuning?.segmenter_pause_seconds,
         segmenter_max_words: realtimeTuning?.segmenter_max_words,
         segmenter_max_seconds: realtimeTuning?.segmenter_max_seconds,
+        context_buffer_enabled: realtimeTuning?.context_buffer_enabled ?? true,
+        context_buffer_min_words: realtimeTuning?.context_buffer_min_words,
+        context_buffer_max_words: realtimeTuning?.context_buffer_max_words,
+        context_buffer_max_wait_seconds: realtimeTuning?.context_buffer_max_wait_seconds,
       },
     }));
   });
@@ -1099,7 +1225,8 @@ async function processMeetingRecording() {
   notesAbortController = new AbortController();
   notesTimeoutId = window.setTimeout(() => {
     cancelMeetingNotes("Meeting notes timed out. Try a shorter recording.");
-  }, 8 * 60 * 1000);
+  }, 30 * 60 * 1000);
+  startNotesProgressPolling();
   updateMeetingActionButtons();
   noticeText.textContent = "Processing meeting notes";
   const recordings = selectedRecordings();
@@ -1109,7 +1236,7 @@ async function processMeetingRecording() {
     const response = await fetch("/api/process-recording", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recordings }),
+      body: JSON.stringify({ recordings, engine: translationEngine.value }),
       signal: notesAbortController.signal,
     });
     const payload = await response.json().catch(() => ({}));
@@ -1120,8 +1247,10 @@ async function processMeetingRecording() {
     const minutesPreview = (payload.minutesText || "").slice(0, 1600).trim();
     latestMinutesPath = payload.minutes || "";
     noticeText.textContent = "Meeting notes ready";
+    setNotesProgress(100, "Complete", "Meeting notes are ready.", true);
     logText.textContent = [
       "Post-meeting files generated.",
+      payload.notesMode || notesBuildHint(),
       `ASR engine: ${payload.asrEngine || "auto"}`,
       `Recording: ${payload.recording}`,
       `Transcript: ${payload.transcript}`,
@@ -1133,10 +1262,12 @@ async function processMeetingRecording() {
   } catch (error) {
     if (error.name === "AbortError") {
       noticeText.textContent = "Meeting notes cancelled";
+      setNotesProgress(0, "Cancelled", "Meeting notes generation was cancelled.", false);
       setStatus("Stopped", "Meeting notes generation was cancelled.");
       logText.textContent = "Post-meeting notes generation was cancelled. Choose recordings and build again when ready.";
     } else {
       noticeText.textContent = "Meeting notes failed";
+      setNotesProgress(0, "Failed", error.message || "Post-meeting processing failed.", false);
       setStatus("Error", error.message || "Post-meeting processing failed.");
       logText.textContent = error.message || "Post-meeting processing failed.";
     }
@@ -1146,6 +1277,7 @@ async function processMeetingRecording() {
       notesTimeoutId = null;
     }
     notesAbortController = null;
+    stopNotesProgressPolling();
     isProcessingNotes = false;
     updateMeetingActionButtons();
   }
@@ -1160,6 +1292,8 @@ async function cancelMeetingNotes(message = "Meeting notes generation was cancel
   if (notesAbortController) {
     notesAbortController.abort();
   }
+  stopNotesProgressPolling();
+  setNotesProgress(0, "Cancelled", message, false);
   noticeText.textContent = "Meeting notes cancelled";
   logText.textContent = message;
 }

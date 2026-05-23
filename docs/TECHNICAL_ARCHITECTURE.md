@@ -29,7 +29,7 @@ Local mode uses faster-whisper for ASR and Argos, MarianMT, or NLLB for translat
 English local mode defaults to `small.en` for better meeting transcription, with `base.en` kept as the faster option. Spanish local mode automatically maps those selections to multilingual `small` and `base`, then translates `spa_Latn -> zho_Hans`.
 The faster-whisper wrapper uses multi-candidate decoding, light repetition control, a meeting-domain prompt, and a less aggressive VAD silence window so local ASR favors transcript quality over the previous fastest possible decode.
 The browser exposes local ASR presets for the 4GB NVIDIA T600 Laptop GPU: `Fast` maps to `base.en + int8`, `Balanced` maps to `small.en + int8`, and `Accurate` maps to `small.en + int8_float16`. `medium.en` remains a manual experiment rather than a default preset because available VRAM is tight once Windows, Teams, the browser, and Codex are running.
-The local default chunk is `2s`. The `Low` preset uses a `2s` chunk, `0.3s` overlap, queue size `2`, and sentence-oriented utterance segmentation so English remains responsive while Chinese waits for a fuller thought. The `Steady` preset uses a `3s` chunk, `0.5s` overlap, queue size `2`, and looser segmentation for more complete wording. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a meaningful idle pause, max length, or max duration. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
+The local default max chunk is `2s`. The `Low` preset uses a `2s` max chunk, `1s` adaptive minimum, `0.35s` silence flush, `0.3s` overlap, queue size `2`, and sentence-oriented utterance segmentation so English remains responsive while Chinese waits for a fuller thought. The `Steady` preset uses a `3s` max chunk, `1.5s` adaptive minimum, `0.45s` silence flush, `0.5s` overlap, queue size `2`, and looser segmentation for more complete wording. The audio chunker keeps the max window for continuous speech, but flushes early after speech followed by a short quiet tail. Because normal use is `System` loopback, the backend applies a stricter system-audio RMS gate before ASR and adaptive flush decisions to reduce low-level loopback silence hallucinations. `LocalUtteranceAggregator` turns ASR chunks into a stable English utterance stream, then sends only ready utterances to translation after a meaningful idle pause, max length, or max duration. `ContextualTranslationBuffer` can briefly hold short or dependent ready utterances and merge them with the next ready utterance before translation. Translation jobs are queued in the background so English draft updates do not wait for Chinese translation.
 The `faster-whisper` module is loaded lazily when local ASR is actually requested, so Azure startup does not fail just because local ASR dependencies are unavailable on a given Windows machine.
 
 ## Key Backend Modules
@@ -60,6 +60,10 @@ The meeting-notes route processes the latest session WAV after the meeting is en
 
 If the transcript is too short or too noisy, the minutes generator keeps the document readable but avoids inventing decisions, action items, or risks.
 
+When `POST_MEETING_ASR_ENGINE=azure-batch` and `AZURE_BATCH_CONTAINER_SAS_URL` is configured, post-meeting notes use Azure Batch Transcription with diarization. The original WAV is uploaded to Azure Blob, submitted as `contentUrls`, polled until completion, then converted into local transcript/minutes files. If Blob SAS is missing, the backend reports local fallback status and uses faster-whisper without speaker separation.
+
+The post-meeting route also receives the currently selected frontend engine. Azure Cloud mode attempts Azure Batch, while local engines force local faster-whisper notes and skip speaker separation.
+
 ## Latency Design
 
 - Azure route avoids fixed local time slicing.
@@ -88,6 +92,10 @@ This is not true speaker diarization. True diarization is a Phase 2+ feature.
 $env:AZURE_SPEECH_KEY="..."
 $env:AZURE_SPEECH_REGION="..."
 $env:AZURE_PHRASE_LIST="AHU,BMS,EMS,HVAC,WFI,PW,CIP,SIP,FAT,SAT,P&ID,HAZOP"
+$env:ASR_PROMPT_TERMS="cleanroom,commissioning,validation,ISO Class 7"
+$env:TERMINOLOGY_GLOSSARY_PATH="backend/glossary.csv"
 ```
+
+Terminology hotwords are loaded by `backend/terminology.py` from built-in engineering defaults, `AZURE_PHRASE_LIST`, `ASR_PROMPT_TERMS`, and `backend/glossary.csv`. Azure uses the final list as a `PhraseListGrammar`. Local faster-whisper can use terminology for `initial_prompt` and `hotwords`, but this is disabled by default for live `System` mode because an overly specific prompt can bias general meeting or video audio. Post-meeting faster-whisper processing reuses the same module.
 
 Do not commit real API keys.

@@ -17,9 +17,9 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
 - Local ASR decoding: `Fast` uses beam 1, `Balanced` uses beam 2, and `Accurate` uses beam 3
 - Local default chunk: `2s`
-- Local low-latency preset: `2s` audio chunk, `0.3s` overlap, queue max size `2`
-- Local steady preset: `3s` audio chunk, `0.5s` overlap, queue max size `2`
-- VAD: skip low-RMS silence before ASR
+- Local low-latency preset: `2s` max audio chunk, `1s` adaptive minimum, `0.35s` silence flush, `0.3s` overlap, queue max size `2`
+- Local steady preset: `3s` max audio chunk, `1.5s` adaptive minimum, `0.45s` silence flush, `0.5s` overlap, queue max size `2`
+- VAD: skip low-RMS silence before ASR; `System` input uses a stricter default gate than `Mic` to avoid loopback silence/weak-noise hallucinations
 - Local translation engine: `argos`
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
 - Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
@@ -127,7 +127,30 @@ Optional phrase list for better names and technical terms:
 
 ```powershell
 $env:AZURE_PHRASE_LIST="Teams,Codex,faster-whisper,MarianMT,Azure Speech"
+$env:ASR_PROMPT_TERMS="AHU,BMS,EMS,HVAC,WFI,CIP,SIP,P&ID"
 ```
+
+The terminology hotword system is shared by Azure Cloud subtitles, local faster-whisper subtitles, and post-meeting processing. For a larger private glossary, copy `backend/glossary.example.csv` to `backend/glossary.csv` and add rows with:
+
+```csv
+source,target,aliases,notes
+AHU,空气处理机组,Air Handling Unit,HVAC equipment
+```
+
+`source` and `aliases` are used as recognition hotwords. `target` is kept for human-readable translation terminology and future glossary-assisted translation. `backend/glossary.csv` is ignored by Git so private project terms stay local. Set `TERMINOLOGY_GLOSSARY_PATH` if you want to keep the glossary elsewhere.
+
+## Azure Batch Meeting Notes
+
+For post-meeting notes with cloud speaker separation, set:
+
+```powershell
+$env:POST_MEETING_ASR_ENGINE="azure-batch"
+$env:AZURE_BATCH_CONTAINER_SAS_URL="https://<storage>.blob.core.windows.net/<container>?<sas>"
+```
+
+The SAS URL should point to a private Blob container and allow create/write/read/list for the processing window. The app uploads the original WAV, submits Azure Batch Transcription with diarization enabled, polls the job, downloads the transcript, and then builds the notes locally. If the SAS URL is missing, the app falls back to local transcription without speaker separation.
+
+Post-meeting notes follow the selected live engine: Azure Cloud mode attempts Azure Batch meeting notes, while Argos, MarianMT, and NLLB modes use local post-meeting transcription without speaker separation.
 
 MiniMax polishing and Balanced/Quality modes have been removed. The app now keeps a single fast/direct live-subtitle path.
 
@@ -302,11 +325,12 @@ Local mode runs four async workers:
 audio_capture_worker
   -> asr_worker
   -> LocalUtteranceAggregator
+  -> ContextualTranslationBuffer
   -> translate_worker
   -> websocket_push_worker
 ```
 
-In the Low latency preset, the audio queue uses max size `2`. The English draft still updates quickly, but the local segmenter now waits longer before sending text to Chinese translation so short ASR fragments do not become broken Chinese sentences. The translation queue preserves ready utterances so completed sentences are not lost.
+In the Low latency preset, the audio queue uses max size `2`. The English draft still updates quickly, but the local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
 
 For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
 

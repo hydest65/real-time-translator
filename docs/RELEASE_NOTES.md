@@ -18,6 +18,11 @@ Local-only note: this version is intended for the NVIDIA T600 Laptop GPU machine
 - Added a delay hint panel so the user can distinguish cloud setup problems from live caption delay.
 - Fixed the misleading state where subtitles were moving but the side panel could still imply that captions were unavailable.
 - Updated live subtitle receipt tracking so active captions can report a healthy live state instead of a stale warning.
+- Added adaptive local audio chunking: continuous speech still uses the selected max chunk window, while speech followed by a short quiet tail flushes earlier for faster local ASR feedback.
+- Added a shared terminology hotword loader for Azure phrase lists, local faster-whisper prompts/hotwords, and post-meeting faster-whisper processing.
+- Added a contextual translation buffer that briefly holds short or dependent local utterances, merges nearby context when possible, and flushes quickly when no follow-up arrives.
+- Added a stricter default RMS noise gate for `System` input so loopback silence and weak residual audio are less likely to reach local Whisper ASR.
+- Switched live local `System` defaults back toward stability: fixed chunks instead of adaptive short flushes, contextual translation merging disabled by default, and local ASR prompt/hotword bias disabled by default.
 
 ### Meeting Notes
 
@@ -25,6 +30,11 @@ Local-only note: this version is intended for the NVIDIA T600 Laptop GPU machine
 - Generated notes now use one `.docx` file with the English professional minutes first and the Chinese reading version second.
 - Added a transcript cleanup step for post-meeting processing so raw ASR markup such as language and emotion tags does not leak into the minutes.
 - Added a content-quality guard: when the captured transcript is too short or noisy, the minutes clearly say that decisions, actions, and risks cannot be inferred safely instead of inventing them.
+- Added topic segmentation to meeting notes. The notes now include a Topic Timeline that creates new topic sections when the transcript changes subject, moves to a new agenda item, or has a meaningful time gap.
+- Added a visible meeting-notes progress bar backed by `GET /api/process-recording-progress`, so long post-meeting processing shows upload, transcription, summary, and completion stages.
+- Added Azure Batch Transcription as the cloud meeting-notes path. When the live engine is Azure and Blob SAS storage is configured, post-meeting notes use Azure cloud transcription with speaker separation; local engines continue to use local faster-whisper without speaker separation.
+- Added a safe fallback when Azure Batch storage is not configured: cloud mode explains the missing Blob SAS setup and uses local notes instead of failing.
+- Added chunked faster-whisper transcription for long recordings, with a guard against very short chunks that degrade ASR context and increase repetition.
 
 ### Verification
 
@@ -32,6 +42,9 @@ Local-only note: this version is intended for the NVIDIA T600 Laptop GPU machine
 - Backend and recording-processing Python compile checks passed.
 - Latest minutes lookup was verified to prefer `.docx` files over `.md` files.
 - A sample `.docx` minutes file was rendered successfully, with English on the first page and Chinese on the second page.
+- Azure Fast Transcription was tested but rejected diarization on the current endpoint, so Azure Batch remains the selected cloud diarization path.
+- Local fallback routing was verified: Azure without `AZURE_BATCH_CONTAINER_SAS_URL` falls back to `faster-whisper`, while local engines always stay local.
+- Git diff whitespace check passed before publish.
 
 ## 0.1.9-local-t600 - Local ASR Presets for 4GB GPU
 

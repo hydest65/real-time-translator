@@ -37,7 +37,15 @@ class AppConfig:
     asr_beam_size: int = 3
     asr_best_of: int = 3
     asr_patience: float = 1.2
-    asr_condition_on_previous_text: bool = True
+    asr_condition_on_previous_text: bool = False
+    asr_no_speech_threshold: float = 0.58
+    asr_log_prob_threshold: float = -1.1
+    asr_compression_ratio_threshold: float = 2.4
+    asr_hallucination_silence_threshold: float = 1.2
+    asr_repetition_penalty: float = 1.08
+    asr_no_repeat_ngram_size: int = 3
+    asr_hotwords_enabled: bool = False
+    asr_use_default_hotwords: bool = False
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
     translation_engine: TranslationEngine = "azure"
@@ -46,9 +54,13 @@ class AppConfig:
     audio_channels: int = 1
     chunk_seconds: float = 2.0
     overlap_seconds: float = 0.3
+    adaptive_chunking_enabled: bool = True
+    min_chunk_seconds: float = 1.0
+    chunk_flush_silence_seconds: float = 0.35
     max_subtitles: int = 1
     queue_max_size: int = 2
     vad_rms_threshold: float = 0.008
+    system_vad_rms_threshold: float = 0.016
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
     marian_es_zh_model_name: str = "Helsinki-NLP/opus-mt-es-zh"
@@ -65,6 +77,10 @@ class AppConfig:
     segmenter_pause_seconds: float = 0.9
     segmenter_max_words: int = 28
     segmenter_max_seconds: float = 8.0
+    context_buffer_enabled: bool = False
+    context_buffer_min_words: int = 10
+    context_buffer_max_words: int = 42
+    context_buffer_max_wait_seconds: float = 0.8
 
 
 config = AppConfig()

@@ -89,6 +89,10 @@ class MicrophoneAudioCapture:
         channels: int,
         chunk_seconds: float,
         overlap_seconds: float = 0.5,
+        adaptive_chunking_enabled: bool = True,
+        min_chunk_seconds: float | None = None,
+        chunk_flush_silence_seconds: float = 0.35,
+        chunk_flush_rms_threshold: float = 0.008,
         audio_source: str = "microphone",
         recording_path: Path | None = None,
     ) -> None:
@@ -97,6 +101,11 @@ class MicrophoneAudioCapture:
         self.chunk_seconds = chunk_seconds
         self.audio_source = audio_source
         self.overlap_seconds = min(max(overlap_seconds, 0.0), max(chunk_seconds - 0.1, 0.0))
+        self.adaptive_chunking_enabled = adaptive_chunking_enabled
+        default_min_chunk = max(0.6, min(chunk_seconds, chunk_seconds * 0.6))
+        self.min_chunk_seconds = min(max(min_chunk_seconds or default_min_chunk, 0.5), chunk_seconds)
+        self.chunk_flush_silence_seconds = max(0.0, min(chunk_flush_silence_seconds, self.min_chunk_seconds))
+        self.chunk_flush_rms_threshold = max(0.0, chunk_flush_rms_threshold)
         self._queue: "queue.Queue[np.ndarray]" = queue.Queue()
         self._stream: Optional[sd.InputStream] = None
         self._system_recorder = None
@@ -419,6 +428,9 @@ class MicrophoneAudioCapture:
     async def chunks(self) -> AsyncIterator[AudioChunk]:
         chunk_samples = int(self.sample_rate * self.chunk_seconds)
         step_samples = max(1, int(self.sample_rate * (self.chunk_seconds - self.overlap_seconds)))
+        min_chunk_samples = max(1, int(self.sample_rate * self.min_chunk_seconds))
+        silence_samples = max(1, int(self.sample_rate * self.chunk_flush_silence_seconds))
+        overlap_samples = int(self.sample_rate * self.overlap_seconds)
         buffer = np.empty(0, dtype=np.float32)
 
         while not self._stopped:
@@ -439,6 +451,21 @@ class MicrophoneAudioCapture:
                 buffer = buffer[step_samples:]
                 self._next_start_sample += step_samples
 
+            if self._should_flush_adaptive_chunk(buffer, min_chunk_samples, silence_samples):
+                samples = buffer.copy()
+                rms = self._rms(samples)
+                start = self._next_start_sample / self.sample_rate
+                end = start + (len(samples) / self.sample_rate)
+                yield AudioChunk(samples=samples, start_seconds=start, end_seconds=end, rms=rms)
+
+                retained = min(len(buffer), overlap_samples)
+                if retained > 0:
+                    buffer = buffer[-retained:].copy()
+                    self._next_start_sample += len(samples) - retained
+                else:
+                    buffer = np.empty(0, dtype=np.float32)
+                    self._next_start_sample += len(samples)
+
     async def frames(self) -> AsyncIterator[np.ndarray]:
         """Yield short raw audio frames for cloud streaming recognizers."""
 
@@ -449,6 +476,20 @@ class MicrophoneAudioCapture:
                 await asyncio.sleep(0.01)
                 continue
             yield part.astype(np.float32)
+
+    def _should_flush_adaptive_chunk(self, buffer: np.ndarray, min_chunk_samples: int, silence_samples: int) -> bool:
+        if not self.adaptive_chunking_enabled or self.chunk_flush_silence_seconds <= 0:
+            return False
+        if len(buffer) < min_chunk_samples or len(buffer) < silence_samples:
+            return False
+        if self._rms(buffer) < self.chunk_flush_rms_threshold:
+            return False
+        tail = buffer[-silence_samples:]
+        return self._rms(tail) < self.chunk_flush_rms_threshold
+
+    @staticmethod
+    def _rms(samples: np.ndarray) -> float:
+        return float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0
 
 
 def resample_linear(samples: np.ndarray, source_rate: int, target_rate: int) -> np.ndarray:

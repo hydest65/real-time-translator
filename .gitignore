@@ -4,6 +4,8 @@ __pycache__/
 .env
 .env*
 !.env.example
+backend/glossary.csv
+!backend/glossary.example.csv
 .cache/
 .runtime/
 recordings/
