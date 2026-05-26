@@ -333,6 +333,49 @@ select,
   overflow-wrap: anywhere;
 }
 
+.usage-panel {
+  display: grid;
+  gap: 7px;
+}
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.usage-grid div {
+  min-width: 0;
+  padding: 6px 5px;
+  border-radius: 10px;
+  background: var(--bg);
+  box-shadow: inset 2px 2px 6px var(--dark-shadow), inset -2px -2px 6px var(--light-shadow);
+}
+
+.usage-label {
+  display: block;
+  margin-bottom: 2px;
+  color: var(--muted);
+  font-size: 7px;
+  font-weight: 900;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.usage-grid strong {
+  display: block;
+  color: #2d3a4d;
+  font-size: 10px;
+  line-height: 1.1;
+  font-weight: 950;
+  white-space: nowrap;
+}
+
+.usage-note {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .notes-progress {
   margin-top: 8px;
   display: grid;

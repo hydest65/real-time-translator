@@ -31,6 +31,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - Bilingual Word meeting-minutes export with English professional minutes first and Chinese reading version second in the same document.
 - Local WAV recording for optional post-meeting speaker diarization.
 - Top-left red status lamp that remains visible when stopped and pulses while running.
+- Azure usage panel for current-session timing, browser-local day/month estimates, and optional Azure Monitor account-level synchronization.
 - Visual UI editor for local browser-side tuning of colors, subtitle size, panel width, corner radius, and background decoration.
 - Lightweight paragraph turn detection by pause interval.
 
@@ -66,3 +67,4 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - Local MarianMT and NLLB do not need to match Azure realtime behavior on this machine; they are comparison paths rather than the primary recommended route.
 - User can open `/static/ui-editor.html`, tune the visual style, save it locally, and see the saved style on the main subtitle page.
 - User can end a meeting and open the generated bilingual Word notes without manually looking for a Markdown file.
+- User can see whether Azure usage is only a browser-local estimate or backed by Azure Monitor sync.

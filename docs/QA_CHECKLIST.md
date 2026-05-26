@@ -57,6 +57,15 @@ Current closeout result on 2026-05-24:
 - Local fallback regression test completed on a real WAV recording and did not create a `.speakers.md` file for unverified pause-based turns.
 - Azure Fast Transcription diarization was tested and returned an endpoint-side 400 response, so it is not the chosen diarization route.
 
+Current closeout result on 2026-05-25:
+
+- Backend Python syntax check passed for `backend/main.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.
+- Local runtime smoke test passed for `GET /` on port `8001`.
+- `GET /api/azure-usage` returned a safe `configured=false` payload when Azure Monitor service-principal variables were not configured.
+- `.gitignore` excludes `.env` and `.env*`, while keeping `.env.example` tracked.
+- Azure Speech live credentials can remain local in `.env`; Azure Monitor sync still requires `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_SPEECH_RESOURCE_ID`.
+
 ## Runtime Smoke Test
 
 ```powershell
@@ -110,6 +119,8 @@ Test matrix:
 - Transcript export downloads the full final subtitle list, not just the visible rolling history.
 - Minutes export opens as a Word `.docx` file for normal review.
 - Minutes export includes English minutes first and Chinese minutes second in the same document.
+- Azure usage panel labels local browser estimates clearly when Azure Monitor sync is not configured.
+- Azure usage panel should switch to Cloud Day / Cloud Month after `/api/azure-usage` returns a configured Azure Monitor payload.
 - No raw ASR language/emotion tags appear in the generated minutes.
 - Speaker labels in exports are pause-based turns and are not treated as verified diarization.
 - Starting a session creates a local WAV file in `recordings/`.

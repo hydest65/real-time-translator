@@ -2,14 +2,18 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
+import json
 import os
 import re
 import sys
 import time
+import urllib.error
+import urllib.parse
+import urllib.request
 import wave
 import zipfile
 from dataclasses import asdict, dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
 from typing import Any
@@ -48,6 +52,10 @@ post_meeting_progress: dict[str, Any] = {
     "total": 0,
     "startedAt": 0.0,
     "updatedAt": time.time(),
+}
+azure_usage_cache: dict[str, Any] = {
+    "fetchedAt": 0.0,
+    "payload": None,
 }
 
 app = FastAPI(title="Low Latency Real Time Translator")
@@ -494,6 +502,119 @@ def public_config_payload(active_config: AppConfig) -> dict[str, Any]:
     return data
 
 
+def azure_monitor_config() -> dict[str, str]:
+    return {
+        "tenant_id": os.getenv("AZURE_TENANT_ID", "").strip(),
+        "client_id": os.getenv("AZURE_CLIENT_ID", "").strip(),
+        "client_secret": os.getenv("AZURE_CLIENT_SECRET", "").strip(),
+        "resource_id": os.getenv("AZURE_SPEECH_RESOURCE_ID", "").strip(),
+        "monthly_seconds_limit": os.getenv("AZURE_SPEECH_MONTHLY_SECONDS_LIMIT", "").strip(),
+    }
+
+
+def azure_monitor_configured() -> bool:
+    settings = azure_monitor_config()
+    return bool(
+        settings["tenant_id"]
+        and settings["client_id"]
+        and settings["client_secret"]
+        and settings["resource_id"]
+    )
+
+
+def utc_iso(value: datetime) -> str:
+    return value.astimezone(timezone.utc).replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+
+def month_start_utc(now: datetime) -> datetime:
+    return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+
+def http_json(url: str, method: str = "GET", data: dict[str, str] | None = None, token: str = "") -> dict[str, Any]:
+    encoded_data = None
+    headers = {"Accept": "application/json"}
+    if data is not None:
+        encoded_data = urllib.parse.urlencode(data).encode("utf-8")
+        headers["Content-Type"] = "application/x-www-form-urlencoded"
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
+    try:
+        with urllib.request.urlopen(request, timeout=20) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="ignore")
+        raise RuntimeError(f"Azure request failed: {exc.code} {detail[:240]}") from exc
+    except urllib.error.URLError as exc:
+        raise RuntimeError(f"Azure request failed: {exc.reason}") from exc
+
+
+def azure_monitor_token(settings: dict[str, str]) -> str:
+    token_url = f"https://login.microsoftonline.com/{settings['tenant_id']}/oauth2/v2.0/token"
+    payload = http_json(
+        token_url,
+        method="POST",
+        data={
+            "client_id": settings["client_id"],
+            "client_secret": settings["client_secret"],
+            "grant_type": "client_credentials",
+            "scope": "https://management.azure.com/.default",
+        },
+    )
+    token = str(payload.get("access_token") or "")
+    if not token:
+        raise RuntimeError("Azure Monitor token response did not include an access token.")
+    return token
+
+
+def azure_audio_seconds(token: str, resource_id: str, start: datetime, end: datetime) -> float:
+    query = urllib.parse.urlencode(
+        {
+            "api-version": "2023-10-01",
+            "metricnames": "AudioSecondsTranslated",
+            "timespan": f"{utc_iso(start)}/{utc_iso(end)}",
+            "interval": "PT1H",
+            "aggregation": "Total",
+        }
+    )
+    url = f"https://management.azure.com{resource_id}/providers/microsoft.insights/metrics?{query}"
+    payload = http_json(url, token=token)
+    total = 0.0
+    for metric in payload.get("value", []):
+        for series in metric.get("timeseries", []):
+            for point in series.get("data", []):
+                total += float(point.get("total") or 0)
+    return total
+
+
+def fetch_azure_usage_payload() -> dict[str, Any]:
+    settings = azure_monitor_config()
+    if not azure_monitor_configured():
+        return {
+            "ok": True,
+            "configured": False,
+            "source": "not_configured",
+            "message": "Azure Monitor sync needs tenant, client, secret, and Speech resource id.",
+        }
+    now = datetime.now(timezone.utc)
+    token = azure_monitor_token(settings)
+    day_seconds = azure_audio_seconds(token, settings["resource_id"], now - timedelta(hours=24), now)
+    month_seconds = azure_audio_seconds(token, settings["resource_id"], month_start_utc(now), now)
+    monthly_limit = float(settings["monthly_seconds_limit"] or 0)
+    remaining_seconds = max(0.0, monthly_limit - month_seconds) if monthly_limit > 0 else None
+    return {
+        "ok": True,
+        "configured": True,
+        "source": "azure_monitor",
+        "metric": "AudioSecondsTranslated",
+        "daySeconds": round(day_seconds, 2),
+        "monthSeconds": round(month_seconds, 2),
+        "monthlyLimitSeconds": monthly_limit or None,
+        "remainingSeconds": round(remaining_seconds, 2) if remaining_seconds is not None else None,
+        "syncedAt": utc_iso(now),
+    }
+
+
 @app.get("/")
 async def index() -> FileResponse:
     return FileResponse(
@@ -510,6 +631,25 @@ async def get_config() -> dict[str, Any]:
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     return {"ok": True, "message": "Backend is running", "config": public_config_payload(runtime.current_config)}
+
+
+@app.get("/api/azure-usage")
+async def azure_usage() -> dict[str, Any]:
+    cached_payload = azure_usage_cache.get("payload")
+    if cached_payload is not None and time.time() - float(azure_usage_cache.get("fetchedAt") or 0) < 60:
+        return dict(cached_payload)
+    try:
+        payload = await asyncio.to_thread(fetch_azure_usage_payload)
+    except RuntimeError as exc:
+        payload = {
+            "ok": False,
+            "configured": azure_monitor_configured(),
+            "source": "azure_monitor",
+            "message": str(exc),
+        }
+    azure_usage_cache["payload"] = payload
+    azure_usage_cache["fetchedAt"] = time.time()
+    return dict(payload)
 
 
 @app.post("/api/end-meeting")

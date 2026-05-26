@@ -26,6 +26,7 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
 - Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
+- Azure usage panel: shows current-session Azure time, local browser day/month estimates, and optional Azure Monitor account-level sync
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English or Spanish, both translated into Simplified Chinese
 - Azure subtitles: live partial results update the current row; final results enter the scrollable history
@@ -122,6 +123,18 @@ $env:AZURE_SPEECH_REGION="your_region"
 ```
 
 For a local test package, copy `.env.example` to `.env` and fill in your own Azure Speech values. Do not share your real `.env` file.
+
+Optional Azure Monitor usage sync:
+
+```powershell
+$env:AZURE_TENANT_ID="your_tenant_id"
+$env:AZURE_CLIENT_ID="your_app_registration_client_id"
+$env:AZURE_CLIENT_SECRET="your_client_secret"
+$env:AZURE_SPEECH_RESOURCE_ID="/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<speech-resource-name>"
+$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="360000"
+```
+
+The Speech key is enough for live translation, but it cannot read account-level usage. The usage panel calls `/api/azure-usage`, which uses Azure Monitor `AudioSecondsTranslated` through a service principal with `Monitoring Reader` access on the Speech resource. If these Azure Monitor variables are missing, the UI safely falls back to browser-local estimates and labels them as local-only.
 
 Optional phrase list for better names and technical terms:
 

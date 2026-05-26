@@ -1,5 +1,40 @@
 # Release Notes
 
+## 0.1.11-local-t600 - Azure Usage Sync Panel
+
+Date: 2026-05-25
+
+### Product
+
+- Added an Azure Usage panel to the left runtime sidebar.
+- The panel shows current-session Azure time and local browser day/month estimates.
+- The UI clearly labels local-only estimates so users do not confuse one machine's browser storage with account-wide Azure usage.
+
+### Technical
+
+- Added `GET /api/azure-usage` for optional Azure Monitor synchronization.
+- The backend queries Azure Monitor `AudioSecondsTranslated` with a service principal when `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_SPEECH_RESOURCE_ID` are configured.
+- Azure Monitor usage responses are cached for 60 seconds.
+- `.env.example` now documents Azure Monitor usage-sync variables and optional monthly seconds budget.
+
+### UI
+
+- Reduced usage-card label sizing and shortened labels to prevent two-line wrapping in the compact sidebar.
+- The panel switches between local estimate labels and Cloud Day / Cloud Month labels depending on whether Azure Monitor sync is configured.
+
+### Verification
+
+- Backend Python syntax check passed for `backend/main.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- Local runtime smoke test passed for `GET /` on port `8001`.
+- `GET /api/azure-usage` safely returned `configured=false` before Azure Monitor credentials were added.
+
+### Known Limitations
+
+- Azure Speech API keys can run live translation, but cannot read Azure Monitor metrics.
+- Account-level cloud usage sync requires a service principal with `Monitoring Reader` access to the Speech resource.
+- Until those Azure Monitor variables are configured, day/month numbers remain browser-local estimates.
+
 ## 0.1.10-local-t600 - Guided Meeting Flow and Bilingual Word Notes
 
 Date: 2026-05-17

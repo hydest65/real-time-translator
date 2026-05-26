@@ -59,6 +59,25 @@
             <span class="notice-pill muted" id="recordingStatusText">Off</span>
             <p class="panel-line" id="recordingFileText">No recording yet.</p>
           </div>
+          <div class="panel-section usage-panel" aria-label="Azure usage estimate">
+            <p class="panel-label">Azure Usage</p>
+            <span class="notice-pill muted" id="azureUsageStatusText">Estimate</span>
+            <div class="usage-grid">
+              <div>
+                <span class="usage-label">Session</span>
+                <strong id="azureUsageSessionText">0:00</strong>
+              </div>
+              <div>
+                <span class="usage-label" id="azureUsageDayLabel">Day</span>
+                <strong id="azureUsageTodayText">0 min</strong>
+              </div>
+              <div>
+                <span class="usage-label" id="azureUsageMonthLabel">Month</span>
+                <strong id="azureUsageMonthText">0 min</strong>
+              </div>
+            </div>
+            <p class="panel-line usage-note" id="azureUsageSyncText">This browser only. Azure sync not connected.</p>
+          </div>
           <div class="panel-section settings-panel">
             <details class="advanced-settings">
               <summary>Settings</summary>
@@ -192,7 +211,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=notes-progress-chunk-20260523"></script>
+    <script src="/static/app.js?v=usage-estimate-20260525"></script>
   </body>
 </html>
 

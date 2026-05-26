@@ -34,7 +34,7 @@ The `faster-whisper` module is loaded lazily when local ASR is actually requeste
 
 ## Key Backend Modules
 
-- `backend/main.py`: FastAPI app, WebSocket orchestration, queues, local utterance aggregation, workers, direct fast translation flow, and paragraph turn detection.
+- `backend/main.py`: FastAPI app, WebSocket orchestration, queues, local utterance aggregation, workers, direct fast translation flow, Azure usage sync endpoint, and paragraph turn detection.
 - `backend/audio_capture.py`: microphone capture plus Windows system-audio capture that prefers current-default-device loopback through `soundcard`, then falls back to Stereo Mix / speaker-monitor matching through `sounddevice`.
 - `backend/cloud_speech.py`: Azure streaming translation integration.
 - `backend/asr.py`: faster-whisper wrapper.
@@ -46,13 +46,19 @@ The `faster-whisper` module is loaded lazily when local ASR is actually requeste
 
 - `frontend/index.html`: main Subtitle Studio operating surface.
 - `frontend/style.css`: shared visual tokens, soft UI layout, subtitle monitor, controls, and saved-theme CSS variable hooks.
-- `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, and saved UI theme loading.
+- `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, Azure usage panel state, and saved UI theme loading.
 - Frontend rendering uses two UI modes: Azure events render into the original single bilingual subtitle stream, while local events split into continuous English context, live English draft, and complete Chinese translation panes.
 - `frontend/ui-editor.html`: visual editor page for tuning the main UI.
 - `frontend/ui-editor.css`: editor layout and control styling.
 - `frontend/ui-editor.js`: editor preview, `localStorage` save/reset behavior, and generated CSS preview.
 
 Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCompact20260502`. This is a local browser preference, not a server-side user setting.
+
+## Azure Usage Sync
+
+The left runtime panel includes an Azure usage block. Without Azure Monitor credentials, it records the current session and local day/month estimate in browser `localStorage` under `subtitleStudioAzureUsageEstimate20260525`; this does not synchronize across machines or browsers.
+
+When Azure Monitor credentials are configured, the frontend polls `GET /api/azure-usage` once per minute. The backend uses a service principal client-credentials token for `https://management.azure.com/.default`, queries the Speech resource metric `AudioSecondsTranslated`, and returns day/month account-level translated-audio seconds. Results are cached for 60 seconds so the UI does not repeatedly hit Azure Monitor.
 
 ## Post-Meeting Notes
 
@@ -94,8 +100,13 @@ $env:AZURE_SPEECH_REGION="..."
 $env:AZURE_PHRASE_LIST="AHU,BMS,EMS,HVAC,WFI,PW,CIP,SIP,FAT,SAT,P&ID,HAZOP"
 $env:ASR_PROMPT_TERMS="cleanroom,commissioning,validation,ISO Class 7"
 $env:TERMINOLOGY_GLOSSARY_PATH="backend/glossary.csv"
+$env:AZURE_TENANT_ID="..."
+$env:AZURE_CLIENT_ID="..."
+$env:AZURE_CLIENT_SECRET="..."
+$env:AZURE_SPEECH_RESOURCE_ID="/subscriptions/.../resourceGroups/.../providers/Microsoft.CognitiveServices/accounts/..."
+$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="360000"
 ```
 
 Terminology hotwords are loaded by `backend/terminology.py` from built-in engineering defaults, `AZURE_PHRASE_LIST`, `ASR_PROMPT_TERMS`, and `backend/glossary.csv`. Azure uses the final list as a `PhraseListGrammar`. Local faster-whisper can use terminology for `initial_prompt` and `hotwords`, but this is disabled by default for live `System` mode because an overly specific prompt can bias general meeting or video audio. Post-meeting faster-whisper processing reuses the same module.
 
-Do not commit real API keys.
+Do not commit real API keys, service-principal secrets, SAS URLs, or `.env` files.

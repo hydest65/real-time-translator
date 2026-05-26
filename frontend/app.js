@@ -38,6 +38,13 @@ const notesProgressPercent = document.querySelector("#notesProgressPercent");
 const notesProgressFill = document.querySelector("#notesProgressFill");
 const delayStatusText = document.querySelector("#delayStatusText");
 const delayHintText = document.querySelector("#delayHintText");
+const azureUsageStatusText = document.querySelector("#azureUsageStatusText");
+const azureUsageSessionText = document.querySelector("#azureUsageSessionText");
+const azureUsageTodayText = document.querySelector("#azureUsageTodayText");
+const azureUsageMonthText = document.querySelector("#azureUsageMonthText");
+const azureUsageDayLabel = document.querySelector("#azureUsageDayLabel");
+const azureUsageMonthLabel = document.querySelector("#azureUsageMonthLabel");
+const azureUsageSyncText = document.querySelector("#azureUsageSyncText");
 
 let socket = null;
 let finalSubtitleHistory = [];
@@ -67,11 +74,16 @@ let notesProgressTimer = null;
 let availableRecordings = [];
 let selectedRecordingPaths = new Set();
 let lastSubtitleReceivedAt = 0;
+let azureUsageStartedAt = null;
+let azureUsageTimer = null;
+let azureUsageCloud = null;
+let azureUsageSyncTimer = null;
 const maxDisplayHistory = 80;
 const maxChineseFlowCharacters = 520;
 const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
 const uiThemeStorageKey = "subtitleStudioUiThemeCompact20260502";
+const azureUsageStorageKey = "subtitleStudioAzureUsageEstimate20260525";
 
 function applyDefaultInputMode() {
   audioSource.value = "system";
@@ -88,6 +100,7 @@ async function loadRuntimeConfig() {
     azureBatchConfigured = Boolean(payload.azure_batch_configured);
     postMeetingAsrRequested = payload.post_meeting_asr_requested || "azure-batch";
     postMeetingAsrEffective = payload.post_meeting_asr_effective || "faster-whisper";
+    renderAzureUsage();
     if (!azureConfigured && translationEngine.value === "azure") {
       noticeText.textContent = "Azure not configured";
       logText.textContent = "Azure Speech key/region are empty. Azure mode will wait for valid cloud configuration.";
@@ -436,6 +449,189 @@ function formatDuration(milliseconds) {
     return `${hours}:${String(minutes).padStart(2, "0")}:${seconds}`;
   }
   return `${minutes}:${seconds}`;
+}
+
+function localDateKey(date = new Date()) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+    String(date.getDate()).padStart(2, "0"),
+  ].join("-");
+}
+
+function localMonthKey(date = new Date()) {
+  return [
+    date.getFullYear(),
+    String(date.getMonth() + 1).padStart(2, "0"),
+  ].join("-");
+}
+
+function readAzureUsageEstimate() {
+  try {
+    const raw = window.localStorage.getItem(azureUsageStorageKey);
+    const parsed = raw ? JSON.parse(raw) : {};
+    return {
+      dayKey: parsed.dayKey || localDateKey(),
+      monthKey: parsed.monthKey || localMonthKey(),
+      daySeconds: Number(parsed.daySeconds) || 0,
+      monthSeconds: Number(parsed.monthSeconds) || 0,
+    };
+  } catch (error) {
+    return {
+      dayKey: localDateKey(),
+      monthKey: localMonthKey(),
+      daySeconds: 0,
+      monthSeconds: 0,
+    };
+  }
+}
+
+function normalizedAzureUsageEstimate() {
+  const usage = readAzureUsageEstimate();
+  const today = localDateKey();
+  const month = localMonthKey();
+  if (usage.dayKey !== today) {
+    usage.dayKey = today;
+    usage.daySeconds = 0;
+  }
+  if (usage.monthKey !== month) {
+    usage.monthKey = month;
+    usage.monthSeconds = 0;
+  }
+  return usage;
+}
+
+function saveAzureUsageEstimate(usage) {
+  window.localStorage.setItem(azureUsageStorageKey, JSON.stringify(usage));
+}
+
+function formatUsageMinutes(seconds) {
+  if (seconds < 60) {
+    return `${Math.floor(seconds)} sec`;
+  }
+  const minutes = seconds / 60;
+  if (minutes < 90) {
+    return `${Math.round(minutes)} min`;
+  }
+  return `${(minutes / 60).toFixed(1)} hr`;
+}
+
+function formatSyncTime(value) {
+  if (!value) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return "";
+  }
+  return date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
+function currentAzureSessionSeconds() {
+  if (!azureUsageStartedAt) {
+    return 0;
+  }
+  return Math.max(0, Math.floor((Date.now() - azureUsageStartedAt.getTime()) / 1000));
+}
+
+function renderAzureUsage() {
+  if (!azureUsageSessionText) {
+    return;
+  }
+  const usage = normalizedAzureUsageEstimate();
+  const sessionSeconds = currentAzureSessionSeconds();
+  azureUsageSessionText.textContent = formatDuration(sessionSeconds * 1000);
+  if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
+    azureUsageDayLabel.textContent = "Cloud Day";
+    azureUsageMonthLabel.textContent = "Cloud Month";
+    azureUsageTodayText.textContent = formatUsageMinutes((azureUsageCloud.daySeconds || 0) + sessionSeconds);
+    azureUsageMonthText.textContent = formatUsageMinutes((azureUsageCloud.monthSeconds || 0) + sessionSeconds);
+  } else {
+    azureUsageDayLabel.textContent = "Local Day";
+    azureUsageMonthLabel.textContent = "Local Month";
+    azureUsageTodayText.textContent = formatUsageMinutes(usage.daySeconds + sessionSeconds);
+    azureUsageMonthText.textContent = formatUsageMinutes(usage.monthSeconds + sessionSeconds);
+  }
+  if (azureUsageStartedAt) {
+    azureUsageStatusText.textContent = "Tracking";
+    azureUsageStatusText.classList.remove("muted");
+  } else if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
+    azureUsageStatusText.textContent = "Cloud Sync";
+    azureUsageStatusText.classList.remove("muted");
+  } else if (translationEngine.value === "azure" && azureConfigured) {
+    azureUsageStatusText.textContent = "Ready";
+    azureUsageStatusText.classList.remove("muted");
+  } else {
+    azureUsageStatusText.textContent = "Estimate";
+    azureUsageStatusText.classList.add("muted");
+  }
+  if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
+    const syncedAt = formatSyncTime(azureUsageCloud.syncedAt);
+    const remaining = azureUsageCloud.remainingSeconds == null
+      ? ""
+      : ` Remaining ${formatUsageMinutes(azureUsageCloud.remainingSeconds)}.`;
+    azureUsageSyncText.textContent = `Azure Monitor synced${syncedAt ? ` ${syncedAt}` : ""}.${remaining}`;
+  } else if (azureUsageCloud?.message) {
+    azureUsageSyncText.textContent = azureUsageCloud.message;
+  } else {
+    azureUsageSyncText.textContent = "This browser only. Azure sync not connected.";
+  }
+}
+
+function startAzureUsageSession() {
+  if (translationEngine.value !== "azure" || !azureConfigured || azureUsageStartedAt) {
+    renderAzureUsage();
+    return;
+  }
+  azureUsageStartedAt = new Date();
+  if (azureUsageTimer) {
+    clearInterval(azureUsageTimer);
+  }
+  azureUsageTimer = setInterval(renderAzureUsage, 1000);
+  renderAzureUsage();
+}
+
+function stopAzureUsageSession() {
+  if (azureUsageTimer) {
+    clearInterval(azureUsageTimer);
+    azureUsageTimer = null;
+  }
+  if (!azureUsageStartedAt) {
+    renderAzureUsage();
+    return;
+  }
+  const usage = normalizedAzureUsageEstimate();
+  const sessionSeconds = currentAzureSessionSeconds();
+  usage.daySeconds += sessionSeconds;
+  usage.monthSeconds += sessionSeconds;
+  saveAzureUsageEstimate(usage);
+  azureUsageStartedAt = null;
+  renderAzureUsage();
+}
+
+async function refreshAzureUsageCloud() {
+  try {
+    const response = await fetch("/api/azure-usage", { cache: "no-store" });
+    if (!response.ok) {
+      throw new Error(`Azure usage sync failed: ${response.status}`);
+    }
+    azureUsageCloud = await response.json();
+  } catch (error) {
+    azureUsageCloud = {
+      ok: false,
+      configured: false,
+      message: "Azure sync unavailable. Showing local browser estimate.",
+    };
+  }
+  renderAzureUsage();
+}
+
+function startAzureUsageCloudPolling() {
+  refreshAzureUsageCloud();
+  if (azureUsageSyncTimer) {
+    clearInterval(azureUsageSyncTimer);
+  }
+  azureUsageSyncTimer = setInterval(refreshAzureUsageCloud, 60 * 1000);
 }
 
 function formatBytes(bytes) {
@@ -1084,6 +1280,7 @@ function start() {
       isCloud ? "Connecting cloud" : "Loading models",
       isCloud ? "Connecting to Azure Speech Translation." : "Preparing low-latency local pipeline.",
     );
+    startAzureUsageSession();
     updateMeetingActionButtons();
     socket.send(JSON.stringify({
       action: "start",
@@ -1160,6 +1357,7 @@ function start() {
   });
 
   socket.addEventListener("close", () => {
+    stopAzureUsageSession();
     stopButton.disabled = true;
     if (!statusDot.classList.contains("error")) {
       setStatus("Stopped");
@@ -1339,6 +1537,7 @@ downloadMinutesButton.addEventListener("click", () => {
 });
 translationEngine.addEventListener("change", updateEngineControls);
 translationEngine.addEventListener("change", updateLanguageHints);
+translationEngine.addEventListener("change", renderAzureUsage);
 localAsrPreset.addEventListener("change", applyLocalAsrPreset);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
 sourceLanguage.addEventListener("change", updateLanguageHints);
@@ -1353,6 +1552,8 @@ applyDefaultInputMode();
 updateExportButtons();
 updateEngineControls();
 updateLanguageHints();
+renderAzureUsage();
+startAzureUsageCloudPolling();
 loadRuntimeConfig();
 refreshLatestMinutesState();
 refreshRecordings();

@@ -19,6 +19,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - current step
   - caption readiness
   - recording status
+  - Azure usage
   - meeting notes status
   - delay hint
 - Azure main subtitle monitor:
