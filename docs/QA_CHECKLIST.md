@@ -32,9 +32,10 @@ Current closeout result on 2026-05-17:
 - Backend import check passed.
 - Frontend JavaScript syntax check passed with the bundled Node runtime.
 - UI editor JavaScript syntax check passed with the bundled Node runtime.
-- Default local ASR model now reports `small.en`.
+- Default local ASR tier now reports `1 核显` with `base.en`, CPU, and `int8`.
 - faster-whisper quality parameters are accepted by the installed package signature.
-- ASR Preset control maps `Fast`, `Balanced`, and `Accurate` to local ASR model / compute-type choices.
+- ASR Preset control maps `1 核显`, `2 独显`, and `3 工作站` to local ASR model / device / compute-type choices.
+- Hardware tier guidance assumes tester machines have 16GB RAM; choose the tier by graphics/compute class.
 - CTranslate2 CUDA check sees one CUDA device on the NVIDIA T600 Laptop GPU.
 - Torch CUDA remains unavailable, so MarianMT/NLLB should still be treated as CPU-bound unless the environment is changed.
 - Local sentence aggregation simulation passed: short ASR fragments are held and merged before Chinese translation.
@@ -65,6 +66,19 @@ Current closeout result on 2026-05-25:
 - `GET /api/azure-usage` returned a safe `configured=false` payload when Azure Monitor service-principal variables were not configured.
 - `.gitignore` excludes `.env` and `.env*`, while keeping `.env.example` tracked.
 - Azure Speech live credentials can remain local in `.env`; Azure Monitor sync still requires `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_SPEECH_RESOURCE_ID`.
+
+Current closeout result on 2026-05-28:
+
+- Python syntax checks passed for `backend/main.py`, `backend/cloud_speech.py`, and `scripts/process-recording.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.
+- Local runtime smoke test passed for `GET /` on port `8000`.
+- `GET /api/cloud-usage` returned a configured account-level payload with neutral `source=cloud_usage` and `metric=audio_seconds`.
+- `GET /api/config` returned only provider-neutral public config fields.
+- Frontend visible HTML text no longer contains provider-specific names.
+- Meeting-notes generation was regression-tested on `recordings/rec-0528-131932.wav` and produced `rec-0528-131932.minutes.docx`.
+- `/api/open-latest-minutes` opened the generated Word notes file.
+- Post-meeting local fallback now defaults to CPU to avoid CUDA DLL failures on tester machines; set `POST_MEETING_ASR_DEVICE=cuda` only on machines with a complete CUDA runtime.
+- GitHub Desktop's bundled Git was found and used for repository checks because `git` is not available in the default PowerShell PATH.
 
 ## Runtime Smoke Test
 

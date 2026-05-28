@@ -304,6 +304,11 @@ select,
   display: flex;
   flex-direction: column;
   gap: 8px;
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  padding-bottom: 22px;
+  scrollbar-gutter: stable;
 }
 
 .panel-section {
@@ -380,6 +385,28 @@ select,
   margin-top: 8px;
   display: grid;
   gap: 6px;
+}
+
+.notes-language-control {
+  display: grid;
+  gap: 6px;
+  margin: 9px 0 8px;
+  color: var(--muted);
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.notes-language-control select {
+  width: 100%;
+  border: 0;
+  border-radius: var(--ui-radius);
+  padding: 8px 12px;
+  background: linear-gradient(145deg, #eef4fd, #dfe8f4);
+  color: var(--text);
+  font-size: 0.82rem;
+  font-weight: 800;
+  box-shadow: inset 4px 4px 10px rgba(128, 143, 166, 0.18), inset -4px -4px 10px rgba(255, 255, 255, 0.92);
 }
 
 .notes-progress-header {
@@ -852,6 +879,8 @@ select,
   .side-panel {
     display: grid;
     grid-template-columns: repeat(2, minmax(0, 1fr));
+    overflow: visible;
+    padding-bottom: 10px;
   }
 
   .subtitle-box {

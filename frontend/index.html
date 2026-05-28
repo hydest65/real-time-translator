@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=notes-progress-chunk-20260523" />
+    <link rel="stylesheet" href="/static/style.css?v=cloud-branding-20260528" />
   </head>
   <body>
     <main class="studio">
@@ -13,7 +13,7 @@
           <span class="status-dot" id="statusDot"></span>
           <div>
             <p class="brand-title">Subtitle Studio</p>
-            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - Local or Azure cloud</p>
+            <p class="brand-subtitle" id="brandSubtitle">English to Chinese - Local or Cloud</p>
           </div>
         </div>
 
@@ -29,8 +29,9 @@
           <label>
             Speech
             <select id="sourceLanguage">
-              <option value="eng_Latn" selected>English (Azure en-US)</option>
-              <option value="spa_Latn">Spanish (Azure es-ES)</option>
+              <option value="eng_Latn" selected>English (en-US)</option>
+              <option value="spa_Latn">Spanish (es-ES)</option>
+              <option value="zho_Hans">Chinese (zh-CN)</option>
             </select>
           </label>
 
@@ -59,8 +60,8 @@
             <span class="notice-pill muted" id="recordingStatusText">Off</span>
             <p class="panel-line" id="recordingFileText">No recording yet.</p>
           </div>
-          <div class="panel-section usage-panel" aria-label="Azure usage estimate">
-            <p class="panel-label">Azure Usage</p>
+          <div class="panel-section usage-panel" aria-label="Cloud usage estimate">
+            <p class="panel-label">Cloud Usage</p>
             <span class="notice-pill muted" id="azureUsageStatusText">Estimate</span>
             <div class="usage-grid">
               <div>
@@ -76,7 +77,7 @@
                 <strong id="azureUsageMonthText">0 min</strong>
               </div>
             </div>
-            <p class="panel-line usage-note" id="azureUsageSyncText">This browser only. Azure sync not connected.</p>
+            <p class="panel-line usage-note" id="azureUsageSyncText">This browser only. Cloud sync not connected.</p>
           </div>
           <div class="panel-section settings-panel">
             <details class="advanced-settings">
@@ -85,7 +86,7 @@
                 <label>
                   Engine
                   <select id="translationEngine">
-                    <option value="azure" selected>Azure Cloud</option>
+                    <option value="azure" selected>Cloud</option>
                     <option value="argos">Argos</option>
                     <option value="marianmt">MarianMT</option>
                     <option value="nllb">NLLB</option>
@@ -93,11 +94,11 @@
                 </label>
 
                 <label class="local-control local-extension local-preset-control">
-                  Performance
+                  Config
                   <select id="localAsrPreset">
-                    <option value="fast">Fast</option>
-                    <option value="balanced" selected>Balanced</option>
-                    <option value="accurate">Accurate</option>
+                    <option value="igpu" selected>1 核显</option>
+                    <option value="dgpu">2 独显</option>
+                    <option value="t600">3 工作站</option>
                   </select>
                 </label>
 
@@ -143,7 +144,7 @@
           <div class="panel-section">
             <p class="panel-label">Meeting Notes</p>
             <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
-            <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build bilingual notes.</p>
+            <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
             <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
               <div class="notes-progress-header">
                 <span id="notesProgressStage">Preparing</span>
@@ -211,7 +212,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=usage-estimate-20260525"></script>
+    <script src="/static/app.js?v=cloud-branding-20260528"></script>
   </body>
 </html>
 

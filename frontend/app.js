@@ -85,6 +85,24 @@ const scrollBottomTolerance = 40;
 const uiThemeStorageKey = "subtitleStudioUiThemeCompact20260502";
 const azureUsageStorageKey = "subtitleStudioAzureUsageEstimate20260525";
 
+function providerNeutralText(value = "") {
+  return String(value || "")
+    .replace(/azure\.cognitiveservices\.speech/gi, "cloud speech SDK")
+    .replace(/login\.microsoftonline\.com/gi, "cloud auth endpoint")
+    .replace(/management\.azure\.com/gi, "cloud usage endpoint")
+    .replace(/cognitive\.microsoft\.com/gi, "cloud speech endpoint")
+    .replace(/Microsoft Cognitive Services/gi, "cloud speech service")
+    .replace(/AZURE_[A-Z0-9_]+/g, "cloud setting")
+    .replace(/Azure Monitor/gi, "Cloud usage")
+    .replace(/Azure Speech Translation/gi, "cloud speech translation")
+    .replace(/Azure Speech/gi, "cloud speech")
+    .replace(/Azure Batch Transcription/gi, "cloud batch transcription")
+    .replace(/Azure Batch/gi, "cloud transcription")
+    .replace(/Azure Blob/gi, "cloud storage")
+    .replace(/Azure Cloud/gi, "Cloud")
+    .replace(/\bAzure\b/gi, "Cloud");
+}
+
 function applyDefaultInputMode() {
   audioSource.value = "system";
 }
@@ -96,15 +114,15 @@ async function loadRuntimeConfig() {
       return;
     }
     const payload = await response.json();
-    azureConfigured = Boolean(payload.azure_configured);
-    azureBatchConfigured = Boolean(payload.azure_batch_configured);
-    postMeetingAsrRequested = payload.post_meeting_asr_requested || "azure-batch";
+    azureConfigured = Boolean(payload.cloud_configured ?? payload.azure_configured);
+    azureBatchConfigured = Boolean(payload.cloud_batch_configured ?? payload.azure_batch_configured);
+    postMeetingAsrRequested = payload.post_meeting_asr_requested || "cloud-batch";
     postMeetingAsrEffective = payload.post_meeting_asr_effective || "faster-whisper";
     renderAzureUsage();
     if (!azureConfigured && translationEngine.value === "azure") {
-      noticeText.textContent = "Azure not configured";
-      logText.textContent = "Azure Speech key/region are empty. Azure mode will wait for valid cloud configuration.";
-      updateDelayHintFromStatus("Azure not configured", logText.textContent);
+      noticeText.textContent = "Cloud not configured";
+      logText.textContent = "Cloud speech is not configured. Cloud mode will wait for valid cloud configuration.";
+      updateDelayHintFromStatus("Cloud not configured", logText.textContent);
     }
     updateEngineControls();
     updateLanguageHints();
@@ -242,16 +260,10 @@ function updateMeetingActionButtons() {
 }
 
 function notesBuildHint() {
-  if (translationEngine.value !== "azure") {
-    return "Local mode will build notes from the original recording without speaker separation.";
+  if (translationEngine.value === "azure" && azureConfigured) {
+    return "Build Notes will generate English-Chinese meeting minutes from the selected recordings.";
   }
-  if (postMeetingAsrEffective === "azure-batch") {
-    return "Build Notes will use Azure Batch transcription with speaker separation.";
-  }
-  if (postMeetingAsrRequested === "azure-batch" && !azureBatchConfigured) {
-    return "Cloud mode selected, but Azure Batch storage is not configured. Build Notes will use local transcription without speaker separation.";
-  }
-  return "Click Build Notes to create one bilingual document from selected recordings.";
+  return "Build Notes will generate English-Chinese meeting minutes locally when cloud transcription is unavailable.";
 }
 
 function setNotesProgress(percent = 0, stage = "", message = "", visible = false) {
@@ -265,7 +277,7 @@ function setNotesProgress(percent = 0, stage = "", message = "", visible = false
   notesProgressStage.textContent = stage || "Preparing";
   notesProgress.querySelector(".notes-progress-track")?.setAttribute("aria-valuenow", String(Math.round(normalizedPercent)));
   if (message) {
-    notesHintText.textContent = message;
+    notesHintText.textContent = providerNeutralText(message);
   }
 }
 
@@ -304,7 +316,7 @@ async function refreshNotesProgress() {
 function setDelayHint(label, detail, isWarning = false) {
   delayStatusText.textContent = label;
   delayStatusText.classList.toggle("muted", !isWarning);
-  delayHintText.textContent = detail;
+  delayHintText.textContent = providerNeutralText(detail);
 }
 
 function updateDelayHintFromStatus(status, detail = "") {
@@ -323,14 +335,14 @@ function updateDelayHintFromStatus(status, detail = "") {
   if (isCloud && !azureConfigured) {
     setDelayHint(
       "Cloud not ready",
-      "Azure Speech is not configured. Captions may wait until the cloud key and region are available.",
+      "Cloud speech is not configured. Captions may wait until cloud settings are available.",
       true,
     );
     return;
   }
 
   if (normalized.includes("connecting cloud")) {
-    setDelayHint("Cloud connection", "Waiting for Azure Speech. If this lasts, check network or Azure settings.", true);
+    setDelayHint("Cloud connection", "Waiting for cloud speech. If this lasts, check network or cloud settings.", true);
     return;
   }
 
@@ -430,7 +442,7 @@ function clampPixelValue(value, min, max) {
 
 function setStatus(status, detail = "") {
   statusText.textContent = status;
-  logText.textContent = detail || status;
+  logText.textContent = providerNeutralText(detail || status);
   updateDelayHintFromStatus(status, detail);
   statusDot.classList.toggle(
     "active",
@@ -516,6 +528,11 @@ function formatUsageMinutes(seconds) {
   return `${(minutes / 60).toFixed(1)} hr`;
 }
 
+function formatUsageCount(value) {
+  const count = Math.round(Number(value) || 0);
+  return count >= 1000 ? `${(count / 1000).toFixed(1)}k` : String(count);
+}
+
 function formatSyncTime(value) {
   if (!value) {
     return "";
@@ -541,7 +558,12 @@ function renderAzureUsage() {
   const usage = normalizedAzureUsageEstimate();
   const sessionSeconds = currentAzureSessionSeconds();
   azureUsageSessionText.textContent = formatDuration(sessionSeconds * 1000);
-  if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
+  if (azureUsageCloud?.configured && azureUsageCloud?.ok && azureUsageCloud.usageMode === "calls") {
+    azureUsageDayLabel.textContent = "Calls 24h";
+    azureUsageMonthLabel.textContent = "Calls Month";
+    azureUsageTodayText.textContent = formatUsageCount(azureUsageCloud.dayCallCount);
+    azureUsageMonthText.textContent = formatUsageCount(azureUsageCloud.monthCallCount);
+  } else if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
     azureUsageDayLabel.textContent = "Cloud Day";
     azureUsageMonthLabel.textContent = "Cloud Month";
     azureUsageTodayText.textContent = formatUsageMinutes((azureUsageCloud.daySeconds || 0) + sessionSeconds);
@@ -570,11 +592,13 @@ function renderAzureUsage() {
     const remaining = azureUsageCloud.remainingSeconds == null
       ? ""
       : ` Remaining ${formatUsageMinutes(azureUsageCloud.remainingSeconds)}.`;
-    azureUsageSyncText.textContent = `Azure Monitor synced${syncedAt ? ` ${syncedAt}` : ""}.${remaining}`;
+    azureUsageSyncText.textContent = azureUsageCloud.message
+      ? `${providerNeutralText(azureUsageCloud.message)}${syncedAt ? ` Synced ${syncedAt}.` : ""}`
+      : `Cloud usage synced${syncedAt ? ` ${syncedAt}` : ""}.${remaining}`;
   } else if (azureUsageCloud?.message) {
-    azureUsageSyncText.textContent = azureUsageCloud.message;
+    azureUsageSyncText.textContent = providerNeutralText(azureUsageCloud.message);
   } else {
-    azureUsageSyncText.textContent = "This browser only. Azure sync not connected.";
+    azureUsageSyncText.textContent = "This browser only. Cloud sync not connected.";
   }
 }
 
@@ -611,16 +635,16 @@ function stopAzureUsageSession() {
 
 async function refreshAzureUsageCloud() {
   try {
-    const response = await fetch("/api/azure-usage", { cache: "no-store" });
+    const response = await fetch("/api/cloud-usage", { cache: "no-store" });
     if (!response.ok) {
-      throw new Error(`Azure usage sync failed: ${response.status}`);
+      throw new Error(`Cloud usage sync failed: ${response.status}`);
     }
     azureUsageCloud = await response.json();
   } catch (error) {
     azureUsageCloud = {
       ok: false,
       configured: false,
-      message: "Azure sync unavailable. Showing local browser estimate.",
+      message: "Cloud sync unavailable. Showing local browser estimate.",
     };
   }
   renderAzureUsage();
@@ -918,7 +942,7 @@ function updateEngineControls() {
     item.classList.toggle("hidden", !isCloud);
   });
   perfText.textContent = isCloud
-    ? "Azure mode: streaming live subtitles."
+    ? "Cloud mode: streaming live subtitles."
     : "Local mode: English live transcript above, Chinese sentence translation below.";
   azureSubtitleBox.classList.toggle("hidden", !isCloud);
   localSubtitleLayout.classList.toggle("hidden", isCloud);
@@ -970,7 +994,7 @@ function updateExportButtons() {
 }
 
 function meetingMetadata() {
-  const sourceLabel = sourceLanguage.value === "spa_Latn" ? "Spanish" : "English";
+  const sourceLabel = sourceLanguage.value === "spa_Latn" ? "Spanish" : sourceLanguage.value === "zho_Hans" ? "Chinese" : "English";
   const engineLabel = translationEngine.options[translationEngine.selectedIndex]?.textContent || translationEngine.value;
   const inputLabel = audioSource.options[audioSource.selectedIndex]?.textContent || audioSource.value;
   return {
@@ -1090,12 +1114,13 @@ function formatDateTime(value) {
 }
 
 function localAsrProfile() {
-  const preset = localAsrPreset?.value || "balanced";
+  const preset = localAsrPreset?.value || "igpu";
   const isSystemAudio = audioSource?.value === "system";
-  if (preset === "fast") {
+  if (preset === "igpu" || preset === "fast") {
     return {
       model: "base.en",
       computeType: "int8",
+      device: "cpu",
       beamSize: 1,
       bestOf: 1,
       patience: 1.0,
@@ -1106,13 +1131,14 @@ function localAsrProfile() {
       hallucinationSilenceThreshold: isSystemAudio ? 0.7 : 1.0,
       repetitionPenalty: 1.1,
       noRepeatNgramSize: 3,
-      label: "Fast ASR: base.en / int8 / beam 1",
+      label: "Config 1: iGPU, 16GB RAM assumed - base / int8 / beam 1",
     };
   }
-  if (preset === "accurate") {
+  if (preset === "t600" || preset === "accurate") {
     return {
       model: "small.en",
       computeType: "int8_float16",
+      device: "cuda",
       beamSize: 3,
       bestOf: 3,
       patience: 1.2,
@@ -1123,12 +1149,13 @@ function localAsrProfile() {
       hallucinationSilenceThreshold: isSystemAudio ? 0.9 : 1.5,
       repetitionPenalty: 1.06,
       noRepeatNgramSize: 3,
-      label: "Accurate ASR: small.en / int8_float16 / beam 3",
+      label: "Config 3: workstation, 16GB RAM assumed - small / int8_float16 / beam 3",
     };
   }
   return {
     model: "small.en",
     computeType: "int8",
+    device: "auto",
     beamSize: 2,
     bestOf: 2,
     patience: 1.0,
@@ -1139,7 +1166,7 @@ function localAsrProfile() {
     hallucinationSilenceThreshold: isSystemAudio ? 0.8 : 1.2,
     repetitionPenalty: 1.08,
     noRepeatNgramSize: 3,
-    label: "Balanced ASR: small.en / int8 / beam 2",
+    label: "Config 2: discrete GPU, 16GB RAM assumed - small / int8 / beam 2",
   };
 }
 
@@ -1148,8 +1175,8 @@ function applyLocalAsrPreset() {
     return;
   }
   const profile = localAsrProfile();
-  deviceType.value = "cuda";
-  localLatencyPreset.value = localAsrPreset.value === "accurate" ? "steady" : "low";
+  deviceType.value = profile.device;
+  localLatencyPreset.value = profile.device === "cuda" ? "steady" : "low";
   modelSize.value = profile.model;
   perfText.textContent = profile.label;
   applyLocalLatencyPreset();
@@ -1213,22 +1240,39 @@ function localRealtimeTuning() {
 
 function updateLanguageHints() {
   const isSpanish = sourceLanguage.value === "spa_Latn";
+  const isChinese = sourceLanguage.value === "zho_Hans";
   const isCloud = translationEngine.value === "azure";
   const subtitle = document.querySelector("#brandSubtitle");
   if (subtitle) {
-    subtitle.textContent = isSpanish
-      ? "Spanish to Chinese - Local or Azure cloud"
-      : "English to Chinese - Local or Azure cloud";
+    subtitle.textContent = isChinese
+      ? "Chinese meeting notes - English-Chinese output"
+      : isSpanish
+      ? "Spanish to Chinese - Local or Cloud"
+      : "English to Chinese - Local or Cloud";
   }
   if (isCloud) {
-    perfText.textContent = isSpanish
-      ? "Azure Spanish: es-ES -> zh-Hans live translation."
-      : "Azure English: en-US -> zh-Hans live translation.";
+    perfText.textContent = isChinese
+      ? "Cloud Chinese: zh-CN transcription for bilingual notes."
+      : isSpanish
+      ? "Cloud Spanish: es-ES -> zh-Hans live translation."
+      : "Cloud English: en-US -> zh-Hans live translation.";
     return;
   }
   perfText.textContent = isSpanish
     ? "Local Spanish: multilingual Whisper is selected automatically."
+    : isChinese
+    ? "Local Chinese: multilingual Whisper is selected automatically."
     : "Local English: optimized English ASR is available.";
+}
+
+function notesRecordingLanguage() {
+  if (sourceLanguage.value === "spa_Latn") {
+    return "es-ES";
+  }
+  if (sourceLanguage.value === "zho_Hans") {
+    return "zh-CN";
+  }
+  return "en";
 }
 
 function start() {
@@ -1236,9 +1280,9 @@ function start() {
     return;
   }
   if (translationEngine.value === "azure" && !azureConfigured) {
-    noticeText.textContent = "Azure not configured";
-    logText.textContent = "Azure Speech key/region are empty. Start may fail until Azure cloud settings are available.";
-    updateDelayHintFromStatus("Azure not configured", logText.textContent);
+    noticeText.textContent = "Cloud not configured";
+    logText.textContent = "Cloud speech is not configured. Start may fail until cloud settings are available.";
+    updateDelayHintFromStatus("Cloud not configured", logText.textContent);
   }
 
   subtitleStack.innerHTML = "";
@@ -1278,7 +1322,7 @@ function start() {
     const asrProfile = isCloud ? null : localAsrProfile();
     setStatus(
       isCloud ? "Connecting cloud" : "Loading models",
-      isCloud ? "Connecting to Azure Speech Translation." : "Preparing low-latency local pipeline.",
+      isCloud ? "Connecting to cloud speech translation." : "Preparing low-latency local pipeline.",
     );
     startAzureUsageSession();
     updateMeetingActionButtons();
@@ -1332,20 +1376,20 @@ function start() {
       return;
     }
     if (payload.type === "status") {
-      setStatus(payload.status, payload.detail);
+      setStatus(payload.status, providerNeutralText(payload.detail));
       return;
     }
     if (payload.type === "notice") {
       noticeText.textContent = payload.label || "Notice";
-      noticeText.title = payload.detail || "";
+      noticeText.title = providerNeutralText(payload.detail || "");
       if (payload.detail) {
-        logText.textContent = payload.detail;
+        logText.textContent = providerNeutralText(payload.detail);
       }
       if ((payload.label || "").toLowerCase() === "recording") {
         updateRecordingPanel("recording", payload.detail || "");
       }
       if (Date.now() - lastSubtitleReceivedAt > 5000) {
-        updateDelayHintFromStatus(payload.label || "Notice", payload.detail || "");
+        updateDelayHintFromStatus(payload.label || "Notice", providerNeutralText(payload.detail || ""));
       }
       return;
     }
@@ -1434,19 +1478,23 @@ async function processMeetingRecording() {
     const response = await fetch("/api/process-recording", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ recordings, engine: translationEngine.value }),
+      body: JSON.stringify({
+        recordings,
+        engine: translationEngine.value,
+        notesLanguage: notesRecordingLanguage(),
+      }),
       signal: notesAbortController.signal,
     });
     const payload = await response.json().catch(() => ({}));
     if (!response.ok) {
-      throw new Error(payload.detail || "Post-meeting processing failed.");
+      throw new Error(providerNeutralText(payload.detail || "Post-meeting processing failed."));
     }
 
     const minutesPreview = (payload.minutesText || "").slice(0, 1600).trim();
     latestMinutesPath = payload.minutes || "";
     noticeText.textContent = "Meeting notes ready";
     setNotesProgress(100, "Complete", "Meeting notes are ready.", true);
-    logText.textContent = [
+    logText.textContent = providerNeutralText([
       "Post-meeting files generated.",
       payload.notesMode || notesBuildHint(),
       `ASR engine: ${payload.asrEngine || "auto"}`,
@@ -1455,7 +1503,7 @@ async function processMeetingRecording() {
       `Minutes: ${payload.minutes}`,
       "",
       minutesPreview || payload.log || "No preview text returned.",
-    ].join("\n");
+    ].join("\n"));
     setStatus("Stopped", "Meeting notes ready.");
   } catch (error) {
     if (error.name === "AbortError") {
@@ -1465,9 +1513,10 @@ async function processMeetingRecording() {
       logText.textContent = "Post-meeting notes generation was cancelled. Choose recordings and build again when ready.";
     } else {
       noticeText.textContent = "Meeting notes failed";
-      setNotesProgress(0, "Failed", error.message || "Post-meeting processing failed.", false);
-      setStatus("Error", error.message || "Post-meeting processing failed.");
-      logText.textContent = error.message || "Post-meeting processing failed.";
+      const message = providerNeutralText(error.message || "Post-meeting processing failed.");
+      setNotesProgress(0, "Failed", message, false);
+      setStatus("Error", message);
+      logText.textContent = message;
     }
   } finally {
     if (notesTimeoutId) {
@@ -1505,7 +1554,7 @@ async function openLatestMinutes() {
     const response = await fetch("/api/latest-minutes");
     const payload = await response.json().catch(() => ({}));
     if (!response.ok || !payload.available) {
-      throw new Error(payload.detail || "No meeting notes file found.");
+      throw new Error(providerNeutralText(payload.detail || "No meeting notes file found."));
     }
     latestMinutesPath = payload.minutes || latestMinutesPath;
     window.open("/api/latest-minutes-file", "_blank", "noopener");
@@ -1513,7 +1562,7 @@ async function openLatestMinutes() {
     logText.textContent = `Opened: ${latestMinutesPath}`;
   } catch (error) {
     noticeText.textContent = "Open notes failed";
-    logText.textContent = error.message || "Could not open meeting notes.";
+    logText.textContent = providerNeutralText(error.message || "Could not open meeting notes.");
   } finally {
     updateMeetingActionButtons();
   }

@@ -770,12 +770,23 @@ def clean_sentence(text: str) -> str:
     return cleaned.strip(" -\t\r\n,.;")
 
 
+def is_chinese_language(language: str | None) -> bool:
+    return str(language or "").strip().lower().startswith("zh")
+
+
+def readable_unit_count(text: str) -> int:
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text or ""))
+    if cjk_count >= 6:
+        return cjk_count
+    return len(str(text or "").split())
+
+
 def split_readable_sentences(text: str) -> list[str]:
     normalized = clean_sentence(text)
     if not normalized:
         return []
     parts = re.split(r"(?<=[.!?。！？])\s+", normalized)
-    return [clean_sentence(part) for part in parts if len(clean_sentence(part)) >= 8]
+    return [clean_sentence(part) for part in parts if readable_unit_count(clean_sentence(part)) >= 8]
 
 
 def transcript_sentences(transcript: list[TranscriptSegment]) -> list[tuple[TranscriptSegment, str]]:
@@ -843,7 +854,156 @@ def speaker_sections(transcript: list[TranscriptSegment]) -> dict[str, list[Tran
     return sections
 
 
-def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+def truncate_chinese_text(text: str, max_units: int = 90) -> str:
+    cleaned = clean_sentence(text)
+    if readable_unit_count(cleaned) <= max_units:
+        return cleaned
+    if len(re.findall(r"[\u4e00-\u9fff]", cleaned)) >= 6:
+        return cleaned[:max_units].rstrip("，。；、,. ") + "。"
+    words = cleaned.split()
+    return " ".join(words[:max_units]).rstrip(" ,.;") + "."
+
+
+def chinese_summary_points(paragraphs: list[tuple[float, float, str]], limit: int = 5) -> list[str]:
+    points: list[str] = []
+    seen: set[str] = set()
+    for _, _, paragraph in paragraphs:
+        candidate = (split_readable_sentences(paragraph) or [paragraph])[0]
+        candidate = truncate_chinese_text(candidate, 88)
+        key = re.sub(r"\s+", "", candidate)
+        if readable_unit_count(candidate) >= 8 and key not in seen:
+            points.append(candidate)
+            seen.add(key)
+        if len(points) >= limit:
+            break
+    return points
+
+
+def chinese_topic_sections(paragraphs: list[tuple[float, float, str]], limit: int = 8) -> list[TopicSection]:
+    sections: list[TopicSection] = []
+    for index, (start, end, paragraph) in enumerate(paragraphs[:limit], start=1):
+        bullets = [
+            truncate_chinese_text(sentence, 70)
+            for sentence in split_readable_sentences(paragraph)[:3]
+            if readable_unit_count(sentence) >= 8
+        ]
+        if not bullets and paragraph:
+            bullets = [truncate_chinese_text(paragraph, 70)]
+        sections.append(
+            TopicSection(
+                title=f"议题 {index}",
+                start=start,
+                end=end,
+                bullets=bullets,
+            )
+        )
+    return sections
+
+
+def chinese_minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+    cleaned_transcript = [
+        TranscriptSegment(
+            start=item.start,
+            end=item.end,
+            text=clean_sentence(item.text),
+            speaker=item.speaker,
+        )
+        for item in transcript
+    ]
+    usable = [item for item in cleaned_transcript if readable_unit_count(item.text) >= 6]
+    sentences = transcript_sentences(usable)
+    paragraphs = build_natural_paragraphs(usable, max_words=160, max_seconds=100)
+    total_start = min((item.start for item in usable), default=0.0)
+    total_end = max((item.end for item in usable), default=0.0)
+    sections = speaker_sections(usable)
+    speakers = sorted(sections)
+    summary_points = chinese_summary_points(paragraphs)
+    topics = chinese_topic_sections(paragraphs)
+    decisions = extract_chinese_decisions(sentences)
+    actions = extract_chinese_action_items(sentences)
+    risks = extract_chinese_risks(sentences)
+    is_substantive = sum(readable_unit_count(item.text) for item in usable) >= 80 and len(sentences) >= 3
+
+    lines = [
+        "# 中文会议纪要",
+        "",
+        f"- 音频：`{audio.name}`",
+        f"- 时长：{format_time(total_start)}-{format_time(total_end)}",
+        f"- 说话人：{', '.join(speakers) if speakers else '未区分'}",
+        "- 来源：会后 ASR 转写，正式分享前建议人工复核。",
+        "",
+        "## 1. 摘要",
+        "",
+    ]
+    if not is_substantive:
+        lines.append("- 录音内容较短、较嘈杂或转写内容不足，暂时无法可靠生成完整会议纪要。")
+    elif summary_points:
+        for point in summary_points:
+            lines.append(f"- {point}")
+    else:
+        lines.append("- 未检测到足够清晰的摘要内容。")
+
+    lines.extend(["", "## 2. 议题时间线", ""])
+    if topics:
+        for topic in topics:
+            lines.append(f"### {format_time(topic.start)}-{format_time(topic.end)} | {topic.title}")
+            for bullet in topic.bullets:
+                lines.append(f"- {bullet}")
+            lines.append("")
+    else:
+        lines.append("- 未检测到可分段的议题内容。")
+
+    lines.extend(["", "## 3. 关键讨论", ""])
+    if paragraphs:
+        for start, end, paragraph in paragraphs:
+            lines.append(f"### {format_time(start)}-{format_time(end)}")
+            lines.append(truncate_chinese_text(paragraph, 180))
+            lines.append("")
+    else:
+        lines.append("- 未检测到可读讨论段落。")
+
+    lines.extend(["", "## 4. 决议", ""])
+    if decisions:
+        for item, sentence in decisions:
+            lines.append(f"- [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- 未检测到明确决议。")
+
+    lines.extend(["", "## 5. 行动项", ""])
+    if actions:
+        for item, sentence in actions:
+            lines.append(f"- [ ] [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- 未检测到明确行动项。")
+
+    lines.extend(["", "## 6. 风险与待确认问题", ""])
+    if risks:
+        for item, sentence in risks:
+            lines.append(f"- [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- 未检测到明确风险或待确认问题。")
+
+    lines.extend(["", "## 7. 说话人记录", ""])
+    if sections:
+        for speaker, items in sections.items():
+            lines.append(f"### {speaker}")
+            for item in items[:18]:
+                lines.append(f"- {format_time(item.start)} {clean_sentence(item.text)}")
+            if len(items) > 18:
+                lines.append(f"- 另有 {len(items) - 18} 条记录见完整转写。")
+            lines.append("")
+    else:
+        lines.append("- 当前录音未启用说话人分离。")
+
+    lines.extend(["", "## 8. 完整转写", ""])
+    for item in usable:
+        lines.append(f"- {format_time(item.start)}-{format_time(item.end)} `{item.speaker}` {item.text}")
+    return "\n".join(lines)
+
+
+def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_language: str = "en") -> str:
+    if is_chinese_language(notes_language):
+        return chinese_minutes_markdown(audio, transcript)
     cleaned_transcript = [
         TranscriptSegment(
             start=item.start,
@@ -1061,7 +1221,7 @@ def build_natural_paragraphs(
         text = clean_sentence(item.text)
         if not text:
             continue
-        words = len(text.split())
+        words = readable_unit_count(text)
         starts_new = (
             bool(current_text)
             and (
@@ -1252,6 +1412,29 @@ def extract_risks(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8
     return pick_regex_items(sentences, patterns, limit)
 
 
+def extract_chinese_decisions(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"(决定|确定|确认|同意|通过|批准|采用|定下来|结论是)",
+        r"(最终|暂定).{0,12}(方案|做法|时间|负责人)",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def extract_chinese_action_items(sentences: list[tuple[TranscriptSegment, str]], limit: int = 10) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"(需要|要|请|麻烦|负责|跟进|推进|准备|整理|发送|检查|确认|复核|更新|提交)",
+        r"(下一步|后续|会后|今天|明天|本周|下周|截止|时间节点)",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def extract_chinese_risks(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"(风险|问题|阻塞|卡点|延迟|不清楚|不确定|待确认|缺少|失败|担心|注意)",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
 def pick_regex_items(
     sentences: list[tuple[TranscriptSegment, str]],
     patterns: list[str],
@@ -1262,7 +1445,7 @@ def pick_regex_items(
     for item, sentence in sentences:
         normalized = clean_sentence(sentence)
         lowered = normalized.lower()
-        if len(normalized.split()) < 5 or lowered in seen:
+        if readable_unit_count(normalized) < 5 or lowered in seen:
             continue
         if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns):
             picked.append((item, normalized))
@@ -1429,7 +1612,9 @@ Transcript:
     return content + "\n\n---\n\nGenerated with Ollama model `" + model + "`.\n"
 
 
-def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_language: str = "en") -> str:
+    if is_chinese_language(notes_language):
+        return chinese_minutes_markdown(audio, transcript)
     cleaned_transcript = [
         TranscriptSegment(
             start=item.start,
@@ -1628,12 +1813,13 @@ def write_outputs(
     audio: Path,
     transcript: list[TranscriptSegment],
     speakers: list[SpeakerSegment],
+    notes_language: str = "en",
 ) -> None:
     output_base = audio.with_suffix("")
     transcript_path = output_base.with_suffix(".transcript.md")
     minutes_path = output_base.with_suffix(".minutes.md")
     transcript_path.write_text(transcript_markdown(audio, transcript) + "\n", encoding="utf-8")
-    minutes_path.write_text(minutes_markdown(audio, transcript) + "\n", encoding="utf-8")
+    minutes_path.write_text(minutes_markdown(audio, transcript, notes_language) + "\n", encoding="utf-8")
     print(f"Wrote {transcript_path}")
     print(f"Wrote {minutes_path}")
 
@@ -1684,6 +1870,7 @@ def main() -> int:
     )
     parser.add_argument("--model", default="", help="Override faster-whisper model from --quality.")
     parser.add_argument("--language", default="en", help="ASR language code. Default: en")
+    parser.add_argument("--notes-language", default="en", choices=["en", "zh"], help="Meeting-notes output language. Default: en")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu", "auto"], help="Default: cuda")
     parser.add_argument("--compute-type", default="", help="Override compute type from --quality.")
     parser.add_argument("--beam-size", type=int, default=0, help="Override beam size from --quality.")
@@ -1720,6 +1907,8 @@ def main() -> int:
 
     preset = QUALITY_PRESETS[args.quality]
     args.model = args.model or preset["model"]
+    if args.asr_engine == "faster-whisper" and is_chinese_language(args.language) and args.model.endswith(".en"):
+        args.model = args.model[:-3]
     args.compute_type = args.compute_type or preset["compute_type"]
     args.beam_size = args.beam_size or preset["beam_size"]
     args.best_of = args.best_of or preset["best_of"]
@@ -1739,7 +1928,7 @@ def main() -> int:
     speakers = diarize_audio(args) if args.diarize else []
     assign_speakers(transcript, speakers)
     assign_fallback_turns(transcript)
-    write_outputs(args.audio, transcript, speakers)
+    write_outputs(args.audio, transcript, speakers, args.notes_language)
     return 0
 
 

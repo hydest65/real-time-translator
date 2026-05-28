@@ -2,12 +2,12 @@
 
 Windows real-time subtitle translator. It supports English-to-Chinese and Spanish-to-Chinese subtitles through two routes:
 
-- `Azure Cloud`: lowest-latency streaming speech translation, similar to commercial meeting subtitle apps.
+- `Cloud`: lowest-latency streaming speech translation, shown with provider-neutral labels for testers.
 - `Local`: private offline ASR + translation with faster-whisper and local translators.
 
 ## Current Low-Latency Defaults
 
-- Engine: `Azure Cloud` for lowest latency, or local engines when privacy/offline mode matters
+- Engine: `Cloud` for lowest latency, or local engines when privacy/offline mode matters
 - Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input. Use `Mic` when you want room or headset microphone audio.
 - Local ASR: `faster-whisper`
 - Local ASR preset: `Balanced`
@@ -22,14 +22,14 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - VAD: skip low-RMS silence before ASR; `System` input uses a stricter default gate than `Mic` to avoid loopback silence/weak-noise hallucinations
 - Local translation engine: `argos`
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
-- Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
+- Frontend: Cloud mode uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
 - Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
 - Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
-- Azure usage panel: shows current-session Azure time, local browser day/month estimates, and optional Azure Monitor account-level sync
+- Cloud usage panel: shows current-session cloud time, local browser day/month estimates, and optional account-level sync
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English or Spanish, both translated into Simplified Chinese
-- Azure subtitles: live partial results update the current row; final results enter the scrollable history
+- Cloud subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
 - Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
@@ -37,7 +37,7 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 
 ## Translation Engines
 
-- `azure`: cloud streaming speech translation through Azure Speech Translation. Best for Teams meetings and low latency.
+- `azure`: internal cloud streaming speech translation route. Best for Teams meetings and low latency.
 - `argos`: lowest latency local translation. Best offline/default local choice.
 - `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
@@ -46,7 +46,7 @@ First use of Argos may download and install the required language package. First
 
 Spanish mode notes:
 
-- Azure mode uses `es-ES` speech recognition and `zh-Hans` translation.
+- Cloud mode uses `es-ES` speech recognition and `zh-Hans` translation.
 - Local ASR automatically maps `base.en` to multilingual `base`, and `small.en` to multilingual `small`, because `.en` Whisper models cannot recognize Spanish.
 - Argos first tries a direct `es -> zh` package, then falls back to `es -> en -> zh` if the direct package is unavailable.
 - MarianMT uses a separate Spanish-to-Chinese model setting: `Helsinki-NLP/opus-mt-es-zh`.
@@ -76,7 +76,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.1.10-local-t600 - Guided Meeting Flow and Bilingual Word Notes`.
+- Current closeout: `0.1.12-cloud-branding-notes-fallback - Provider-Neutral UI and Stable Meeting Notes`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.

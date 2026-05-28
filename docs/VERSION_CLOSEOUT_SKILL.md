@@ -31,7 +31,7 @@ Read these three files early when continuing product, architecture, or UI work:
    - `README.md`
 
 2. Confirm the active architecture:
-   - Azure Cloud is the primary low-latency path.
+   - Cloud mode is the primary low-latency path in tester-facing UI.
    - Local ASR/translation remains a fallback path.
    - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
    - Fast/direct translation is the only active mode.
@@ -70,4 +70,5 @@ Read these three files early when continuing product, architecture, or UI work:
 - Preserve the local split reading model: stable English context, live English draft, and complete Chinese translation.
 - Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then `Open Bilingual Notes`.
 - Preserve Word-first bilingual notes: English minutes first, Chinese reading version second, in one `.docx` file.
+- Preserve provider-neutral UI wording for testers: use `Cloud` in visible labels, status messages, usage panel text, and common errors.
 - Keep true speaker diarization as a future feature unless explicitly implemented.

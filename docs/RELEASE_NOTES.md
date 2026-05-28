@@ -1,5 +1,45 @@
 # Release Notes
 
+## 0.1.12-cloud-branding-notes-fallback - Provider-Neutral UI and Stable Meeting Notes
+
+Date: 2026-05-28
+
+### Product
+
+- Removed provider-specific wording from tester-facing UI. The app now presents the live route, usage panel, status messages, and settings as `Cloud` / `Cloud Usage` / `Cloud Sync`.
+- Added Chinese meeting speech as a selectable input language while keeping meeting notes output bilingual, with English first and Chinese reading copy second.
+- Reworked local hardware choices into three tester-friendly tiers: `1 核显`, `2 独显`, and `3 工作站`, assuming 16GB RAM and choosing the tier by graphics/compute class.
+- Kept cloud usage remaining-time sync tied to the configured monthly quota, now set for a 5-hour free monthly allowance.
+
+### Technical
+
+- Added `/api/cloud-usage` as the provider-neutral usage endpoint while keeping `/api/azure-usage` as a compatibility alias.
+- Reduced provider leakage in frontend status rendering with a display-layer neutralizer for backend and SDK errors.
+- Changed public config payloads to expose `cloud_*` fields instead of returning the full runtime config to the browser.
+- Fixed post-meeting local fallback on CUDA-incomplete machines by defaulting meeting-notes ASR to CPU unless `POST_MEETING_ASR_DEVICE` is explicitly set to `cuda` or `auto`.
+- Kept generated recordings and notes under `recordings/`, which remains ignored by Git.
+
+### UI
+
+- Updated the top subtitle, speech selector, engine selector, usage panel, delay hints, and progress messages to use neutral cloud wording.
+- Preserved the compact left-panel scroll behavior so Meeting Notes and Delay Hint remain reachable on shorter screens.
+- Versioned frontend assets with `cloud-branding-20260528` so browser refresh picks up the new labels.
+
+### Verification
+
+- Python syntax checks passed for `backend/main.py`, `backend/cloud_speech.py`, and `scripts/process-recording.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.
+- Local runtime smoke test passed for `GET /` on port `8000`.
+- `GET /api/cloud-usage` returned a configured account-level usage payload with neutral `source` and `metric` fields.
+- `GET /api/config` now returns provider-neutral public config fields.
+- A real recording, `rec-0528-131932.wav`, successfully generated `rec-0528-131932.minutes.docx` after the CPU fallback fix, and `/api/open-latest-minutes` opened the Word file.
+
+### Known Limitations
+
+- The internal environment variable names and some internal code identifiers still use the cloud provider's original naming so existing local configuration keeps working.
+- Cloud batch speaker separation still requires a configured Blob/SAS batch-storage path; otherwise notes fall back to local transcription without verified speaker separation.
+- CPU meeting-notes fallback is slower than CUDA, but avoids the `cublas64_12.dll` failure on tester machines without a complete CUDA runtime.
+
 ## 0.1.11-local-t600 - Azure Usage Sync Panel
 
 Date: 2026-05-25

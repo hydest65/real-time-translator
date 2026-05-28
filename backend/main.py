@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import wave
 import zipfile
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -53,9 +53,19 @@ post_meeting_progress: dict[str, Any] = {
     "startedAt": 0.0,
     "updatedAt": time.time(),
 }
+
+
+def post_meeting_device() -> str:
+    requested = os.getenv("POST_MEETING_ASR_DEVICE", "").strip().lower()
+    if requested in {"cuda", "cpu", "auto"}:
+        return requested
+    return "cpu"
+
+
 azure_usage_cache: dict[str, Any] = {
     "fetchedAt": 0.0,
     "payload": None,
+    "lastGoodPayload": None,
 }
 
 app = FastAPI(title="Low Latency Real Time Translator")
@@ -486,20 +496,19 @@ runtime = Runtime()
 
 
 def public_config_payload(active_config: AppConfig) -> dict[str, Any]:
-    data = asdict(active_config)
     azure_configured = bool(
         (active_config.azure_speech_key or "").strip()
         and (active_config.azure_speech_region or "").strip()
     )
     post_meeting_asr_requested = requested_post_meeting_asr_engine()
     azure_batch_configured = is_azure_batch_configured(active_config)
-    data["azure_speech_key"] = ""
-    data["azure_speech_key_set"] = bool((active_config.azure_speech_key or "").strip())
-    data["azure_configured"] = azure_configured
-    data["azure_batch_configured"] = azure_batch_configured
-    data["post_meeting_asr_requested"] = post_meeting_asr_requested
-    data["post_meeting_asr_effective"] = choose_post_meeting_asr_engine()
-    return data
+    return {
+        "cloud_configured": azure_configured,
+        "cloud_batch_configured": azure_batch_configured,
+        "cloud_speech_key_set": bool((active_config.azure_speech_key or "").strip()),
+        "post_meeting_asr_requested": post_meeting_asr_requested.replace("azure-", "cloud-"),
+        "post_meeting_asr_effective": choose_post_meeting_asr_engine().replace("azure-", "cloud-"),
+    }
 
 
 def azure_monitor_config() -> dict[str, str]:
@@ -538,15 +547,19 @@ def http_json(url: str, method: str = "GET", data: dict[str, str] | None = None,
         headers["Content-Type"] = "application/x-www-form-urlencoded"
     if token:
         headers["Authorization"] = f"Bearer {token}"
-    request = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
-    try:
-        with urllib.request.urlopen(request, timeout=20) as response:
-            return json.loads(response.read().decode("utf-8"))
-    except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="ignore")
-        raise RuntimeError(f"Azure request failed: {exc.code} {detail[:240]}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Azure request failed: {exc.reason}") from exc
+    last_error: Exception | None = None
+    for _ in range(2):
+        request = urllib.request.Request(url, data=encoded_data, headers=headers, method=method)
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                return json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise RuntimeError(f"Cloud request failed: {exc.code} {detail[:240]}") from exc
+        except (urllib.error.URLError, OSError) as exc:
+            last_error = exc
+            time.sleep(0.8)
+    raise RuntimeError(f"Cloud request failed: {last_error}") from last_error
 
 
 def azure_monitor_token(settings: dict[str, str]) -> str:
@@ -563,15 +576,15 @@ def azure_monitor_token(settings: dict[str, str]) -> str:
     )
     token = str(payload.get("access_token") or "")
     if not token:
-        raise RuntimeError("Azure Monitor token response did not include an access token.")
+        raise RuntimeError("Cloud usage token response did not include an access token.")
     return token
 
 
-def azure_audio_seconds(token: str, resource_id: str, start: datetime, end: datetime) -> float:
+def azure_metric_total(token: str, resource_id: str, metric_name: str, start: datetime, end: datetime) -> float:
     query = urllib.parse.urlencode(
         {
             "api-version": "2023-10-01",
-            "metricnames": "AudioSecondsTranslated",
+            "metricnames": metric_name,
             "timespan": f"{utc_iso(start)}/{utc_iso(end)}",
             "interval": "PT1H",
             "aggregation": "Total",
@@ -587,6 +600,10 @@ def azure_audio_seconds(token: str, resource_id: str, start: datetime, end: date
     return total
 
 
+def azure_audio_seconds(token: str, resource_id: str, start: datetime, end: datetime) -> float:
+    return azure_metric_total(token, resource_id, "AudioSecondsTranslated", start, end)
+
+
 def fetch_azure_usage_payload() -> dict[str, Any]:
     settings = azure_monitor_config()
     if not azure_monitor_configured():
@@ -594,19 +611,39 @@ def fetch_azure_usage_payload() -> dict[str, Any]:
             "ok": True,
             "configured": False,
             "source": "not_configured",
-            "message": "Azure Monitor sync needs tenant, client, secret, and Speech resource id.",
+            "message": "Cloud usage sync needs tenant, client, secret, and speech resource id.",
         }
     now = datetime.now(timezone.utc)
     token = azure_monitor_token(settings)
-    day_seconds = azure_audio_seconds(token, settings["resource_id"], now - timedelta(hours=24), now)
-    month_seconds = azure_audio_seconds(token, settings["resource_id"], month_start_utc(now), now)
+    try:
+        day_seconds = azure_audio_seconds(token, settings["resource_id"], now - timedelta(hours=24), now)
+        month_seconds = azure_audio_seconds(token, settings["resource_id"], month_start_utc(now), now)
+    except RuntimeError:
+        day_calls = azure_metric_total(token, settings["resource_id"], "TotalCalls", now - timedelta(hours=24), now)
+        month_calls = azure_metric_total(token, settings["resource_id"], "TotalCalls", month_start_utc(now), now)
+        return {
+            "ok": True,
+            "configured": True,
+            "source": "cloud_usage",
+            "usageMode": "calls",
+            "metric": "calls",
+            "daySeconds": 0,
+            "monthSeconds": 0,
+            "dayCallCount": round(day_calls, 2),
+            "monthCallCount": round(month_calls, 2),
+            "monthlyLimitSeconds": None,
+            "remainingSeconds": None,
+            "message": "Cloud usage service does not expose audio-second usage for this speech resource. Showing call activity instead.",
+            "syncedAt": utc_iso(now),
+        }
     monthly_limit = float(settings["monthly_seconds_limit"] or 0)
     remaining_seconds = max(0.0, monthly_limit - month_seconds) if monthly_limit > 0 else None
     return {
         "ok": True,
         "configured": True,
-        "source": "azure_monitor",
-        "metric": "AudioSecondsTranslated",
+        "source": "cloud_usage",
+        "usageMode": "seconds",
+        "metric": "audio_seconds",
         "daySeconds": round(day_seconds, 2),
         "monthSeconds": round(month_seconds, 2),
         "monthlyLimitSeconds": monthly_limit or None,
@@ -633,23 +670,36 @@ async def health() -> dict[str, Any]:
     return {"ok": True, "message": "Backend is running", "config": public_config_payload(runtime.current_config)}
 
 
-@app.get("/api/azure-usage")
-async def azure_usage() -> dict[str, Any]:
+@app.get("/api/cloud-usage")
+async def cloud_usage() -> dict[str, Any]:
     cached_payload = azure_usage_cache.get("payload")
     if cached_payload is not None and time.time() - float(azure_usage_cache.get("fetchedAt") or 0) < 60:
         return dict(cached_payload)
     try:
         payload = await asyncio.to_thread(fetch_azure_usage_payload)
     except RuntimeError as exc:
-        payload = {
-            "ok": False,
-            "configured": azure_monitor_configured(),
-            "source": "azure_monitor",
-            "message": str(exc),
-        }
+        last_good = azure_usage_cache.get("lastGoodPayload")
+        if isinstance(last_good, dict):
+            payload = dict(last_good)
+            payload["stale"] = True
+            payload["message"] = "Cloud sync temporarily unavailable. Showing last successful cloud usage."
+        else:
+            payload = {
+                "ok": False,
+                "configured": azure_monitor_configured(),
+                "source": "cloud_usage",
+                "message": str(exc),
+            }
     azure_usage_cache["payload"] = payload
     azure_usage_cache["fetchedAt"] = time.time()
+    if payload.get("ok") and payload.get("configured"):
+        azure_usage_cache["lastGoodPayload"] = dict(payload)
     return dict(payload)
+
+
+@app.get("/api/azure-usage")
+async def azure_usage() -> dict[str, Any]:
+    return await cloud_usage()
 
 
 @app.post("/api/end-meeting")
@@ -666,10 +716,11 @@ async def process_recording(request: Request) -> dict[str, Any]:
     payload = await request.json() if request.headers.get("content-type", "").startswith("application/json") else {}
     audio_paths = resolve_recording_paths(payload.get("recordings") or payload.get("recording") or "")
     script_path = ROOT / "scripts" / "process-recording.py"
-    asr_engine = choose_post_meeting_asr_engine(payload.get("engine"))
+    notes_language = normalize_post_meeting_language(payload.get("notesLanguage") or payload.get("language"))
+    asr_engine = choose_post_meeting_asr_engine(payload.get("engine"), notes_language)
     processed: list[dict[str, Any]] = []
     logs: list[str] = []
-    notes_mode_message = post_meeting_mode_message(payload.get("engine"), asr_engine)
+    notes_mode_message = post_meeting_mode_message(payload.get("engine"), asr_engine, notes_language)
 
     set_post_meeting_progress(
         running=True,
@@ -683,7 +734,17 @@ async def process_recording(request: Request) -> dict[str, Any]:
     )
     try:
         for index, audio_path in enumerate(audio_paths, start=1):
-            processed.append(await process_one_recording(audio_path, script_path, asr_engine, logs, index, len(audio_paths)))
+            processed.append(
+                await process_one_recording(
+                    audio_path,
+                    script_path,
+                    asr_engine,
+                    notes_language,
+                    logs,
+                    index,
+                    len(audio_paths),
+                )
+            )
 
         if len(processed) > 1:
             set_post_meeting_progress(
@@ -758,6 +819,7 @@ async def process_one_recording(
     audio_path: Path,
     script_path: Path,
     asr_engine: str,
+    notes_language: str,
     logs: list[str],
     index: int,
     total: int,
@@ -784,8 +846,12 @@ async def process_one_recording(
         str(audio_path),
         "--asr-engine",
         asr_engine,
+        "--language",
+        notes_language,
+        "--notes-language",
+        "en",
         "--device",
-        "auto",
+        post_meeting_device(),
         cwd=str(ROOT),
         env=post_meeting_env(),
         stdout=asyncio.subprocess.PIPE,
@@ -913,7 +979,7 @@ def update_progress_from_script_line(
             running=True,
             percent=max(base_percent, 8),
             stage="uploading",
-            message=f"Uploading {recording_name} to Azure Blob.",
+            message=f"Uploading {recording_name} to cloud storage.",
             recording=recording_name,
             current=current,
             total=total,
@@ -923,7 +989,7 @@ def update_progress_from_script_line(
             running=True,
             percent=max(base_percent, 16),
             stage="submitting",
-            message="Submitting Azure Batch Transcription job.",
+            message="Submitting cloud transcription job.",
             recording=recording_name,
             current=current,
             total=total,
@@ -933,7 +999,7 @@ def update_progress_from_script_line(
             running=True,
             percent=max(base_percent, 24),
             stage="waiting",
-            message="Waiting for Azure to transcribe and separate speakers.",
+            message="Waiting for cloud transcription and speaker separation.",
             recording=recording_name,
             current=current,
             total=total,
@@ -944,7 +1010,7 @@ def update_progress_from_script_line(
             running=True,
             percent=min(max_percent, max(base_percent + 20, int(post_meeting_progress.get("percent") or 0))),
             stage="waiting",
-            message=f"Azure Batch status: {status}.",
+            message=f"Cloud transcription status: {status}.",
             recording=recording_name,
             current=current,
             total=total,
@@ -954,7 +1020,7 @@ def update_progress_from_script_line(
             running=True,
             percent=min(max_percent, 86),
             stage="downloading",
-            message="Downloading Azure transcription result.",
+            message="Downloading cloud transcription result.",
             recording=recording_name,
             current=current,
             total=total,
@@ -1003,16 +1069,22 @@ async def cancel_process_recording() -> dict[str, Any]:
     return {"ok": True, "cancelled": True}
 
 
-def choose_post_meeting_asr_engine(ui_engine: object = "") -> str:
+def choose_post_meeting_asr_engine(ui_engine: object = "", notes_language: str = "en") -> str:
     if str(ui_engine or "").strip().lower() and str(ui_engine or "").strip().lower() != "azure":
+        if is_chinese_post_meeting_language(notes_language):
+            if importlib.util.find_spec("funasr") is not None:
+                return "funasr"
+            return "faster-whisper"
         return "faster-whisper"
     requested_engine = requested_post_meeting_asr_engine()
     if requested_engine == "azure-batch":
         if is_azure_batch_configured(config):
             return "azure-batch"
+        if is_chinese_post_meeting_language(notes_language) and is_azure_fast_configured():
+            return "azure-fast"
         return "faster-whisper"
     if requested_engine == "azure-fast":
-        if (config.azure_speech_key or "").strip() and (config.azure_speech_region or os.getenv("AZURE_SPEECH_ENDPOINT", "")).strip():
+        if is_azure_fast_configured():
             return "azure-fast"
         return "faster-whisper"
     if requested_engine != "funasr":
@@ -1023,17 +1095,56 @@ def choose_post_meeting_asr_engine(ui_engine: object = "") -> str:
     return "faster-whisper"
 
 
-def post_meeting_mode_message(ui_engine: object, effective_engine: str) -> str:
+def post_meeting_mode_message(ui_engine: object, effective_engine: str, notes_language: str = "en") -> str:
     selected_engine = str(ui_engine or "").strip().lower()
+    normalized_language = str(notes_language or "").strip().lower()
+    if is_chinese_post_meeting_language(notes_language):
+        language_label = "Chinese voice"
+    elif normalized_language.startswith("es"):
+        language_label = "Spanish voice"
+    else:
+        language_label = "English voice"
     if selected_engine == "azure":
         if effective_engine == "azure-batch":
-            return "Cloud mode: using Azure Batch transcription with speaker separation."
-        return "Cloud mode selected, but Azure Batch storage is not configured. Using local transcription without speaker separation."
-    return "Local mode: using local transcription without speaker separation."
+            return f"Cloud mode: using batch transcription for {language_label} with speaker separation."
+        if effective_engine == "azure-fast":
+            return f"Cloud mode: using fast transcription for {language_label}."
+        return f"Cloud mode selected, but batch storage is not configured. Using local transcription for {language_label} without speaker separation."
+    return f"Local mode: using local transcription for {language_label} without speaker separation."
 
 
 def requested_post_meeting_asr_engine() -> str:
     return os.getenv("POST_MEETING_ASR_ENGINE", "azure-batch").strip().lower()
+
+
+def normalize_post_meeting_language(value: object = "") -> str:
+    language = str(value or "").strip().lower()
+    if language in {"zh", "zh-cn", "zh_hans", "zh-hans", "chinese", "mandarin", "cn"}:
+        return "zh-CN"
+    if language in {"es", "es-es", "spanish"}:
+        return "es-ES"
+    if language in {"auto", ""}:
+        return "en"
+    if language.startswith("zh"):
+        return "zh-CN"
+    if language.startswith("es"):
+        return "es-ES"
+    return "en"
+
+
+def notes_output_language(language: str) -> str:
+    return "zh" if is_chinese_post_meeting_language(language) else "en"
+
+
+def is_chinese_post_meeting_language(language: str) -> bool:
+    return str(language or "").strip().lower().startswith("zh")
+
+
+def is_azure_fast_configured() -> bool:
+    return bool(
+        (config.azure_speech_key or "").strip()
+        and (config.azure_speech_region or os.getenv("AZURE_SPEECH_ENDPOINT", "")).strip()
+    )
 
 
 def is_azure_batch_configured(active_config: AppConfig) -> bool:
@@ -1277,7 +1388,7 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
         if key in merged and value not in (None, ""):
             merged[key] = value
 
-    if merged["source_language"] not in ("eng_Latn", "spa_Latn"):
+    if merged["source_language"] not in ("eng_Latn", "spa_Latn", "zho_Hans"):
         merged["source_language"] = "eng_Latn"
     merged["target_language"] = "zho_Hans"
     merged["azure_source_language"] = azure_language_code(merged["source_language"])
@@ -1327,11 +1438,13 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
 def whisper_language(source_language: str) -> str:
     if source_language == "spa_Latn":
         return "es"
+    if source_language == "zho_Hans":
+        return "zh"
     return "en"
 
 
 def effective_asr_model(model_size: str, source_language: str) -> str:
-    if source_language == "spa_Latn":
+    if source_language in ("spa_Latn", "zho_Hans"):
         if model_size.endswith(".en"):
             return model_size.removesuffix(".en")
     return model_size
@@ -1340,6 +1453,8 @@ def effective_asr_model(model_size: str, source_language: str) -> str:
 def azure_language_code(source_language: str) -> str:
     if source_language == "spa_Latn":
         return "es-ES"
+    if source_language == "zho_Hans":
+        return "zh-CN"
     return "en-US"
 
 
@@ -1649,7 +1764,7 @@ async def subtitles(websocket: WebSocket) -> None:
         active_config = build_config(start_message.get("config", {}))
         effective_model = effective_asr_model(active_config.asr_model_size, active_config.source_language)
         if active_config.translation_engine == "azure":
-            await send_status(websocket, "Connecting cloud", "Azure Speech Translation")
+            await send_status(websocket, "Connecting cloud", "Cloud speech translation")
         else:
             await send_status(
                 websocket,
@@ -1702,7 +1817,7 @@ async def subtitles(websocket: WebSocket) -> None:
                     )
                 ),
             ]
-            await send_status(websocket, "Listening", "Azure Speech Translation")
+            await send_status(websocket, "Listening", "Cloud speech translation")
         else:
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
