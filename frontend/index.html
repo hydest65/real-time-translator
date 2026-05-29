@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=cloud-branding-20260528" />
+    <link rel="stylesheet" href="/static/style.css?v=top-folder-buttons-20260529" />
   </head>
   <body>
     <main class="studio">
@@ -41,24 +41,30 @@
           <a class="editor-link hidden" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
           <button id="downloadTranscriptButton" class="export-button hidden" disabled>Transcript</button>
           <button id="downloadMinutesButton" class="export-button hidden" disabled>Minutes</button>
+          <div class="folder-actions" aria-label="File folders">
+            <button class="folder-action-button" id="openRecordingsFolderButton" type="button">Recordings</button>
+            <button class="folder-action-button" id="openNotesFolderButton" type="button">Notes</button>
+          </div>
 
         </section>
       </header>
 
       <section class="studio-grid">
         <aside class="side-panel" aria-label="Runtime information">
-          <div class="panel-section">
-            <p class="panel-label">Current Step</p>
-            <span class="notice-pill" id="statusText">Stopped</span>
-          </div>
-          <div class="panel-section">
-            <p class="panel-label">Captions</p>
-            <span class="notice-pill muted" id="noticeText">Ready</span>
-          </div>
-          <div class="panel-section">
-            <p class="panel-label">Recording</p>
-            <span class="notice-pill muted" id="recordingStatusText">Off</span>
-            <p class="panel-line" id="recordingFileText">No recording yet.</p>
+          <div class="panel-section compact-status-group">
+            <div class="status-row">
+              <p class="panel-label">Current Step</p>
+              <span class="notice-pill" id="statusText">Stopped</span>
+            </div>
+            <div class="status-row">
+              <p class="panel-label">Captions</p>
+              <span class="notice-pill muted" id="noticeText">Ready</span>
+            </div>
+            <div class="status-row recording-row">
+              <p class="panel-label">Recording</p>
+              <span class="notice-pill muted" id="recordingStatusText">Off</span>
+            </div>
+            <p class="panel-line compact-recording-file" id="recordingFileText">No recording yet.</p>
           </div>
           <div class="panel-section usage-panel" aria-label="Cloud usage estimate">
             <p class="panel-label">Cloud Usage</p>
@@ -96,9 +102,9 @@
                 <label class="local-control local-extension local-preset-control">
                   Config
                   <select id="localAsrPreset">
-                    <option value="igpu" selected>1 核显</option>
-                    <option value="dgpu">2 独显</option>
-                    <option value="t600">3 工作站</option>
+                    <option value="igpu" selected>iGPU</option>
+                    <option value="dgpu">dGPU</option>
+                    <option value="hp">HP</option>
                   </select>
                 </label>
 
@@ -144,12 +150,20 @@
           <div class="panel-section">
             <p class="panel-label">Meeting Notes</p>
             <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
+            <label class="notes-engine-control">
+              Notes Engine
+              <select id="notesEngine">
+                <option value="aliyun-tingwu" selected>Aliyun Tingwu</option>
+                <option value="funasr">Local FunASR</option>
+              </select>
+            </label>
             <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
             <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
               <div class="notes-progress-header">
                 <span id="notesProgressStage">Preparing</span>
                 <span id="notesProgressPercent">0%</span>
               </div>
+              <p class="notes-progress-detail" id="notesProgressDetail">Preparing selected recordings.</p>
               <div class="notes-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
                 <div class="notes-progress-fill" id="notesProgressFill"></div>
               </div>
@@ -159,14 +173,15 @@
               <div class="panel-action-row">
                 <button class="panel-action-button is-primary" id="processMeetingButton" type="button">Build Notes</button>
                 <button class="panel-action-button" id="openMinutesButton" type="button" disabled>Open Notes</button>
+                <button class="panel-action-button" id="checkCloudNotesButton" type="button">Cloud Check</button>
                 <button class="panel-action-button" id="refreshRecordingsButton" type="button">Refresh</button>
               </div>
             </div>
           </div>
-          <div class="panel-section">
-            <p class="panel-label">Delay Hint</p>
-            <span class="notice-pill muted" id="delayStatusText">Ready</span>
-            <p class="panel-line" id="delayHintText">No delay detected.</p>
+          <div class="panel-section compact-status-section">
+            <p class="panel-label">Delay</p>
+            <span class="notice-pill muted compact-status-pill" id="delayStatusText" title="No delay detected.">Ready</span>
+            <p class="panel-line hidden" id="delayHintText">No delay detected.</p>
           </div>
           <p class="panel-line hidden" id="logText">Ready.</p>
           <p class="panel-line hidden" id="perfText">Waiting for first subtitle.</p>
@@ -212,7 +227,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=cloud-branding-20260528"></script>
+    <script src="/static/app.js?v=top-folder-buttons-20260529"></script>
   </body>
 </html>
 

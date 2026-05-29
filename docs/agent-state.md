@@ -28,6 +28,8 @@ Finish the current coding pass and sync the work to GitHub.
 - Selected-engine routing: Azure live mode attempts cloud notes when configured; local live engines use local notes without speaker separation.
 - User-facing meeting-notes hints and completion logs that explain which path was used.
 - One-click Windows command shortcuts for backend restart and shutdown.
+- Aliyun Tingwu is now the chosen/default cloud meeting-notes direction. The UI defaults meeting notes to `Aliyun Tingwu`, while Azure remains available as a legacy cloud speech option. Local `.env` holds the private Aliyun values and Tencent Relay URL; committed setup notes use placeholders only.
+- Local meeting-notes refinement is now pointed at Ollama `qwen3:14b`; Gemma and Phi test models were removed locally.
 
 ## Files Expected In The Commit
 
@@ -68,7 +70,8 @@ Finish the current coding pass and sync the work to GitHub.
 - `AZURE_BATCH_CONTAINER_SAS_URL` is not configured in `.env`; Azure Batch meeting notes will fall back to local faster-whisper until Blob SAS is added.
 - Azure Batch requires a Blob/container SAS URL because Batch Transcription cannot directly read a local WAV file.
 - Local pyannote diarization works after Hugging Face gated model access is accepted, but it is too slow to use as the default long-meeting path on T600-class hardware.
+- Aliyun Tingwu integration is implemented with OSS or Tencent Relay upload paths, task polling, raw-result capture, Markdown/DOCX notes, progress reporting, diagnostics, and temporary audio cleanup. Private `.env` values are still required before another machine can run the cloud path.
 
 ## Next Recommended Step
 
-Run the final syntax checks, stage the intended files explicitly, commit with `Add post-meeting Azure Batch notes`, and push `codex/post-meeting-ollama-notes-desktop` to GitHub. Install/authenticate `gh` later if a draft PR is required from this machine.
+Run the final syntax checks, stage the intended files explicitly, commit the Aliyun Tingwu and qwen3 notes work, and push the current branch to GitHub. Install/authenticate `gh` later if a draft PR is required from this machine.

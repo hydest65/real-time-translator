@@ -1,5 +1,31 @@
 # Release Notes
 
+## 0.1.13-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement
+
+Date: 2026-05-30
+
+### Product
+
+- Added Aliyun Tingwu as the selected cloud meeting-notes path, with Tencent Relay supported as the default private upload bridge.
+- Added compact UI controls for meeting-notes engine choice, progress display, diagnostics, and quick access to recordings / minutes folders.
+- Kept tester-facing upload-path details out of the main UI; upload routing is controlled by local environment configuration.
+- Set the local meeting-notes refinement model direction to Ollama `qwen3:14b` after Gemma and Phi test models were removed locally.
+
+### Technical
+
+- Added Aliyun Tingwu task submission, polling, transcript/minutes rendering, raw result capture, and temporary audio cleanup.
+- Added Tencent Relay upload support with byte-level progress reporting and post-task deletion.
+- Added `.env.example` settings for local Ollama notes refinement, Aliyun Tingwu, OSS, and relay cleanup.
+- Added Aliyun SDK requirements and ignored backend runtime log files.
+
+### Verification
+
+- Python syntax checks passed for `backend/main.py`, `backend/aliyun_tingwu.py`, core backend modules, and `scripts/process-recording.py`.
+- Backend import check passed.
+- Frontend JavaScript syntax checks passed for `frontend/app.js` and `frontend/ui-editor.js` with the bundled Codex Node runtime.
+- `git diff --check` passed.
+- Secret scan found placeholders and environment-variable names only; live Aliyun, Azure, relay IP, and AppKey values were not present in committed paths.
+
 ## 0.1.12-cloud-branding-notes-fallback - Provider-Neutral UI and Stable Meeting Notes
 
 Date: 2026-05-28
@@ -8,7 +34,7 @@ Date: 2026-05-28
 
 - Removed provider-specific wording from tester-facing UI. The app now presents the live route, usage panel, status messages, and settings as `Cloud` / `Cloud Usage` / `Cloud Sync`.
 - Added Chinese meeting speech as a selectable input language while keeping meeting notes output bilingual, with English first and Chinese reading copy second.
-- Reworked local hardware choices into three tester-friendly tiers: `1 核显`, `2 独显`, and `3 工作站`, assuming 16GB RAM and choosing the tier by graphics/compute class.
+- Reworked local hardware choices into three tester-friendly abbreviation tiers: `iGPU`, `dGPU`, and `HP`, assuming 16GB RAM and choosing the tier by graphics/compute class.
 - Kept cloud usage remaining-time sync tied to the configured monthly quota, now set for a 5-hour free monthly allowance.
 
 ### Technical

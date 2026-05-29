@@ -21,7 +21,7 @@ All tester machines are treated as 16GB RAM machines for preset selection. The p
 
 - Engine: `Argos`
 - Input: `System`, when translating meeting audio from the computer
-- ASR Preset: `3 工作站`
+- ASR Preset: `HP`
 - ASR model: `small.en`
 - Device: `cuda`
 - Compute type: `int8_float16`
@@ -31,13 +31,13 @@ All tester machines are treated as 16GB RAM machines for preset selection. The p
 
 ## Optional Experiments
 
-- `1 核显`: `base(.en) + cpu + int8 + beam 1`
+- `iGPU`: `base(.en) + cpu + int8 + beam 1`
   - Recommended for 16GB RAM machines with integrated graphics and ordinary office laptops.
-- `2 独显`: `small(.en) + auto + int8 + beam 2`
+- `dGPU`: `small(.en) + auto + int8 + beam 2`
   - Recommended for 16GB RAM machines with a general discrete GPU when the exact CUDA capability is unknown.
-- `3 工作站`: `small(.en) + cuda + int8_float16 + beam 3`
+- `HP`: `small(.en) + cuda + int8_float16 + beam 3`
   - Recommended for 16GB RAM workstation-class machines such as the T600 4GB GPU or stronger NVIDIA GPUs.
-  - If the model fails to load or latency becomes too high, return to `2 独显` or Azure Cloud.
+  - If the model fails to load or latency becomes too high, return to `dGPU` or Cloud mode.
 - `medium.en + int8`
   - Manual experiment only.
   - Not recommended as a default on a 4GB GPU.

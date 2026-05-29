@@ -32,9 +32,9 @@ Current closeout result on 2026-05-17:
 - Backend import check passed.
 - Frontend JavaScript syntax check passed with the bundled Node runtime.
 - UI editor JavaScript syntax check passed with the bundled Node runtime.
-- Default local ASR tier now reports `1 核显` with `base.en`, CPU, and `int8`.
+- Default local ASR tier now reports `iGPU` with `base.en`, CPU, and `int8`.
 - faster-whisper quality parameters are accepted by the installed package signature.
-- ASR Preset control maps `1 核显`, `2 独显`, and `3 工作站` to local ASR model / device / compute-type choices.
+- ASR Preset control maps `iGPU`, `dGPU`, and `HP` to local ASR model / device / compute-type choices.
 - Hardware tier guidance assumes tester machines have 16GB RAM; choose the tier by graphics/compute class.
 - CTranslate2 CUDA check sees one CUDA device on the NVIDIA T600 Laptop GPU.
 - Torch CUDA remains unavailable, so MarianMT/NLLB should still be treated as CPU-bound unless the environment is changed.
@@ -68,6 +68,14 @@ Current closeout result on 2026-05-25:
 - Azure Speech live credentials can remain local in `.env`; Azure Monitor sync still requires `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_SPEECH_RESOURCE_ID`.
 
 Current closeout result on 2026-05-28:
+
+- Python syntax checks passed for `backend/main.py`, `backend/aliyun_tingwu.py`, core backend modules, and `scripts/process-recording.py`.
+- Backend import check passed.
+- Frontend JavaScript syntax checks passed for `frontend/app.js` and `frontend/ui-editor.js` with the bundled Codex Node runtime. The system `node.exe` was blocked by Windows access policy, so the bundled runtime was used.
+- `git diff --check` passed.
+- Secret scan found no live Aliyun AccessKey, Tingwu AppKey, relay IP, or Azure secret in committed paths.
+- Ollama local notes default is `qwen3:14b`; `gemma4:e4b` and `phi3:mini` were removed locally.
+- Aliyun Tingwu cloud notes support now includes OSS or Tencent Relay upload, diagnostics, progress reporting, raw result payloads, Markdown/DOCX output, and temporary audio cleanup.
 
 - Python syntax checks passed for `backend/main.py`, `backend/cloud_speech.py`, and `scripts/process-recording.py`.
 - Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.

@@ -21,7 +21,11 @@ const downloadTranscriptButton = document.querySelector("#downloadTranscriptButt
 const downloadMinutesButton = document.querySelector("#downloadMinutesButton");
 const processMeetingButton = document.querySelector("#processMeetingButton");
 const openMinutesButton = document.querySelector("#openMinutesButton");
+const checkCloudNotesButton = document.querySelector("#checkCloudNotesButton");
 const refreshRecordingsButton = document.querySelector("#refreshRecordingsButton");
+const openRecordingsFolderButton = document.querySelector("#openRecordingsFolderButton");
+const openNotesFolderButton = document.querySelector("#openNotesFolderButton");
+const notesEngine = document.querySelector("#notesEngine");
 const recordingList = document.querySelector("#recordingList");
 const localControls = document.querySelectorAll(".local-control");
 const cloudControls = document.querySelectorAll(".cloud-control");
@@ -36,6 +40,7 @@ const notesProgress = document.querySelector("#notesProgress");
 const notesProgressStage = document.querySelector("#notesProgressStage");
 const notesProgressPercent = document.querySelector("#notesProgressPercent");
 const notesProgressFill = document.querySelector("#notesProgressFill");
+const notesProgressDetail = document.querySelector("#notesProgressDetail");
 const delayStatusText = document.querySelector("#delayStatusText");
 const delayHintText = document.querySelector("#delayHintText");
 const azureUsageStatusText = document.querySelector("#azureUsageStatusText");
@@ -50,6 +55,11 @@ let socket = null;
 let finalSubtitleHistory = [];
 let englishContextHistory = [];
 let englishDraftById = new Map();
+let englishLiveBuffer = [];
+let englishDraftLineStartWord = 0;
+let englishDraftLastWordCount = 0;
+let englishContextRenderedText = "";
+let englishContextTypeTimer = null;
 let chineseTranslationHistory = [];
 let liveSubtitle = null;
 let autoFollowSubtitles = true;
@@ -63,6 +73,11 @@ let recordingTimer = null;
 let currentRecordingPath = "";
 let azureConfigured = false;
 let azureBatchConfigured = false;
+let aliyunTingwuConfigured = false;
+let aliyunTingwuEnabled = false;
+let aliyunTingwuMissing = [];
+let aliyunTingwuUploadProvider = "oss";
+let funasrConfigured = false;
 let postMeetingAsrRequested = "azure-batch";
 let postMeetingAsrEffective = "faster-whisper";
 let latestMinutesPath = "";
@@ -80,6 +95,10 @@ let azureUsageCloud = null;
 let azureUsageSyncTimer = null;
 const maxDisplayHistory = 80;
 const maxChineseFlowCharacters = 520;
+const localDraftPromoteWordCount = 26;
+const localDraftTailWordCount = 16;
+const englishContextTypeChunk = 3;
+const englishContextTypeDelayMs = 28;
 const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
 const uiThemeStorageKey = "subtitleStudioUiThemeCompact20260502";
@@ -103,6 +122,17 @@ function providerNeutralText(value = "") {
     .replace(/\bAzure\b/gi, "Cloud");
 }
 
+function cloudCheckStatusText(item) {
+  if (item?.ok) {
+    return "OK";
+  }
+  const message = String(item?.message || "");
+  if (/UserDisable|overdue|security reasons|not currently available/i.test(message)) {
+    return "Blocked";
+  }
+  return "Missing";
+}
+
 function applyDefaultInputMode() {
   audioSource.value = "system";
 }
@@ -116,8 +146,14 @@ async function loadRuntimeConfig() {
     const payload = await response.json();
     azureConfigured = Boolean(payload.cloud_configured ?? payload.azure_configured);
     azureBatchConfigured = Boolean(payload.cloud_batch_configured ?? payload.azure_batch_configured);
+    aliyunTingwuConfigured = Boolean(payload.aliyun_tingwu_configured);
+    aliyunTingwuEnabled = Boolean(payload.aliyun_tingwu_enabled);
+    aliyunTingwuMissing = Array.isArray(payload.aliyun_tingwu_missing) ? payload.aliyun_tingwu_missing : [];
+    aliyunTingwuUploadProvider = payload.aliyun_tingwu_upload_provider || "oss";
+    funasrConfigured = Boolean(payload.funasr_configured);
     postMeetingAsrRequested = payload.post_meeting_asr_requested || "cloud-batch";
     postMeetingAsrEffective = payload.post_meeting_asr_effective || "faster-whisper";
+    updateMeetingActionButtons();
     renderAzureUsage();
     if (!azureConfigured && translationEngine.value === "azure") {
       noticeText.textContent = "Cloud not configured";
@@ -255,15 +291,54 @@ function updateMeetingActionButtons() {
   }
 
   stopButton.disabled = !isMeetingLive || isProcessingNotes;
-  processMeetingButton.disabled = isRecordingActive || (!isProcessingNotes && !hasSelectedRecordings);
+  processMeetingButton.disabled = isRecordingActive || (!isProcessingNotes && (!hasSelectedRecordings || !notesEngineReady()));
   openMinutesButton.disabled = isRecordingActive || isProcessingNotes || !latestMinutesPath;
+  if (checkCloudNotesButton) {
+    checkCloudNotesButton.disabled = isRecordingActive || isProcessingNotes || notesEngine?.value !== "aliyun-tingwu";
+  }
+}
+
+function notesEngineReady() {
+  if (!notesEngine) {
+    return true;
+  }
+  if (notesEngine.value === "aliyun-tingwu") {
+    return aliyunTingwuConfigured;
+  }
+  if (notesEngine.value === "azure-fast") {
+    return azureConfigured;
+  }
+  if (notesEngine.value === "funasr") {
+    return funasrConfigured;
+  }
+  return true;
 }
 
 function notesBuildHint() {
-  if (translationEngine.value === "azure" && azureConfigured) {
-    return "Build Notes will generate English-Chinese meeting minutes from the selected recordings.";
+  if (notesEngine?.value === "aliyun-tingwu") {
+    const uploadLabel = aliyunTingwuUploadProvider === "tencent-relay" ? "Tencent Relay" : "Aliyun OSS";
+    if (!aliyunTingwuEnabled) {
+      return "Aliyun Tingwu is selected. Enable ALIYUN_TINGWU_ENABLED in .env to use cloud meeting notes.";
+    }
+    if (!aliyunTingwuConfigured) {
+      const missing = aliyunTingwuMissing.length ? ` Missing: ${aliyunTingwuMissing.join(", ")}.` : "";
+      return `Aliyun Tingwu needs its cloud settings before notes can run. Upload path: ${uploadLabel}.${missing}`;
+    }
+    return `Build Notes will use Aliyun Tingwu for speaker-separated cloud transcription and meeting summary via ${uploadLabel}.`;
   }
-  return "Build Notes will generate English-Chinese meeting minutes locally when cloud transcription is unavailable.";
+  if (notesEngine?.value === "azure-fast") {
+    if (!azureConfigured) {
+      return "Cloud Speech is selected, but Azure Speech to Text is not configured yet.";
+    }
+    return "Build Notes will use Azure Speech to Text, then refine the transcript locally.";
+  }
+  if (notesEngine?.value === "funasr") {
+    if (!funasrConfigured) {
+      return "Local FunASR is selected, but FunASR is not installed yet.";
+    }
+    return "Build Notes will use local FunASR transcription, keeping recordings on this computer.";
+  }
+  return "Build Notes will generate English-Chinese meeting minutes from the selected recordings.";
 }
 
 function setNotesProgress(percent = 0, stage = "", message = "", visible = false) {
@@ -271,13 +346,18 @@ function setNotesProgress(percent = 0, stage = "", message = "", visible = false
     return;
   }
   const normalizedPercent = Math.max(0, Math.min(100, Number(percent) || 0));
+  const normalizedMessage = providerNeutralText(message);
   notesProgress.classList.toggle("hidden", !visible);
   notesProgressFill.style.width = `${normalizedPercent}%`;
   notesProgressPercent.textContent = `${Math.round(normalizedPercent)}%`;
   notesProgressStage.textContent = stage || "Preparing";
+  if (notesProgressDetail) {
+    notesProgressDetail.textContent = normalizedMessage || "Working on meeting notes.";
+    notesProgressDetail.title = normalizedMessage || "";
+  }
   notesProgress.querySelector(".notes-progress-track")?.setAttribute("aria-valuenow", String(Math.round(normalizedPercent)));
-  if (message) {
-    notesHintText.textContent = providerNeutralText(message);
+  if (message && !visible) {
+    notesHintText.textContent = normalizedMessage;
   }
 }
 
@@ -302,7 +382,7 @@ async function refreshNotesProgress() {
       return;
     }
     const progress = await response.json();
-    const stage = progress.stage ? String(progress.stage).replace(/^\w/, (char) => char.toUpperCase()) : "Processing";
+    const stage = progress.stage ? readableNotesStage(progress.stage) : "Processing";
     const current = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
     setNotesProgress(progress.percent || 0, `${stage}${current}`, progress.message || "", isProcessingNotes || progress.running);
     if (!progress.running && progress.stage === "complete") {
@@ -314,9 +394,12 @@ async function refreshNotesProgress() {
 }
 
 function setDelayHint(label, detail, isWarning = false) {
+  const normalizedDetail = providerNeutralText(detail);
   delayStatusText.textContent = label;
   delayStatusText.classList.toggle("muted", !isWarning);
-  delayHintText.textContent = providerNeutralText(detail);
+  delayStatusText.title = normalizedDetail || label;
+  delayStatusText.setAttribute("aria-label", `${label}. ${normalizedDetail || ""}`.trim());
+  delayHintText.textContent = normalizedDetail;
 }
 
 function updateDelayHintFromStatus(status, detail = "") {
@@ -496,6 +579,29 @@ function readAzureUsageEstimate() {
       monthSeconds: 0,
     };
   }
+}
+
+function readableNotesStage(stage = "") {
+  const normalized = String(stage || "").toLowerCase();
+  const labels = {
+    queued: "Queued",
+    uploading: "Uploading",
+    submitting: "Submitting",
+    waiting: "Waiting",
+    downloading: "Downloading",
+    transcribing: "Transcribing",
+    model: "Model",
+    model_loading: "Model",
+    model_ready: "Model Ready",
+    refining: "Refining",
+    writing: "Writing",
+    processed: "Processed",
+    combining: "Combining",
+    complete: "Complete",
+    failed: "Failed",
+    cancelled: "Cancelled",
+  };
+  return labels[normalized] || normalized.replace(/_/g, " ").replace(/^\w/, (char) => char.toUpperCase());
 }
 
 function normalizedAzureUsageEstimate() {
@@ -798,16 +904,30 @@ function renderLocalSubtitle(item) {
   if (item.sourceText && item.sourceText.trim()) {
     const draftId = item.sequenceId || "local-current-draft";
     if (item.isFinal === false) {
+      promoteDraftLeadToContext(item, draftId);
+      upsertEnglishLiveBuffer(item, draftId, false);
       englishDraftById.set(draftId, {
         ...(englishDraftById.get(draftId) || {}),
         ...item,
+        sourceText: item.sourceText,
+        originalSourceText: item.sourceText,
         translatedText: "",
         sequenceId: draftId,
         isFinal: false,
       });
+      renderEnglishContext();
       renderEnglishDraft();
     } else {
       recordTranscriptEntry(item, "local");
+      removeProvisionalContext(draftId);
+      const draftIds = Array.isArray(item.draftSequenceIds) && item.draftSequenceIds.length
+        ? item.draftSequenceIds
+        : [draftId];
+      for (const id of draftIds) {
+        removeProvisionalContext(id);
+        removeEnglishLiveBuffer(id);
+      }
+      upsertEnglishLiveBuffer(item, draftId, true);
       upsertHistory(englishContextHistory, {
         ...item,
         translatedText: "",
@@ -815,9 +935,6 @@ function renderLocalSubtitle(item) {
         isFinal: true,
       });
       englishContextHistory = englishContextHistory.slice(-24);
-      const draftIds = Array.isArray(item.draftSequenceIds) && item.draftSequenceIds.length
-        ? item.draftSequenceIds
-        : [draftId];
       for (const id of draftIds) {
         englishDraftById.delete(id);
       }
@@ -847,8 +964,127 @@ function renderEnglishContext() {
 }
 
 function renderEnglishDraft() {
-  const drafts = Array.from(englishDraftById.values()).slice(-2);
-  renderSubtitleList(englishDraftStack, drafts, "draft");
+  const draftWindow = buildEnglishDraftWindow();
+  renderSubtitleList(englishDraftStack, draftWindow ? [draftWindow] : [], "draft");
+}
+
+function promoteDraftLeadToContext(item, draftId) {
+  const text = String(item.sourceText || "").trim();
+  const words = text.split(/\s+/).filter(Boolean);
+  if (words.length < localDraftPromoteWordCount) {
+    removeProvisionalContext(draftId);
+    return;
+  }
+
+  const leadText = words.slice(0, -localDraftTailWordCount).join(" ").trim();
+  if (!leadText) {
+    removeProvisionalContext(draftId);
+    return;
+  }
+
+  upsertHistory(englishContextHistory, {
+    ...item,
+    sequenceId: `${draftId}-provisional-context`,
+    sourceText: leadText,
+    translatedText: "",
+    isFinal: true,
+    isProvisional: true,
+  });
+  englishContextHistory = englishContextHistory.slice(-24);
+}
+
+function removeProvisionalContext(draftId) {
+  englishContextHistory = englishContextHistory.filter(
+    (entry) => entry.sequenceId !== `${draftId}-provisional-context`,
+  );
+}
+
+function draftDisplayText(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  const words = normalized.split(/\s+/).filter(Boolean);
+  if (words.length <= localDraftPromoteWordCount) {
+    return normalized;
+  }
+  return words.slice(-localDraftTailWordCount).join(" ");
+}
+
+function upsertEnglishLiveBuffer(item, sequenceId, isFinal) {
+  const text = String(item.sourceText || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return;
+  }
+  const existingIndex = englishLiveBuffer.findIndex((entry) => entry.sequenceId === sequenceId);
+  const entry = {
+    ...item,
+    sequenceId,
+    sourceText: text,
+    translatedText: "",
+    isFinal,
+    updatedAt: Date.now(),
+  };
+  if (existingIndex >= 0) {
+    englishLiveBuffer[existingIndex] = {
+      ...englishLiveBuffer[existingIndex],
+      ...entry,
+    };
+  } else {
+    englishLiveBuffer.push(entry);
+  }
+  englishLiveBuffer = englishLiveBuffer.slice(-10);
+}
+
+function removeEnglishLiveBuffer(sequenceId) {
+  englishLiveBuffer = englishLiveBuffer.filter((entry) => entry.sequenceId !== sequenceId);
+}
+
+function buildEnglishDraftWindow() {
+  const entries = englishLiveBuffer.filter((entry) => entry.sourceText && entry.sourceText.trim());
+  if (!entries.length) {
+    englishDraftLineStartWord = 0;
+    englishDraftLastWordCount = 0;
+    return null;
+  }
+  const joinedText = entries.map((entry) => entry.sourceText).join(" ").replace(/\s+/g, " ").trim();
+  const words = joinedText.split(/\s+/).filter(Boolean);
+  if (words.length < englishDraftLastWordCount) {
+    englishDraftLineStartWord = 0;
+  }
+  englishDraftLineStartWord = Math.min(englishDraftLineStartWord, words.length);
+  let clippedText = words.slice(englishDraftLineStartWord).join(" ");
+  if (draftTextWouldOverflow(clippedText) && words.length > englishDraftLineStartWord) {
+    const nextStart = Math.max(englishDraftLineStartWord + 1, englishDraftLastWordCount);
+    englishDraftLineStartWord = Math.min(nextStart, words.length - 1);
+    clippedText = words.slice(englishDraftLineStartWord).join(" ");
+    while (draftTextWouldOverflow(clippedText) && englishDraftLineStartWord < words.length - 1) {
+      englishDraftLineStartWord += 1;
+      clippedText = words.slice(englishDraftLineStartWord).join(" ");
+    }
+  }
+  englishDraftLastWordCount = words.length;
+  const first = entries[0];
+  const last = entries[entries.length - 1];
+  return {
+    sequenceId: "local-live-window",
+    sourceText: clippedText,
+    translatedText: "",
+    start: first.start,
+    end: last.end,
+    isFinal: entries.every((entry) => entry.isFinal),
+  };
+}
+
+function draftTextWouldOverflow(text) {
+  if (!englishDraftStack || !text) {
+    return false;
+  }
+  const probe = document.createElement("span");
+  probe.className = "draft-measure-probe";
+  probe.textContent = text;
+  englishDraftStack.append(probe);
+  const availableWidth = Math.max(40, englishDraftStack.clientWidth - 56);
+  const wouldOverflow = probe.scrollWidth > availableWidth;
+  probe.remove();
+  return wouldOverflow;
 }
 
 function upsertHistory(history, item) {
@@ -881,7 +1117,7 @@ function renderSubtitleList(target, entries, mode) {
 
     const timestamp = document.createElement("div");
     timestamp.className = "timestamp";
-    const state = mode === "draft" ? " - draft" : "";
+    const state = entry.isProvisional ? " - context" : mode === "draft" ? " - draft" : "";
     timestamp.textContent = `${formatTimestamp(entry.start)} - ${formatTimestamp(entry.end)}${state}`;
 
     row.append(source, translation, timestamp);
@@ -898,11 +1134,78 @@ function renderTextFlow(target, entries, field, maxCharacters, mode) {
     ? trimFlowText(joinedText, maxCharacters)
     : joinedText.replace(/\s+/g, " ").trim();
 
+  if (mode === "context") {
+    renderEnglishContextTypewriter(target, text);
+    return;
+  }
+
   target.innerHTML = "";
   const paragraph = document.createElement("p");
   paragraph.className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""} ${mode === "context" ? "english-flow-text" : ""}`.trim();
   paragraph.textContent = text;
   target.append(paragraph);
+}
+
+function renderEnglishContextTypewriter(target, nextText) {
+  let paragraph = target.querySelector(".english-flow-text");
+  if (!paragraph) {
+    target.innerHTML = "";
+    paragraph = document.createElement("p");
+    paragraph.className = "flow-text english-flow-text";
+    target.append(paragraph);
+    englishContextRenderedText = "";
+  }
+
+  const currentText = paragraph.textContent || "";
+  if (englishContextTypeTimer) {
+    clearTimeout(englishContextTypeTimer);
+    englishContextTypeTimer = null;
+  }
+
+  if (nextText.length < currentText.length || !nextText.startsWith(currentText)) {
+    const commonPrefix = commonTextPrefix(currentText, nextText);
+    if (commonPrefix.length >= Math.min(24, Math.floor(currentText.length * 0.6))) {
+      englishContextRenderedText = commonPrefix;
+      paragraph.textContent = commonPrefix;
+    } else {
+      englishContextRenderedText = nextText;
+      paragraph.textContent = nextText;
+      paragraph.classList.toggle("typing", Boolean(nextText));
+      return;
+    }
+  } else {
+    englishContextRenderedText = currentText;
+  }
+
+  paragraph.classList.toggle("typing", englishContextRenderedText.length < nextText.length);
+
+  const tick = () => {
+    if (englishContextRenderedText.length >= nextText.length) {
+      paragraph.classList.toggle("typing", Boolean(nextText));
+      englishContextTypeTimer = null;
+      return;
+    }
+    englishContextRenderedText = nextText.slice(
+      0,
+      Math.min(nextText.length, englishContextRenderedText.length + englishContextTypeChunk),
+    );
+    paragraph.textContent = englishContextRenderedText;
+    if (autoFollowEnglishContext) {
+      target.scrollTop = target.scrollHeight;
+    }
+    englishContextTypeTimer = window.setTimeout(tick, englishContextTypeDelayMs);
+  };
+
+  tick();
+}
+
+function commonTextPrefix(left, right) {
+  const maxLength = Math.min(left.length, right.length);
+  let index = 0;
+  while (index < maxLength && left[index] === right[index]) {
+    index += 1;
+  }
+  return left.slice(0, index).replace(/\s+\S*$/, "").trimEnd();
 }
 
 function trimFlowText(text, maxCharacters) {
@@ -1131,10 +1434,10 @@ function localAsrProfile() {
       hallucinationSilenceThreshold: isSystemAudio ? 0.7 : 1.0,
       repetitionPenalty: 1.1,
       noRepeatNgramSize: 3,
-      label: "Config 1: iGPU, 16GB RAM assumed - base / int8 / beam 1",
+      label: "iGPU: 16GB RAM assumed - base / int8 / beam 1",
     };
   }
-  if (preset === "t600" || preset === "accurate") {
+  if (preset === "hp" || preset === "t600" || preset === "accurate") {
     return {
       model: "small.en",
       computeType: "int8_float16",
@@ -1149,7 +1452,7 @@ function localAsrProfile() {
       hallucinationSilenceThreshold: isSystemAudio ? 0.9 : 1.5,
       repetitionPenalty: 1.06,
       noRepeatNgramSize: 3,
-      label: "Config 3: workstation, 16GB RAM assumed - small / int8_float16 / beam 3",
+      label: "HP: 16GB RAM assumed - small / int8_float16 / beam 3",
     };
   }
   return {
@@ -1166,7 +1469,7 @@ function localAsrProfile() {
     hallucinationSilenceThreshold: isSystemAudio ? 0.8 : 1.2,
     repetitionPenalty: 1.08,
     noRepeatNgramSize: 3,
-    label: "Config 2: discrete GPU, 16GB RAM assumed - small / int8 / beam 2",
+    label: "dGPU: 16GB RAM assumed - small / int8 / beam 2",
   };
 }
 
@@ -1292,6 +1595,14 @@ function start() {
   finalSubtitleHistory = [];
   englishContextHistory = [];
   englishDraftById = new Map();
+  englishLiveBuffer = [];
+  englishDraftLineStartWord = 0;
+  englishDraftLastWordCount = 0;
+  englishContextRenderedText = "";
+  if (englishContextTypeTimer) {
+    clearTimeout(englishContextTypeTimer);
+    englishContextTypeTimer = null;
+  }
   chineseTranslationHistory = [];
   sessionTranscript = [];
   transcriptById = new Map();
@@ -1481,6 +1792,8 @@ async function processMeetingRecording() {
       body: JSON.stringify({
         recordings,
         engine: translationEngine.value,
+        notesEngine: notesEngine?.value || "aliyun-tingwu",
+        tingwuUploadProvider: aliyunTingwuUploadProvider || "oss",
         notesLanguage: notesRecordingLanguage(),
       }),
       signal: notesAbortController.signal,
@@ -1545,6 +1858,55 @@ async function cancelMeetingNotes(message = "Meeting notes generation was cancel
   logText.textContent = message;
 }
 
+async function checkCloudNotesSetup() {
+  if (notesEngine?.value !== "aliyun-tingwu") {
+    return;
+  }
+  if (checkCloudNotesButton) {
+    checkCloudNotesButton.disabled = true;
+    checkCloudNotesButton.textContent = "Checking";
+  }
+  notesStatusText.textContent = "Checking";
+  notesStatusText.classList.add("muted");
+  notesHintText.textContent = "Checking Aliyun Tingwu cloud notes setup.";
+  try {
+    const uploadProvider = aliyunTingwuUploadProvider || "oss";
+    const response = await fetch(`/api/aliyun-tingwu-diagnostics?uploadProvider=${encodeURIComponent(uploadProvider)}`);
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || "Cloud notes setup check failed.");
+    }
+    const checks = Array.isArray(payload.checks) ? payload.checks : [];
+    const failed = checks.filter((item) => !item.ok);
+    aliyunTingwuConfigured = Boolean(payload.ok);
+    aliyunTingwuEnabled = checks.some((item) => item.name === "Tingwu Enabled" && item.ok) || aliyunTingwuEnabled;
+    aliyunTingwuMissing = failed
+      .filter((item) => ["Tingwu AppKey", "OSS Bucket", "Tencent Relay URL"].includes(item.name))
+      .map((item) => item.name);
+    notesStatusText.textContent = payload.ok ? "Cloud ready" : "Cloud setup";
+    notesStatusText.classList.toggle("muted", !payload.ok);
+    notesHintText.textContent = payload.ok
+      ? "Aliyun Tingwu is ready for cloud meeting notes."
+      : failed.map((item) => item.message).join(" ");
+    logText.textContent = checks
+      .map((item) => `${cloudCheckStatusText(item)} - ${item.name}: ${item.message}`)
+      .join("\n");
+    noticeText.textContent = payload.ok ? "Cloud notes ready" : "Cloud setup incomplete";
+  } catch (error) {
+    const message = providerNeutralText(error.message || "Could not check Aliyun Tingwu setup.");
+    notesStatusText.textContent = "Check failed";
+    notesStatusText.classList.add("muted");
+    notesHintText.textContent = message;
+    logText.textContent = message;
+  } finally {
+    if (checkCloudNotesButton) {
+      checkCloudNotesButton.disabled = false;
+      checkCloudNotesButton.textContent = "Cloud Check";
+    }
+    updateMeetingActionButtons();
+  }
+}
+
 async function openLatestMinutes() {
   if (isRecordingActive || isProcessingNotes || !latestMinutesPath) {
     return;
@@ -1568,6 +1930,22 @@ async function openLatestMinutes() {
   }
 }
 
+async function openProjectFolder(kind) {
+  const label = kind === "notes" ? "notes folder" : "recordings folder";
+  try {
+    const response = await fetch(`/api/open-folder/${kind}`, { method: "POST" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(providerNeutralText(payload.detail || `Could not open ${label}.`));
+    }
+    noticeText.textContent = kind === "notes" ? "Notes folder opened" : "Recordings folder opened";
+    logText.textContent = `Opened: ${payload.path || label}`;
+  } catch (error) {
+    noticeText.textContent = "Open folder failed";
+    logText.textContent = providerNeutralText(error.message || `Could not open ${label}.`);
+  }
+}
+
 function handlePrimaryMeetingAction() {
   start();
 }
@@ -1577,7 +1955,10 @@ stopButton.addEventListener("click", stop);
 endMeetingButton.addEventListener("click", endMeeting);
 processMeetingButton.addEventListener("click", processMeetingRecording);
 openMinutesButton.addEventListener("click", openLatestMinutes);
+checkCloudNotesButton?.addEventListener("click", checkCloudNotesSetup);
 refreshRecordingsButton?.addEventListener("click", () => refreshRecordings(currentRecordingPath));
+openRecordingsFolderButton?.addEventListener("click", () => openProjectFolder("recordings"));
+openNotesFolderButton?.addEventListener("click", () => openProjectFolder("notes"));
 downloadTranscriptButton.addEventListener("click", () => {
   downloadMarkdown("meeting-transcript", transcriptMarkdown());
 });
@@ -1587,6 +1968,7 @@ downloadMinutesButton.addEventListener("click", () => {
 translationEngine.addEventListener("change", updateEngineControls);
 translationEngine.addEventListener("change", updateLanguageHints);
 translationEngine.addEventListener("change", renderAzureUsage);
+notesEngine?.addEventListener("change", updateMeetingActionButtons);
 localAsrPreset.addEventListener("change", applyLocalAsrPreset);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
 sourceLanguage.addEventListener("change", updateLanguageHints);

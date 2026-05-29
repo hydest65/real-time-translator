@@ -60,7 +60,7 @@ if (-not (Test-Path $python)) {
 if (-not $NoInstall) {
     Write-Step "Checking dependencies"
     $dependencyCheck = Start-Process -FilePath $python `
-        -ArgumentList @("-c", "import fastapi, uvicorn, numpy, sounddevice, azure.cognitiveservices.speech") `
+        -ArgumentList @("-c", "import fastapi, uvicorn, numpy, sounddevice, azure.cognitiveservices.speech, argostranslate") `
         -NoNewWindow `
         -Wait `
         -PassThru `

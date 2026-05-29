@@ -12,7 +12,7 @@ import urllib.parse
 import urllib.request
 import wave
 import zipfile
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import datetime, timedelta, timezone
 from html import escape
 from pathlib import Path
@@ -23,6 +23,12 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from .aliyun_tingwu import (
+    diagnose_tingwu_setup,
+    process_tingwu_recording,
+    render_tingwu_minutes,
+    render_tingwu_transcript,
+)
 from .audio_capture import AudioChunk, MicrophoneAudioCapture
 from .asr import TranscriptionResult, WhisperASR
 from .cloud_speech import AzureSpeechTranslationSession, CloudSubtitle, stream_microphone_to_azure
@@ -500,15 +506,92 @@ def public_config_payload(active_config: AppConfig) -> dict[str, Any]:
         (active_config.azure_speech_key or "").strip()
         and (active_config.azure_speech_region or "").strip()
     )
+    aliyun_status = aliyun_tingwu_config_status()
     post_meeting_asr_requested = requested_post_meeting_asr_engine()
     azure_batch_configured = is_azure_batch_configured(active_config)
+    try:
+        post_meeting_asr_effective = choose_post_meeting_asr_engine()
+    except HTTPException:
+        post_meeting_asr_effective = "not-configured"
     return {
         "cloud_configured": azure_configured,
         "cloud_batch_configured": azure_batch_configured,
+        "aliyun_tingwu_enabled": aliyun_status["enabled"],
+        "aliyun_tingwu_configured": aliyun_status["configured"],
+        "aliyun_tingwu_missing": aliyun_status["missing"],
+        "aliyun_tingwu_upload_provider": aliyun_status["upload_provider"],
+        "funasr_configured": importlib.util.find_spec("funasr") is not None,
         "cloud_speech_key_set": bool((active_config.azure_speech_key or "").strip()),
         "post_meeting_asr_requested": post_meeting_asr_requested.replace("azure-", "cloud-"),
-        "post_meeting_asr_effective": choose_post_meeting_asr_engine().replace("azure-", "cloud-"),
+        "post_meeting_asr_effective": post_meeting_asr_effective.replace("azure-", "cloud-"),
+        "post_meeting_llm_enabled": post_meeting_llm_enabled(),
+        "post_meeting_llm_provider": post_meeting_llm_provider(),
+        "post_meeting_llm_model": post_meeting_llm_model(),
+        "post_meeting_llm_fallback": post_meeting_llm_fallback_enabled(),
+        "post_meeting_llm_device": os.getenv("TRANSFORMERS_NOTES_DEVICE", "auto").strip() or "auto",
     }
+
+
+def env_enabled(name: str, default: str = "0") -> bool:
+    return os.getenv(name, default).strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def normalize_tingwu_upload_provider(value: object = "") -> str:
+    normalized = str(value or os.getenv("ALIYUN_TINGWU_UPLOAD_PROVIDER", "oss")).strip().lower()
+    if normalized in {"relay", "tencent", "tencent-relay", "tencent_relay"}:
+        return "tencent-relay"
+    return "oss"
+
+
+def aliyun_tingwu_config_status(upload_provider: object = "") -> dict[str, Any]:
+    selected_provider = normalize_tingwu_upload_provider(upload_provider)
+    required = {
+        "ALIBABA_CLOUD_ACCESS_KEY_ID": os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "").strip(),
+        "ALIBABA_CLOUD_ACCESS_KEY_SECRET": os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "").strip(),
+        "ALIYUN_TINGWU_APP_KEY": os.getenv("ALIYUN_TINGWU_APP_KEY", "").strip(),
+    }
+    if selected_provider == "tencent-relay":
+        required["TENCENT_RELAY_BASE_URL"] = os.getenv("TENCENT_RELAY_BASE_URL", "").strip()
+    else:
+        required["ALIYUN_OSS_BUCKET"] = os.getenv("ALIYUN_OSS_BUCKET", "").strip()
+    missing = [name for name, value in required.items() if not value]
+    enabled = env_enabled("ALIYUN_TINGWU_ENABLED")
+    return {
+        "enabled": enabled,
+        "configured": enabled and not missing,
+        "missing": missing,
+        "upload_provider": selected_provider,
+        "region": os.getenv("ALIYUN_TINGWU_REGION", "cn-beijing").strip() or "cn-beijing",
+        "endpoint": os.getenv("ALIYUN_TINGWU_ENDPOINT", "tingwu.cn-beijing.aliyuncs.com").strip()
+        or "tingwu.cn-beijing.aliyuncs.com",
+    }
+
+
+def post_meeting_llm_enabled() -> bool:
+    value = os.getenv("POST_MEETING_LLM_ENABLED", "1").strip().lower()
+    return value not in {"0", "false", "no", "off", "rule", "rules"}
+
+
+def post_meeting_llm_provider() -> str:
+    return os.getenv("POST_MEETING_LLM_PROVIDER", "transformers").strip().lower() or "transformers"
+
+
+def post_meeting_llm_model() -> str:
+    provider = post_meeting_llm_provider()
+    if provider in {"transformers", "hf", "huggingface", "direct"}:
+        return (
+            os.getenv("TRANSFORMERS_NOTES_MODEL", "")
+            or os.getenv("HF_NOTES_MODEL", "")
+            or os.getenv("POST_MEETING_TRANSFORMERS_MODEL", "")
+            or "google/gemma-4-E2B-it"
+        ).strip()
+    if provider == "ollama":
+        return os.getenv("OLLAMA_NOTES_MODEL", "qwen3:14b").strip() or "qwen3:14b"
+    return ""
+
+
+def post_meeting_llm_fallback_enabled() -> bool:
+    return os.getenv("POST_MEETING_LLM_FALLBACK", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def azure_monitor_config() -> dict[str, str]:
@@ -670,6 +753,11 @@ async def health() -> dict[str, Any]:
     return {"ok": True, "message": "Backend is running", "config": public_config_payload(runtime.current_config)}
 
 
+@app.get("/api/aliyun-tingwu-diagnostics")
+async def aliyun_tingwu_diagnostics(uploadProvider: str = "") -> dict[str, Any]:
+    return diagnose_tingwu_setup(uploadProvider)
+
+
 @app.get("/api/cloud-usage")
 async def cloud_usage() -> dict[str, Any]:
     cached_payload = azure_usage_cache.get("payload")
@@ -717,10 +805,12 @@ async def process_recording(request: Request) -> dict[str, Any]:
     audio_paths = resolve_recording_paths(payload.get("recordings") or payload.get("recording") or "")
     script_path = ROOT / "scripts" / "process-recording.py"
     notes_language = normalize_post_meeting_language(payload.get("notesLanguage") or payload.get("language"))
-    asr_engine = choose_post_meeting_asr_engine(payload.get("engine"), notes_language)
+    notes_engine = payload.get("notesEngine") or payload.get("engine")
+    tingwu_upload_provider = normalize_tingwu_upload_provider(payload.get("tingwuUploadProvider"))
+    asr_engine = choose_post_meeting_asr_engine(notes_engine, notes_language, tingwu_upload_provider)
     processed: list[dict[str, Any]] = []
     logs: list[str] = []
-    notes_mode_message = post_meeting_mode_message(payload.get("engine"), asr_engine, notes_language)
+    notes_mode_message = post_meeting_mode_message(notes_engine, asr_engine, notes_language)
 
     set_post_meeting_progress(
         running=True,
@@ -734,17 +824,29 @@ async def process_recording(request: Request) -> dict[str, Any]:
     )
     try:
         for index, audio_path in enumerate(audio_paths, start=1):
-            processed.append(
-                await process_one_recording(
-                    audio_path,
-                    script_path,
-                    asr_engine,
-                    notes_language,
-                    logs,
-                    index,
-                    len(audio_paths),
+            if asr_engine == "aliyun-tingwu":
+                processed.append(
+                    await process_one_tingwu_recording(
+                        audio_path,
+                        notes_language,
+                        tingwu_upload_provider,
+                        logs,
+                        index,
+                        len(audio_paths),
+                    )
                 )
-            )
+            else:
+                processed.append(
+                    await process_one_recording(
+                        audio_path,
+                        script_path,
+                        asr_engine,
+                        notes_language,
+                        logs,
+                        index,
+                        len(audio_paths),
+                    )
+                )
 
         if len(processed) > 1:
             set_post_meeting_progress(
@@ -808,11 +910,157 @@ async def process_recording_progress() -> dict[str, Any]:
     return dict(post_meeting_progress)
 
 
+@app.post("/api/open-folder/{folder_kind}")
+async def open_folder(folder_kind: str) -> dict[str, Any]:
+    if folder_kind == "recordings":
+        target = RECORDINGS_DIR
+    elif folder_kind == "notes":
+        minutes_path = latest_minutes_file()
+        target = minutes_path.parent if minutes_path is not None else RECORDINGS_DIR
+    else:
+        raise HTTPException(status_code=404, detail="Unknown folder.")
+
+    target.mkdir(parents=True, exist_ok=True)
+    try:
+        os.startfile(target)  # type: ignore[attr-defined]
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Could not open folder: {exc}") from exc
+    return {"ok": True, "path": str(target)}
+
+
 def set_post_meeting_progress(**updates: Any) -> None:
     post_meeting_progress.update(updates)
     post_meeting_progress["ok"] = True
     post_meeting_progress["updatedAt"] = updates.get("updated_at", time.time())
     post_meeting_progress["percent"] = max(0, min(100, int(post_meeting_progress.get("percent") or 0)))
+
+
+async def process_one_tingwu_recording(
+    audio_path: Path,
+    notes_language: str,
+    upload_provider: str,
+    logs: list[str],
+    index: int,
+    total: int,
+) -> dict[str, Any]:
+    per_recording_span = 88 / max(1, total)
+    base_percent = 4 + int((index - 1) * per_recording_span)
+    max_percent = min(92, base_percent + int(per_recording_span * 0.9))
+    upload_label = "Tencent Relay" if upload_provider == "tencent-relay" else "Aliyun OSS"
+    total_bytes = max(1, audio_path.stat().st_size)
+    set_post_meeting_progress(
+        running=True,
+        percent=base_percent,
+        stage="uploading",
+        message=f"Uploading {audio_path.name} to {upload_label} for Tingwu processing.",
+        recording=audio_path.name,
+        current=index,
+        total=total,
+    )
+
+    def on_tingwu_progress(stage: str, message: str, extra: dict[str, Any] | None = None) -> None:
+        extra = extra or {}
+        next_percent = base_percent
+        next_stage = stage
+        next_message = message
+        if stage == "uploading":
+            uploaded = max(0, int(extra.get("uploaded", 0) or 0))
+            total_upload = max(1, int(extra.get("total", total_bytes) or total_bytes))
+            upload_fraction = min(1.0, uploaded / total_upload)
+            next_percent = base_percent + int(max(1, per_recording_span * 0.18) * upload_fraction)
+            next_message = (
+                f"Uploading {audio_path.name} to {upload_label} "
+                f"({format_file_size(uploaded)} / {format_file_size(total_upload)})."
+            )
+        elif stage == "submitting":
+            next_percent = max(base_percent + int(per_recording_span * 0.22), int(post_meeting_progress.get('percent') or 0))
+            next_stage = "submitting"
+        elif stage == "waiting":
+            status = str(extra.get("status", "") or "").strip().upper() or "RUNNING"
+            current_percent = int(post_meeting_progress.get("percent") or 0)
+            next_percent = min(max_percent - 8, max(current_percent + 2, base_percent + int(per_recording_span * 0.28)))
+            next_stage = "waiting"
+            next_message = f"Aliyun Tingwu is processing {audio_path.name} ({status})."
+        elif stage == "downloading":
+            next_percent = max(base_percent + int(per_recording_span * 0.82), int(post_meeting_progress.get("percent") or 0))
+            next_stage = "downloading"
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, next_percent),
+            stage=next_stage,
+            message=next_message,
+            recording=audio_path.name,
+            current=index,
+            total=total,
+        )
+
+    try:
+        notes = await asyncio.to_thread(
+            process_tingwu_recording,
+            audio_path,
+            notes_language,
+            upload_provider,
+            on_tingwu_progress,
+        )
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=f"Aliyun Tingwu meeting notes failed: {exc}") from exc
+
+    set_post_meeting_progress(
+        running=True,
+        percent=max_percent,
+        stage="writing",
+        message=f"Writing Aliyun Tingwu meeting-notes files for {audio_path.name}.",
+        recording=audio_path.name,
+        current=index,
+        total=total,
+    )
+    transcript_path = audio_path.with_suffix(".transcript.md")
+    minutes_path = audio_path.with_suffix(".minutes.md")
+    minutes_docx_path = audio_path.with_suffix(".minutes.docx")
+    tingwu_transcript_json_path = audio_path.with_suffix(".tingwu.transcription.json")
+    tingwu_summary_json_path = audio_path.with_suffix(".tingwu.summary.json")
+    tingwu_meeting_json_path = audio_path.with_suffix(".tingwu.meeting.json")
+    tingwu_polish_json_path = audio_path.with_suffix(".tingwu.polish.json")
+    transcript_text = render_tingwu_transcript(audio_path, notes)
+    minutes_text = render_tingwu_minutes(audio_path, notes, notes_language)
+    transcript_path.write_text(transcript_text, encoding="utf-8")
+    minutes_path.write_text(minutes_text, encoding="utf-8")
+    tingwu_transcript_json_path.write_text(json.dumps(notes.transcript_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    tingwu_summary_json_path.write_text(json.dumps(notes.summary_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    tingwu_meeting_json_path.write_text(json.dumps(notes.meeting_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    tingwu_polish_json_path.write_text(json.dumps(notes.text_polish_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_minutes_docx(minutes_path, minutes_docx_path)
+    logs.append(
+        "\n".join(
+            [
+                "Aliyun Tingwu: completed cloud meeting-notes task.",
+                f"TaskId: {notes.task_id}",
+                f"Segments: {len(notes.segments)}",
+                f"Wrote {transcript_path}",
+                f"Wrote {minutes_path}",
+                f"Wrote {tingwu_summary_json_path}",
+            ]
+        )
+    )
+    set_post_meeting_progress(
+        running=True,
+        percent=min(96, base_percent + int(per_recording_span)),
+        stage="processed",
+        message=f"Finished {audio_path.name} with Aliyun Tingwu.",
+        recording=audio_path.name,
+        current=index,
+        total=total,
+    )
+    return {
+        "ok": True,
+        "recording": str(audio_path),
+        "transcript": str(transcript_path),
+        "minutes": str(minutes_docx_path if minutes_docx_path.exists() else minutes_path),
+        "minutesMarkdown": str(minutes_path),
+        "minutesDocx": str(minutes_docx_path) if minutes_docx_path.exists() else "",
+        "transcriptText": transcript_text,
+        "minutesText": minutes_text,
+    }
 
 
 async def process_one_recording(
@@ -974,6 +1222,7 @@ def update_progress_from_script_line(
     max_percent: int,
 ) -> None:
     lower = line.lower()
+    current_percent = int(post_meeting_progress.get("percent") or 0)
     if "azure batch: uploading" in lower:
         set_post_meeting_progress(
             running=True,
@@ -1035,6 +1284,77 @@ def update_progress_from_script_line(
             current=current,
             total=total,
         )
+    elif lower.startswith("notes model: preparing"):
+        model_name = line.split(":", 1)[1].strip().replace("preparing", "", 1).strip()
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 58)),
+            stage="model",
+            message=f"Preparing notes model {model_name or 'Gemma'}.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "notes model: downloading or loading tokenizer" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 62)),
+            stage="model_loading",
+            message="Downloading or loading the notes tokenizer.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "notes model: downloading or loading weights" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 68)),
+            stage="model_loading",
+            message="Downloading or loading the notes model weights.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif lower.startswith("notes model: ready"):
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 76)),
+            stage="model_ready",
+            message=line,
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "notes model: refining meeting notes" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 82)),
+            stage="refining",
+            message="Refining transcript into bilingual meeting notes.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "used direct transformers notes writer" in lower or "used ollama notes writer" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 88)),
+            stage="writing",
+            message=line,
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
+    elif "direct transformers notes writer unavailable" in lower:
+        set_post_meeting_progress(
+            running=True,
+            percent=min(max_percent, max(current_percent, base_percent + 78)),
+            stage="model",
+            message="Primary notes model unavailable; trying fallback or rule-based notes.",
+            recording=recording_name,
+            current=current,
+            total=total,
+        )
 
 
 def recording_duration_seconds(path: Path) -> float:
@@ -1055,6 +1375,18 @@ def format_progress_time(seconds: float) -> str:
     return f"{minutes}:{remainder:02d}"
 
 
+def format_file_size(size: int) -> str:
+    value = float(max(0, size))
+    units = ["B", "KB", "MB", "GB"]
+    unit_index = 0
+    while value >= 1024 and unit_index < len(units) - 1:
+        value /= 1024
+        unit_index += 1
+    if unit_index == 0:
+        return f"{int(value)} {units[unit_index]}"
+    return f"{value:.1f} {units[unit_index]}"
+
+
 @app.post("/api/cancel-process-recording")
 async def cancel_process_recording() -> dict[str, Any]:
     process = active_post_meeting_process
@@ -1069,8 +1401,41 @@ async def cancel_process_recording() -> dict[str, Any]:
     return {"ok": True, "cancelled": True}
 
 
-def choose_post_meeting_asr_engine(ui_engine: object = "", notes_language: str = "en") -> str:
-    if str(ui_engine or "").strip().lower() and str(ui_engine or "").strip().lower() != "azure":
+def choose_post_meeting_asr_engine(
+    ui_engine: object = "",
+    notes_language: str = "en",
+    tingwu_upload_provider: object = "",
+) -> str:
+    selected_engine = str(ui_engine or "").strip().lower()
+    if selected_engine in {"aliyun-tingwu", "tingwu", "aliyun"}:
+        status = aliyun_tingwu_config_status(tingwu_upload_provider)
+        if not status["enabled"]:
+            raise HTTPException(
+                status_code=400,
+                detail="Aliyun Tingwu is selected, but ALIYUN_TINGWU_ENABLED is not enabled in .env yet.",
+            )
+        if not status["configured"]:
+            missing = ", ".join(status["missing"])
+            raise HTTPException(
+                status_code=400,
+                detail=f"Aliyun Tingwu is selected, but these settings are still missing: {missing}.",
+            )
+        return "aliyun-tingwu"
+    if selected_engine in {"azure-fast", "cloud-fast", "cloud"}:
+        if is_azure_fast_configured():
+            return "azure-fast"
+        raise HTTPException(
+            status_code=400,
+            detail="Cloud Fast is selected, but Azure Speech to Text key and region are not configured yet.",
+        )
+    if selected_engine in {"funasr", "local-funasr", "local"}:
+        if importlib.util.find_spec("funasr") is not None:
+            return "funasr"
+        raise HTTPException(
+            status_code=400,
+            detail="Local FunASR is selected, but FunASR is not installed in this environment yet.",
+        )
+    if selected_engine and selected_engine != "azure":
         if is_chinese_post_meeting_language(notes_language):
             if importlib.util.find_spec("funasr") is not None:
                 return "funasr"
@@ -1110,6 +1475,12 @@ def post_meeting_mode_message(ui_engine: object, effective_engine: str, notes_la
         if effective_engine == "azure-fast":
             return f"Cloud mode: using fast transcription for {language_label}."
         return f"Cloud mode selected, but batch storage is not configured. Using local transcription for {language_label} without speaker separation."
+    if selected_engine in {"azure-fast", "cloud-fast", "cloud"}:
+        return f"Cloud Speech mode: using Azure Speech to Text for {language_label}, then local notes refinement. Speaker separation is not used in this mode."
+    if selected_engine in {"aliyun-tingwu", "tingwu", "aliyun"}:
+        return f"Aliyun Tingwu mode: cloud meeting notes for {language_label} with speaker separation and AI summary."
+    if selected_engine in {"funasr", "local-funasr", "local"}:
+        return f"Local mode: using FunASR transcription for {language_label} without speaker separation."
     return f"Local mode: using local transcription for {language_label} without speaker separation."
 
 
@@ -1379,6 +1750,158 @@ def word_paragraph(text: str, style: str) -> str:
         f"<w:p><w:pPr>{props}</w:pPr><w:r><w:rPr>{run_props}"
         '<w:rFonts w:ascii="Calibri" w:eastAsia="Microsoft YaHei" w:hAnsi="Calibri"/>'
         f"</w:rPr><w:t>{safe_text}</w:t></w:r></w:p>"
+    )
+
+
+def write_minutes_docx(markdown_path: Path, docx_path: Path) -> None:
+    body_parts: list[str] = []
+    lines = markdown_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line:
+            index += 1
+            continue
+        if is_markdown_table_line(line):
+            table_lines: list[str] = []
+            while index < len(lines):
+                candidate = lines[index].strip()
+                if not is_markdown_table_line(candidate):
+                    break
+                table_lines.append(candidate)
+                index += 1
+            table_xml = markdown_table_xml(table_lines)
+            if table_xml:
+                body_parts.append(table_xml)
+            continue
+        style = "Body"
+        text = line
+        if line.startswith("# "):
+            style = "Title"
+            text = line[2:].strip()
+        elif line.startswith("## "):
+            style = "Heading1"
+            text = line[3:].strip()
+        elif line.startswith("### "):
+            style = "Heading2"
+            text = line[4:].strip()
+        elif line.startswith("- [ ] "):
+            style = "Bullet"
+            text = "[ ] " + line[6:].strip()
+        elif line.startswith("- "):
+            style = "Bullet"
+            text = line[2:].strip()
+        body_parts.append(word_paragraph_v2(text, style))
+        index += 1
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(body_parts)
+        + '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/>'
+        '<w:pgMar w:top="1080" w:right="1080" w:bottom="1080" w:left="1080" w:header="720" w:footer="720" w:gutter="0"/>'
+        "</w:sectPr></w:body></w:document>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        "</Types>"
+    )
+    rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    with zipfile.ZipFile(docx_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+
+
+def word_paragraph_v2(text: str, style: str) -> str:
+    safe_text = escape(text)
+    if style == "Title":
+        props = '<w:jc w:val="center"/><w:spacing w:after="240"/><w:rPr><w:b/><w:sz w:val="44"/><w:color w:val="304E96"/></w:rPr>'
+        run_props = '<w:b/><w:sz w:val="44"/><w:color w:val="304E96"/>'
+    elif style == "Heading1":
+        props = '<w:spacing w:before="240" w:after="100"/><w:rPr><w:b/><w:sz w:val="30"/><w:color w:val="304E96"/></w:rPr>'
+        run_props = '<w:b/><w:sz w:val="30"/><w:color w:val="304E96"/>'
+    elif style == "Heading2":
+        props = '<w:spacing w:before="140" w:after="80"/><w:rPr><w:b/><w:sz w:val="24"/><w:color w:val="304E96"/></w:rPr>'
+        run_props = '<w:b/><w:sz w:val="24"/><w:color w:val="304E96"/>'
+    elif style == "Bullet":
+        props = '<w:ind w:left="360" w:hanging="180"/><w:spacing w:after="80"/>'
+        run_props = '<w:sz w:val="21"/><w:color w:val="1F2A3A"/>'
+        safe_text = safe_text if safe_text.startswith("[ ]") else "- " + safe_text
+    else:
+        props = '<w:spacing w:after="80"/>'
+        run_props = '<w:sz w:val="21"/><w:color w:val="1F2A3A"/>'
+
+    return (
+        f"<w:p><w:pPr>{props}</w:pPr><w:r><w:rPr>{run_props}"
+        '<w:rFonts w:ascii="Calibri" w:eastAsia="Microsoft YaHei" w:hAnsi="Calibri"/>'
+        f"</w:rPr><w:t xml:space=\"preserve\">{safe_text}</w:t></w:r></w:p>"
+    )
+
+
+def is_markdown_table_line(line: str) -> bool:
+    return line.startswith("|") and line.endswith("|") and line.count("|") >= 2
+
+
+def markdown_table_xml(lines: list[str]) -> str:
+    rows = [parse_markdown_table_row(line) for line in lines if line.strip()]
+    if len(rows) < 2 or not is_markdown_separator_row(rows[1]):
+        return ""
+    data_rows = [rows[0]] + rows[2:]
+    column_count = max(len(row) for row in data_rows) if data_rows else 0
+    if column_count == 0:
+        return ""
+    normalized_rows = [row + [""] * (column_count - len(row)) for row in data_rows]
+    width = str(int(9000 / max(1, column_count)))
+    xml_rows: list[str] = []
+    for row_index, row in enumerate(normalized_rows):
+        cells = "".join(word_table_cell(cell, width, row_index == 0) for cell in row)
+        xml_rows.append(f"<w:tr>{cells}</w:tr>")
+    return (
+        '<w:tbl>'
+        '<w:tblPr><w:tblStyle w:val="TableGrid"/><w:tblW w:w="0" w:type="auto"/>'
+        '<w:tblBorders>'
+        '<w:top w:val="single" w:sz="8" w:space="0" w:color="D0D7E6"/>'
+        '<w:left w:val="single" w:sz="8" w:space="0" w:color="D0D7E6"/>'
+        '<w:bottom w:val="single" w:sz="8" w:space="0" w:color="D0D7E6"/>'
+        '<w:right w:val="single" w:sz="8" w:space="0" w:color="D0D7E6"/>'
+        '<w:insideH w:val="single" w:sz="6" w:space="0" w:color="D0D7E6"/>'
+        '<w:insideV w:val="single" w:sz="6" w:space="0" w:color="D0D7E6"/>'
+        '</w:tblBorders></w:tblPr>'
+        + "".join(xml_rows)
+        + "</w:tbl>"
+    )
+
+
+def parse_markdown_table_row(line: str) -> list[str]:
+    return [cell.strip() for cell in line.strip().strip("|").split("|")]
+
+
+def is_markdown_separator_row(cells: list[str]) -> bool:
+    return all(cell and set(cell.replace(":", "")) <= {"-"} for cell in cells)
+
+
+def word_table_cell(text: str, width: str, is_header: bool) -> str:
+    safe_text = escape(text)
+    shade = '<w:shd w:val="clear" w:color="auto" w:fill="EAF0FB"/>' if is_header else ""
+    bold = "<w:b/>" if is_header else ""
+    return (
+        "<w:tc>"
+        f'<w:tcPr><w:tcW w:w="{width}" w:type="dxa"/>{shade}</w:tcPr>'
+        '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr>'
+        f'<w:r><w:rPr>{bold}<w:sz w:val="21"/><w:color w:val="1F2A3A"/>'
+        '<w:rFonts w:ascii="Calibri" w:eastAsia="Microsoft YaHei" w:hAnsi="Calibri"/>'
+        f"</w:rPr><w:t>{safe_text}</w:t></w:r></w:p></w:tc>"
     )
 
 

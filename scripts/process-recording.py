@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -47,6 +48,14 @@ def load_dotenv_file() -> None:
 
 
 load_dotenv_file()
+
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 FUNASR_MODEL_BY_QUALITY = {
     "fast": "iic/SenseVoiceSmall",
@@ -144,16 +153,34 @@ def transcribe_audio_azure_fast(args: argparse.Namespace) -> list[TranscriptSegm
     api_version = os.getenv("AZURE_FAST_TRANSCRIPTION_API_VERSION", "2024-11-15").strip() or "2024-11-15"
     locale = azure_fast_locale(args.language)
     max_speakers = max(2, min(35, int(args.azure_fast_max_speakers or 5)))
-    definition = {
-        "locales": [locale],
-        "diarization": {
-            "enabled": bool(args.azure_fast_diarization),
+    use_locales = env_flag("AZURE_FAST_TRANSCRIPTION_USE_LOCALES", False)
+    definition = {}
+    if use_locales:
+        definition["locales"] = [locale]
+    if args.azure_fast_diarization:
+        definition["diarization"] = {
+            "enabled": True,
             "maxSpeakers": max_speakers,
-        },
-    }
+        }
     url = f"{endpoint.rstrip('/')}/speechtotext/transcriptions:transcribe?api-version={api_version}"
-    print(f"Using Azure Fast Transcription: locale={locale}, diarization={definition['diarization']['enabled']}, maxSpeakers={max_speakers}")
-    response = post_azure_fast_transcription(url, key, args.audio, definition, args.azure_fast_timeout_seconds)
+    locale_message = locale if use_locales else "auto"
+    print(f"Using Azure Fast Transcription: locale={locale_message}, diarization={bool(args.azure_fast_diarization)}, maxSpeakers={max_speakers}")
+    try:
+        response = post_azure_fast_transcription(url, key, args.audio, definition, args.azure_fast_timeout_seconds)
+    except SystemExit as exc:
+        detail = str(exc)
+        can_fallback = (
+            env_flag("AZURE_FAST_SDK_FALLBACK", True)
+            and (
+                "InvalidModel" in detail
+                or "InvalidLocale" in detail
+                or "Diarization is currently not supported" in detail
+            )
+        )
+        if not can_fallback:
+            raise
+        print("Azure Fast is unavailable for this resource; falling back to Azure Speech SDK file transcription.")
+        return transcribe_audio_azure_sdk(args)
     return normalize_azure_fast_output(response)
 
 
@@ -250,6 +277,70 @@ def normalize_azure_fast_output(output: dict[str, object]) -> list[TranscriptSeg
                 speaker=speaker_label,
             )
         )
+    return segments
+
+
+def transcribe_audio_azure_sdk(args: argparse.Namespace) -> list[TranscriptSegment]:
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError as exc:
+        raise SystemExit("Install azure-cognitiveservices-speech to use Azure Speech file transcription.") from exc
+
+    key = os.getenv("AZURE_SPEECH_KEY", "").strip()
+    region = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    if not key:
+        raise SystemExit("Set AZURE_SPEECH_KEY for Azure Speech file transcription.")
+    if not region:
+        raise SystemExit("Set AZURE_SPEECH_REGION for Azure Speech file transcription.")
+
+    locale = azure_fast_locale(args.language)
+    print(f"Using Azure Speech SDK file transcription: locale={locale}, speakerSeparation=False")
+    speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
+    speech_config.speech_recognition_language = locale
+    speech_config.output_format = speechsdk.OutputFormat.Detailed
+    audio_config = speechsdk.audio.AudioConfig(filename=str(args.audio))
+    recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+
+    done = threading.Event()
+    errors: list[str] = []
+    segments: list[TranscriptSegment] = []
+
+    def on_recognized(event) -> None:
+        result = event.result
+        if result.reason != speechsdk.ResultReason.RecognizedSpeech:
+            return
+        text = (result.text or "").strip()
+        if not text:
+            return
+        start = float(getattr(result, "offset", 0) or 0) / 10_000_000.0
+        duration = float(getattr(result, "duration", 0) or 0) / 10_000_000.0
+        segments.append(
+            TranscriptSegment(
+                start=start,
+                end=start + max(0.0, duration),
+                text=text,
+                speaker="Speaker ?",
+            )
+        )
+
+    def on_canceled(event) -> None:
+        details = getattr(event, "error_details", "") or ""
+        if details:
+            errors.append(str(details))
+        done.set()
+
+    recognizer.recognized.connect(on_recognized)
+    recognizer.canceled.connect(on_canceled)
+    recognizer.session_stopped.connect(lambda _event: done.set())
+
+    recognizer.start_continuous_recognition_async().get()
+    timeout_seconds = max(60, int(args.azure_fast_timeout_seconds or 600))
+    if not done.wait(timeout_seconds):
+        recognizer.stop_continuous_recognition_async().get()
+        raise SystemExit("Azure Speech file transcription timed out.")
+    recognizer.stop_continuous_recognition_async().get()
+    if errors and not segments:
+        raise SystemExit(f"Azure Speech file transcription failed: {errors[0]}")
     return segments
 
 
@@ -585,8 +676,8 @@ def transcribe_audio_funasr(args: argparse.Namespace) -> list[TranscriptSegment]
         ) from exc
 
     model_name = resolve_funasr_model(args.funasr_model or FUNASR_MODEL_BY_QUALITY[args.quality])
-    vad_model = resolve_funasr_model(args.funasr_vad_model or "fsmn-vad")
-    punc_model = resolve_funasr_model(args.funasr_punc_model or "ct-punc")
+    vad_model = args.funasr_vad_model or "fsmn-vad"
+    punc_model = args.funasr_punc_model or "ct-punc"
     device = args.device
     if device == "auto" or (device == "cuda" and not torch.cuda.is_available()):
         device = "cpu"
@@ -644,6 +735,14 @@ def normalize_funasr_output(output: object) -> list[TranscriptSegment]:
         if text:
             segments.append(TranscriptSegment(start=0.0, end=0.0, text=text))
     return segments
+
+
+def describe_asr_model(args: argparse.Namespace) -> str:
+    if args.asr_engine == "faster-whisper":
+        return args.model
+    if args.asr_engine == "funasr":
+        return args.funasr_model or FUNASR_MODEL_BY_QUALITY[args.quality]
+    return args.asr_engine
 
 
 def diarize_audio(args: argparse.Namespace) -> list[SpeakerSegment]:
@@ -1482,13 +1581,17 @@ def polish_chinese_text(text: str) -> str:
     return polished
 
 
-def ollama_notes_enabled() -> bool:
+def notes_llm_enabled() -> bool:
     value = os.getenv("POST_MEETING_LLM_ENABLED", "1").strip().lower()
     return value not in {"0", "false", "no", "off", "rule", "rules"}
 
 
+def notes_llm_provider() -> str:
+    return os.getenv("POST_MEETING_LLM_PROVIDER", "ollama").strip().lower() or "ollama"
+
+
 def ollama_notes_model() -> str:
-    return os.getenv("OLLAMA_NOTES_MODEL", "gemma4:e2b").strip() or "gemma4:e2b"
+    return os.getenv("OLLAMA_NOTES_MODEL", "qwen3:14b").strip() or "qwen3:14b"
 
 
 def ollama_notes_url() -> str:
@@ -1501,6 +1604,34 @@ def ollama_timeout_seconds() -> int:
         return max(10, int(os.getenv("POST_MEETING_LLM_TIMEOUT_SECONDS", "120")))
     except ValueError:
         return 120
+
+
+def transformers_notes_model() -> str:
+    return (
+        os.getenv("TRANSFORMERS_NOTES_MODEL", "")
+        or os.getenv("HF_NOTES_MODEL", "")
+        or os.getenv("POST_MEETING_TRANSFORMERS_MODEL", "")
+        or "google/gemma-4-E2B-it"
+    ).strip()
+
+
+def transformers_notes_device() -> str:
+    requested = os.getenv("TRANSFORMERS_NOTES_DEVICE", "auto").strip().lower()
+    if requested in {"cpu", "cuda"}:
+        return requested
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def transformers_notes_max_new_tokens() -> int:
+    try:
+        return max(256, min(4096, int(os.getenv("TRANSFORMERS_NOTES_MAX_NEW_TOKENS", "1400"))))
+    except ValueError:
+        return 1400
 
 
 def transcript_for_writer(transcript: list[TranscriptSegment], max_chars: int = 14000) -> str:
@@ -1523,7 +1654,7 @@ def ollama_minutes_markdown(
     total_end: float,
     speakers: list[str],
 ) -> str:
-    if not ollama_notes_enabled():
+    if not notes_llm_enabled():
         return ""
     source = transcript_for_writer(transcript)
     if len(source.split()) < 80:
@@ -1533,6 +1664,7 @@ def ollama_minutes_markdown(
         "You are a professional bilingual meeting-notes writer. "
         "Create concise, faithful meeting minutes from an ASR transcript. "
         "Do not invent decisions or action items. If none are explicit, say none detected. "
+        "Do not map speaker labels or personal names; use neutral owner wording such as the team or the relevant party. "
         "Keep protected terms, acronyms, numbers, units, device IDs, and room/level labels unchanged. "
         "Write natural English first, then a natural Simplified Chinese reading version. "
         "Return Markdown only."
@@ -1612,6 +1744,138 @@ Transcript:
     return content + "\n\n---\n\nGenerated with Ollama model `" + model + "`.\n"
 
 
+def transformers_minutes_markdown(
+    audio: Path,
+    transcript: list[TranscriptSegment],
+    total_start: float,
+    total_end: float,
+    speakers: list[str],
+) -> str:
+    if not notes_llm_enabled():
+        return ""
+    source = transcript_for_writer(transcript)
+    if len(source.split()) < 80:
+        return ""
+
+    model_name = transformers_notes_model()
+    device = transformers_notes_device()
+    system_prompt = (
+        "You are a professional bilingual meeting-notes writer. "
+        "Create concise, faithful meeting minutes from an ASR transcript. "
+        "Do not invent decisions or action items. Return Markdown only."
+    )
+    user_prompt = f"""
+Audio: {audio.name}
+Duration: {format_time(total_start)}-{format_time(total_end)}
+Speakers: {', '.join(speakers) if speakers else 'Not separated'}
+
+Write this exact Markdown structure:
+# Meeting Notes
+
+## English Version
+- Audio: `{audio.name}`
+- Duration: {format_time(total_start)}-{format_time(total_end)}
+- Speakers: {', '.join(speakers) if speakers else 'Not separated'}
+- Source: post-meeting ASR transcript. Review before sharing.
+
+## 1. Executive Summary
+## 2. Topic Timeline
+## 3. Key Discussion
+## 4. Decisions
+## 5. Action Items
+## 6. Risks / Open Questions
+## 7. Speaker Notes
+
+## 中文阅读版
+## 1. 摘要
+## 2. 讨论内容
+## 3. 决议
+## 4. 行动项
+## 5. 风险与待确认问题
+
+Rules:
+- Use concise bullet points.
+- Stay faithful to the transcript.
+- Do not invent decisions, owners, deadlines, or action items.
+- If a section has no explicit evidence, say none detected.
+- Chinese should be natural Simplified Chinese, not word-by-word translation.
+
+Transcript:
+{source}
+""".strip()
+
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
+
+        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
+        print(f"Notes model: preparing {model_name}", flush=True)
+        print("Notes model: downloading or loading tokenizer", flush=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
+        model_kwargs = {"token": token} if token else {}
+        print("Notes model: downloading or loading weights", flush=True)
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        except Exception:
+            model = AutoModelForImageTextToText.from_pretrained(model_name, **model_kwargs)
+
+        if device == "cuda":
+            model = model.to("cuda")
+        else:
+            model = model.to("cpu")
+        model.eval()
+        print(f"Notes model: ready on {device}", flush=True)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        if hasattr(tokenizer, "apply_chat_template"):
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            prompt = f"{system_prompt}\n\n{user_prompt}\n\nMeeting Notes:\n"
+
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=8192)
+        inputs = {key: value.to(model.device) for key, value in inputs.items()}
+        print("Notes model: refining meeting notes", flush=True)
+        with torch.inference_mode():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=transformers_notes_max_new_tokens(),
+                do_sample=False,
+                temperature=None,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+        generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
+        content = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    except Exception as exc:
+        print(f"Direct Transformers notes writer unavailable: {exc}", flush=True)
+        return ""
+
+    if not content or "# Meeting Notes" not in content or "## English Version" not in content:
+        return ""
+    content = content.replace("```markdown", "").replace("```", "").strip()
+    print(f"Used direct Transformers notes writer: {model_name} on {device}", flush=True)
+    return content + "\n\n---\n\nGenerated with direct Transformers model `" + model_name + "`.\n"
+
+
+def llm_minutes_markdown(
+    audio: Path,
+    transcript: list[TranscriptSegment],
+    total_start: float,
+    total_end: float,
+    speakers: list[str],
+) -> str:
+    provider = notes_llm_provider()
+    if provider in {"transformers", "hf", "huggingface", "direct"}:
+        direct_minutes = transformers_minutes_markdown(audio, transcript, total_start, total_end, speakers)
+        if direct_minutes:
+            return direct_minutes
+        if os.getenv("POST_MEETING_LLM_FALLBACK", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return ""
+    return ollama_minutes_markdown(audio, transcript, total_start, total_end, speakers)
+
+
 def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_language: str = "en") -> str:
     if is_chinese_language(notes_language):
         return chinese_minutes_markdown(audio, transcript)
@@ -1638,7 +1902,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_lan
     risks = extract_risks(sentences)
     readable_word_count = sum(len(sentence.split()) for _, sentence in sentences)
     is_substantive = readable_word_count >= 80 and len(sentences) >= 3
-    llm_minutes = ollama_minutes_markdown(audio, usable, total_start, total_end, speakers)
+    llm_minutes = llm_minutes_markdown(audio, usable, total_start, total_end, speakers)
     if llm_minutes:
         return llm_minutes
 
@@ -1893,7 +2157,7 @@ def main() -> int:
         default=600,
         help="Split long WAV files into ASR chunks. Use 0 to disable. Default: 600",
     )
-    parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--azure-fast-max-speakers", type=int, default=5)
     parser.add_argument("--azure-fast-timeout-seconds", type=int, default=600)
     parser.add_argument("--azure-batch-max-speakers", type=int, default=5)
@@ -1919,7 +2183,7 @@ def main() -> int:
     print(
         "Using quality preset "
         f"{args.quality}: engine={args.asr_engine}, "
-        f"model={args.model if args.asr_engine == 'faster-whisper' else args.funasr_model or FUNASR_MODEL_BY_QUALITY[args.quality]}, "
+        f"model={describe_asr_model(args)}, "
         f"compute={args.compute_type}, "
         f"beam={args.beam_size}, best_of={args.best_of}"
     )
