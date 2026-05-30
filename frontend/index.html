@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=top-folder-buttons-20260529" />
+    <link rel="stylesheet" href="/static/style.css?v=draft-visual-tape-20260530" />
   </head>
   <body>
     <main class="studio">
@@ -18,16 +18,16 @@
         </div>
 
         <section class="toolbar" aria-label="Meeting controls">
-          <label>
-            Audio
+          <label class="toolbar-field audio-field" title="Audio source">
+            <span class="field-icon audio-icon" aria-label="Audio source"></span>
             <select id="audioSource">
               <option value="system" selected>System</option>
               <option value="microphone">Mic</option>
             </select>
           </label>
 
-          <label>
-            Speech
+          <label class="toolbar-field speech-field" title="Speech language">
+            <span class="field-icon speech-icon" aria-label="Speech language"></span>
             <select id="sourceLanguage">
               <option value="eng_Latn" selected>English (en-US)</option>
               <option value="spa_Latn">Spanish (es-ES)</option>
@@ -35,129 +35,55 @@
             </select>
           </label>
 
-          <button id="startButton" class="primary-flow-button">Start Meeting</button>
-          <button id="endMeetingButton" class="end-flow-button" disabled>End Meeting</button>
+          <button id="startButton" class="primary-flow-button"><span class="button-glyph start-glyph"></span><span>Start</span></button>
+          <button id="endMeetingButton" class="end-flow-button" disabled><span class="button-glyph stop-glyph"></span><span>End</span></button>
           <button id="stopButton" class="secondary-flow-button hidden" disabled>Pause Captions</button>
           <a class="editor-link hidden" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
           <button id="downloadTranscriptButton" class="export-button hidden" disabled>Transcript</button>
           <button id="downloadMinutesButton" class="export-button hidden" disabled>Minutes</button>
-          <div class="folder-actions" aria-label="File folders">
-            <button class="folder-action-button" id="openRecordingsFolderButton" type="button">Recordings</button>
-            <button class="folder-action-button" id="openNotesFolderButton" type="button">Notes</button>
-          </div>
-
         </section>
       </header>
 
       <section class="studio-grid">
         <aside class="side-panel" aria-label="Runtime information">
-          <div class="panel-section compact-status-group">
+          <div class="panel-section summary-card status-summary">
+            <p class="panel-label panel-icon status-panel-icon" title="Status" aria-label="Status"></p>
             <div class="status-row">
-              <p class="panel-label">Current Step</p>
               <span class="notice-pill" id="statusText">Stopped</span>
             </div>
             <div class="status-row">
-              <p class="panel-label">Captions</p>
               <span class="notice-pill muted" id="noticeText">Ready</span>
             </div>
+          </div>
+          <div class="panel-section summary-card recording-summary">
             <div class="status-row recording-row">
-              <p class="panel-label">Recording</p>
+              <p class="panel-label panel-icon recording-panel-icon" title="Recording" aria-label="Recording"></p>
               <span class="notice-pill muted" id="recordingStatusText">Off</span>
             </div>
             <p class="panel-line compact-recording-file" id="recordingFileText">No recording yet.</p>
           </div>
-          <div class="panel-section usage-panel" aria-label="Cloud usage estimate">
-            <p class="panel-label">Cloud Usage</p>
+          <div class="panel-section summary-card usage-panel" aria-label="Cloud usage estimate">
+            <p class="panel-label panel-icon usage-panel-icon" title="Cloud usage" aria-label="Cloud usage"></p>
             <span class="notice-pill muted" id="azureUsageStatusText">Estimate</span>
             <div class="usage-grid">
               <div>
-                <span class="usage-label">Session</span>
+                <span class="usage-label usage-icon usage-session" title="Session" aria-label="Session"></span>
                 <strong id="azureUsageSessionText">0:00</strong>
               </div>
               <div>
-                <span class="usage-label" id="azureUsageDayLabel">Day</span>
+                <span class="usage-label usage-icon usage-day" id="azureUsageDayLabel" title="Day" aria-label="Day"></span>
                 <strong id="azureUsageTodayText">0 min</strong>
               </div>
               <div>
-                <span class="usage-label" id="azureUsageMonthLabel">Month</span>
+                <span class="usage-label usage-icon usage-month" id="azureUsageMonthLabel" title="Month" aria-label="Month"></span>
                 <strong id="azureUsageMonthText">0 min</strong>
               </div>
             </div>
             <p class="panel-line usage-note" id="azureUsageSyncText">This browser only. Cloud sync not connected.</p>
           </div>
-          <div class="panel-section settings-panel">
-            <details class="advanced-settings">
-              <summary>Settings</summary>
-              <div class="advanced-settings-grid">
-                <label>
-                  Engine
-                  <select id="translationEngine">
-                    <option value="azure" selected>Cloud</option>
-                    <option value="argos">Argos</option>
-                    <option value="marianmt">MarianMT</option>
-                    <option value="nllb">NLLB</option>
-                  </select>
-                </label>
-
-                <label class="local-control local-extension local-preset-control">
-                  Config
-                  <select id="localAsrPreset">
-                    <option value="igpu" selected>iGPU</option>
-                    <option value="dgpu">dGPU</option>
-                    <option value="hp">HP</option>
-                  </select>
-                </label>
-
-                <label class="local-control local-extension internal-control hidden">
-                  ASR
-                  <select id="modelSize">
-                    <option value="small.en" selected>small.en</option>
-                    <option value="base.en">base.en</option>
-                    <option value="medium.en">medium.en</option>
-                  </select>
-                </label>
-
-                <label class="local-control local-extension internal-control hidden">
-                  Device
-                  <select id="deviceType">
-                    <option value="cuda" selected>cuda</option>
-                    <option value="auto">auto</option>
-                    <option value="cpu">cpu</option>
-                  </select>
-                </label>
-
-                <label class="local-control local-extension internal-control hidden">
-                  Latency
-                  <select id="localLatencyPreset">
-                    <option value="low" selected>Low</option>
-                    <option value="steady">Steady</option>
-                  </select>
-                </label>
-
-                <label class="local-control local-extension internal-control hidden">
-                  Chunk
-                  <select id="chunkSeconds">
-                    <option value="1">1s</option>
-                    <option value="1.5">1.5s</option>
-                    <option value="2" selected>2s</option>
-                    <option value="3">3s</option>
-                    <option value="5">5s</option>
-                  </select>
-                </label>
-              </div>
-            </details>
-          </div>
-          <div class="panel-section">
-            <p class="panel-label">Meeting Notes</p>
+          <div class="panel-section summary-card notes-summary">
+            <p class="panel-label panel-icon notes-panel-icon" title="Meeting notes" aria-label="Meeting notes"></p>
             <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
-            <label class="notes-engine-control">
-              Notes Engine
-              <select id="notesEngine">
-                <option value="aliyun-tingwu" selected>Aliyun Tingwu</option>
-                <option value="funasr">Local FunASR</option>
-              </select>
-            </label>
-            <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
             <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
               <div class="notes-progress-header">
                 <span id="notesProgressStage">Preparing</span>
@@ -168,29 +94,122 @@
                 <div class="notes-progress-fill" id="notesProgressFill"></div>
               </div>
             </div>
-            <div class="recording-picker" aria-label="Recorded meeting files">
-              <div class="recording-list" id="recordingList"></div>
-              <div class="panel-action-row">
-                <button class="panel-action-button is-primary" id="processMeetingButton" type="button">Build Notes</button>
-                <button class="panel-action-button" id="openMinutesButton" type="button" disabled>Open Notes</button>
-                <button class="panel-action-button" id="checkCloudNotesButton" type="button">Cloud Check</button>
-                <button class="panel-action-button" id="refreshRecordingsButton" type="button">Refresh</button>
-              </div>
-            </div>
-          </div>
-          <div class="panel-section compact-status-section">
-            <p class="panel-label">Delay</p>
-            <span class="notice-pill muted compact-status-pill" id="delayStatusText" title="No delay detected.">Ready</span>
-            <p class="panel-line hidden" id="delayHintText">No delay detected.</p>
           </div>
           <p class="panel-line hidden" id="logText">Ready.</p>
           <p class="panel-line hidden" id="perfText">Waiting for first subtitle.</p>
         </aside>
 
+        <section class="workbench-utilities" aria-label="Secondary meeting tools">
+          <div class="utility-card diagnostics-utility">
+            <a
+              class="utility-toggle diagnostics-toggle"
+              href="/static/diagnostics.html"
+              target="_blank"
+              rel="noopener noreferrer"
+              title="Diagnostics"
+              aria-label="Open diagnostics in a separate tab"
+            ></a>
+          </div>
+
+          <div class="utility-card notes-utility">
+            <button class="utility-toggle notes-toggle" id="notesUtilityToggle" type="button" aria-label="Meeting notes" aria-expanded="false" aria-controls="notesUtilityBody"></button>
+            <div class="utility-body hidden" id="notesUtilityBody">
+              <label class="notes-engine-control tool-select-row" title="Notes engine">
+                <span class="field-icon notes-mini-icon" aria-label="Notes engine"></span>
+                <select id="notesEngine">
+                  <option value="aliyun-tingwu" selected>Cloud</option>
+                  <option value="funasr">Local</option>
+                </select>
+              </label>
+              <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
+              <div class="recording-picker" aria-label="Recorded meeting files">
+                <div class="recording-list" id="recordingList"></div>
+                <div class="panel-action-row">
+                  <button class="panel-action-button is-primary" id="processMeetingButton" type="button">Build Notes</button>
+                  <button class="panel-action-button" id="openMinutesButton" type="button" disabled>Open Notes</button>
+                  <button class="panel-action-button" id="checkCloudNotesButton" type="button">Cloud Check</button>
+                  <button class="panel-action-button" id="refreshRecordingsButton" type="button">Refresh</button>
+                </div>
+              </div>
+              <div class="folder-actions" aria-label="File folders">
+                <button class="folder-action-button" id="openRecordingsFolderButton" type="button">Recordings</button>
+                <button class="folder-action-button" id="openNotesFolderButton" type="button">Notes</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="utility-card settings-utility">
+            <button class="utility-toggle settings-toggle" id="settingsUtilityToggle" type="button" aria-label="Settings" aria-expanded="false" aria-controls="settingsUtilityBody"></button>
+            <div class="utility-body hidden" id="settingsUtilityBody">
+              <div class="advanced-settings-grid">
+                <label class="tool-select-row" title="Translation engine">
+                  <span class="field-icon engine-mini-icon" aria-label="Translation engine"></span>
+                  <select id="translationEngine">
+                    <option value="azure" selected>Cloud</option>
+                    <option value="argos">Argos</option>
+                    <option value="marianmt">MarianMT</option>
+                    <option value="nllb">NLLB</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension local-preset-control tool-select-row" title="Local preset">
+                  <span class="field-icon config-mini-icon" aria-label="Local preset"></span>
+                  <select id="localAsrPreset">
+                    <option value="igpu" selected>iGPU</option>
+                    <option value="dgpu">dGPU</option>
+                    <option value="hp">HP</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden tool-select-row" title="ASR model">
+                  <span class="field-icon asr-mini-icon" aria-label="ASR model"></span>
+                  <select id="modelSize">
+                    <option value="small.en" selected>small.en</option>
+                    <option value="base.en">base.en</option>
+                    <option value="medium.en">medium.en</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden tool-select-row" title="Device">
+                  <span class="field-icon device-mini-icon" aria-label="Device"></span>
+                  <select id="deviceType">
+                    <option value="cuda" selected>cuda</option>
+                    <option value="auto">auto</option>
+                    <option value="cpu">cpu</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden tool-select-row" title="Latency">
+                  <span class="field-icon latency-mini-icon" aria-label="Latency"></span>
+                  <select id="localLatencyPreset">
+                    <option value="low" selected>Low</option>
+                    <option value="steady">Steady</option>
+                  </select>
+                </label>
+
+                <label class="local-control local-extension internal-control hidden tool-select-row" title="Chunk size">
+                  <span class="field-icon chunk-mini-icon" aria-label="Chunk size"></span>
+                  <select id="chunkSeconds">
+                    <option value="1">1s</option>
+                    <option value="1.5">1.5s</option>
+                    <option value="2" selected>2s</option>
+                    <option value="3">3s</option>
+                    <option value="5">5s</option>
+                  </select>
+                </label>
+              </div>
+              <div class="delay-utility-row">
+                <span class="notice-pill muted compact-status-pill" id="delayStatusText" title="No delay detected.">Ready</span>
+                <p class="panel-line hidden" id="delayHintText">No delay detected.</p>
+              </div>
+            </div>
+          </div>
+        </section>
+
         <section class="subtitle-box azure-subtitle-box" id="azureSubtitleBox" aria-label="Cloud subtitle history">
           <div class="subtitle-box-header">
             <div>
-              <p class="monitor-title">Subtitle Monitor</p>
+              <p class="monitor-title">Subtitles</p>
               <p class="monitor-subtitle">Live history · scroll to review</p>
             </div>
             <span class="monitor-badge">LIVE</span>
@@ -202,7 +221,7 @@
           <section class="split-subtitle-box" aria-label="English live transcript">
             <div class="subtitle-box-header compact">
               <div>
-                <p class="monitor-title">English Live Transcript</p>
+                <p class="monitor-title">English</p>
                 <p class="monitor-subtitle">Context above · live draft below</p>
               </div>
               <span class="monitor-badge">ASR</span>
@@ -216,7 +235,7 @@
           <section class="split-subtitle-box" aria-label="Chinese translated subtitles">
             <div class="subtitle-box-header compact">
               <div>
-                <p class="monitor-title">Chinese Translation</p>
+                <p class="monitor-title">Chinese</p>
                 <p class="monitor-subtitle">Complete sentence translation · slightly delayed</p>
               </div>
               <span class="monitor-badge">ZH</span>
@@ -227,7 +246,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=top-folder-buttons-20260529"></script>
+    <script src="/static/app.js?v=draft-visual-tape-20260530"></script>
   </body>
 </html>
 

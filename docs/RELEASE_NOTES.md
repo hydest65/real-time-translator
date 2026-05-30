@@ -1,5 +1,39 @@
 # Release Notes
 
+## 0.2.1-compact-diagnostics-draft-tape - Compact UI, Diagnostics, and Stable Draft Captions
+
+Date: 2026-05-30
+
+### Product
+
+- Simplified the main UI into a more compact, icon-forward operating surface while preserving the large subtitle workspace.
+- Added a diagnostics monitor page for backend health, cloud/local notes readiness, meeting-notes progress, quick checks, and recent recordings.
+- Kept tester-facing meeting-notes controls provider-neutral: notes engine is shown as `Cloud` / `Local`, and upload routing is controlled by configuration instead of a visible upload-path selector.
+- Preserved Tencent Relay as the default private upload bridge for cloud meeting notes.
+
+### UI
+
+- Replaced oversized or inconsistent lower-panel buttons with the same soft capsule style used elsewhere.
+- Converted dense Cloud Usage labels to icon-first counters with hover labels, reducing sidebar width pressure.
+- Added a small monitor icon that opens diagnostics in a separate tab so checking health does not stop the active subtitle session.
+- Reworked local English draft display into a one-line visual tape that fills to the end of the row before restarting from the left edge.
+
+### Technical
+
+- Added `frontend/diagnostics.html`, `frontend/diagnostics.css`, and `frontend/diagnostics.js`.
+- The diagnostics live-socket test opens and closes a WebSocket without starting a caption session.
+- Added `scripts/translation-quality-preview.py` for offline comparison of direct translation, stabilized English windows, and optional local `qwen3:14b` polishing.
+- Versioned frontend assets with `draft-visual-tape-20260530` so browser refreshes load the draft subtitle changes.
+
+### Verification
+
+- Backend Python compile/import checks passed.
+- Frontend JavaScript syntax checks passed for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js`.
+- `scripts/translation-quality-preview.py` syntax check passed.
+- `git diff --check` passed.
+- Runtime smoke test passed for `GET /api/health` and `GET /static/diagnostics.html` on port `8000`.
+- Secret scan found placeholders only and no live Aliyun AccessKey, Tingwu AppKey, relay IP, or Azure secret in candidate committed paths.
+
 ## 0.2.0-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement
 
 Date: 2026-05-30

@@ -47,11 +47,17 @@ The `faster-whisper` module is loaded lazily when local ASR is actually requeste
 
 - `frontend/index.html`: main Subtitle Studio operating surface.
 - `frontend/style.css`: shared visual tokens, soft UI layout, subtitle monitor, controls, and saved-theme CSS variable hooks.
-- `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, cloud usage panel state, provider-neutral status text rendering, and saved UI theme loading.
+- `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, cloud usage panel state, provider-neutral status text rendering, diagnostics entry, and saved UI theme loading.
 - Frontend rendering uses two UI modes: cloud events render into the original single bilingual subtitle stream, while local events split into continuous English context, live English draft, and complete Chinese translation panes.
+- Local English draft rendering keeps a frontend-only visual tape of recent draft words. It advances by measured line width and resets to the left edge only after the displayed line is full, so backend segment churn does not make the draft row appear to restart mid-line.
 - `frontend/ui-editor.html`: visual editor page for tuning the main UI.
 - `frontend/ui-editor.css`: editor layout and control styling.
 - `frontend/ui-editor.js`: editor preview, `localStorage` save/reset behavior, and generated CSS preview.
+- `frontend/diagnostics.html`: compact monitoring page for health, readiness, notes progress, recent recordings, and quick tests.
+- `frontend/diagnostics.css`: monitoring page visual style.
+- `frontend/diagnostics.js`: polling and quick-test logic for diagnostics. The live WebSocket test opens and closes a connection without starting a caption session.
+
+The main UI opens diagnostics in a separate tab/window so checking health does not replace the active subtitle page or stop its WebSocket/audio state.
 
 Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCompact20260502`. This is a local browser preference, not a server-side user setting.
 
@@ -87,6 +93,10 @@ If cloud batch storage is missing, local faster-whisper notes now default to CPU
 - The active translation mode is fixed to fast/direct output.
 - The local audio queue is size-limited so stale audio work is dropped rather than displayed late.
 - MarianMT and NLLB run through Transformers. In the current environment, the installed `torch` runtime is CPU-only, so those translators do not gain practical GPU acceleration even if local ASR is using CUDA.
+
+## Translation Quality Preview
+
+`scripts/translation-quality-preview.py` is an offline comparison tool. It tests direct Argos output against candidate English stabilization and short-fragment merging, then optionally asks local Ollama `qwen3:14b` to polish the Chinese output when enough memory is available. The script writes a Markdown report under `design-previews/` and does not change the live subtitle path.
 
 ## Paragraph Turn Detection
 

@@ -28,6 +28,9 @@ Read these three files early when continuing product, architecture, or UI work:
    - `frontend/ui-editor.html`
    - `frontend/ui-editor.css`
    - `frontend/ui-editor.js`
+   - `frontend/diagnostics.html`
+   - `frontend/diagnostics.css`
+   - `frontend/diagnostics.js`
    - `README.md`
 
 2. Confirm the active architecture:
@@ -36,6 +39,7 @@ Read these three files early when continuing product, architecture, or UI work:
    - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
    - Fast/direct translation is the only active mode.
    - The browser UI is the main operating surface.
+   - Diagnostics opens separately and must not replace or stop the active subtitle page.
 
 3. Update documentation:
    - `README.md`
@@ -68,6 +72,7 @@ Read these three files early when continuing product, architecture, or UI work:
 - Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the Azure subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the local split reading model: stable English context, live English draft, and complete Chinese translation.
+- Preserve the local draft visual tape behavior: one line fills first, then starts again from the left edge.
 - Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then `Open Bilingual Notes`.
 - Preserve Word-first bilingual notes: English minutes first, Chinese reading version second, in one `.docx` file.
 - Preserve provider-neutral UI wording for testers: use `Cloud` in visible labels, status messages, usage panel text, and common errors.

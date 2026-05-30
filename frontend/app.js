@@ -25,6 +25,10 @@ const checkCloudNotesButton = document.querySelector("#checkCloudNotesButton");
 const refreshRecordingsButton = document.querySelector("#refreshRecordingsButton");
 const openRecordingsFolderButton = document.querySelector("#openRecordingsFolderButton");
 const openNotesFolderButton = document.querySelector("#openNotesFolderButton");
+const notesUtilityToggle = document.querySelector("#notesUtilityToggle");
+const settingsUtilityToggle = document.querySelector("#settingsUtilityToggle");
+const notesUtilityBody = document.querySelector("#notesUtilityBody");
+const settingsUtilityBody = document.querySelector("#settingsUtilityBody");
 const notesEngine = document.querySelector("#notesEngine");
 const recordingList = document.querySelector("#recordingList");
 const localControls = document.querySelectorAll(".local-control");
@@ -57,7 +61,13 @@ let englishContextHistory = [];
 let englishDraftById = new Map();
 let englishLiveBuffer = [];
 let englishDraftLineStartWord = 0;
+let englishDraftLineEndWord = 0;
 let englishDraftLastWordCount = 0;
+let englishDraftActiveId = "";
+let englishDraftActiveItem = null;
+let englishDraftPendingAdvance = false;
+let englishDraftTapeWords = [];
+let englishDraftTapeTextsById = new Map();
 let englishContextRenderedText = "";
 let englishContextTypeTimer = null;
 let chineseTranslationHistory = [];
@@ -82,6 +92,7 @@ let postMeetingAsrRequested = "azure-batch";
 let postMeetingAsrEffective = "faster-whisper";
 let latestMinutesPath = "";
 let isRecordingActive = false;
+let isLiveSessionActive = false;
 let isProcessingNotes = false;
 let notesAbortController = null;
 let notesTimeoutId = null;
@@ -135,6 +146,7 @@ function cloudCheckStatusText(item) {
 
 function applyDefaultInputMode() {
   audioSource.value = "system";
+  translationEngine.value = "azure";
 }
 
 async function loadRuntimeConfig() {
@@ -180,6 +192,22 @@ async function refreshLatestMinutesState() {
     latestMinutesPath = "";
     updateMeetingActionButtons();
   }
+}
+
+function setUtilityPanel(toggle, body, open) {
+  if (!toggle || !body) {
+    return;
+  }
+  body.classList.toggle("hidden", !open);
+  toggle.classList.toggle("is-open", open);
+  toggle.setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function toggleUtilityPanel(target) {
+  const openingNotes = target === "notes" && notesUtilityBody?.classList.contains("hidden");
+  const openingSettings = target === "settings" && settingsUtilityBody?.classList.contains("hidden");
+  setUtilityPanel(notesUtilityToggle, notesUtilityBody, openingNotes);
+  setUtilityPanel(settingsUtilityToggle, settingsUtilityBody, openingSettings);
 }
 
 async function refreshRecordings(preferredPath = "") {
@@ -256,7 +284,7 @@ function selectedRecordings() {
 function updateMeetingActionButtons() {
   const isMeetingLive = Boolean(socket && socket.readyState === WebSocket.OPEN);
   const hasSelectedRecordings = selectedRecordings().length > 0;
-  startButton.textContent = "Start Meeting";
+  startButton.innerHTML = '<span class="button-glyph start-glyph"></span><span>Start</span>';
   startButton.classList.remove("is-danger", "is-ready");
   startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive;
   endMeetingButton.disabled = isProcessingNotes || (!isMeetingLive && !isRecordingActive);
@@ -657,6 +685,14 @@ function currentAzureSessionSeconds() {
   return Math.max(0, Math.floor((Date.now() - azureUsageStartedAt.getTime()) / 1000));
 }
 
+function setUsageIconLabel(element, label) {
+  if (!element) {
+    return;
+  }
+  element.title = label;
+  element.setAttribute("aria-label", label);
+}
+
 function renderAzureUsage() {
   if (!azureUsageSessionText) {
     return;
@@ -665,18 +701,18 @@ function renderAzureUsage() {
   const sessionSeconds = currentAzureSessionSeconds();
   azureUsageSessionText.textContent = formatDuration(sessionSeconds * 1000);
   if (azureUsageCloud?.configured && azureUsageCloud?.ok && azureUsageCloud.usageMode === "calls") {
-    azureUsageDayLabel.textContent = "Calls 24h";
-    azureUsageMonthLabel.textContent = "Calls Month";
+    setUsageIconLabel(azureUsageDayLabel, "Calls in last 24 hours");
+    setUsageIconLabel(azureUsageMonthLabel, "Calls this month");
     azureUsageTodayText.textContent = formatUsageCount(azureUsageCloud.dayCallCount);
     azureUsageMonthText.textContent = formatUsageCount(azureUsageCloud.monthCallCount);
   } else if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
-    azureUsageDayLabel.textContent = "Cloud Day";
-    azureUsageMonthLabel.textContent = "Cloud Month";
+    setUsageIconLabel(azureUsageDayLabel, "Cloud usage today");
+    setUsageIconLabel(azureUsageMonthLabel, "Cloud usage this month");
     azureUsageTodayText.textContent = formatUsageMinutes((azureUsageCloud.daySeconds || 0) + sessionSeconds);
     azureUsageMonthText.textContent = formatUsageMinutes((azureUsageCloud.monthSeconds || 0) + sessionSeconds);
   } else {
-    azureUsageDayLabel.textContent = "Local Day";
-    azureUsageMonthLabel.textContent = "Local Month";
+    setUsageIconLabel(azureUsageDayLabel, "Local estimate today");
+    setUsageIconLabel(azureUsageMonthLabel, "Local estimate this month");
     azureUsageTodayText.textContent = formatUsageMinutes(usage.daySeconds + sessionSeconds);
     azureUsageMonthText.textContent = formatUsageMinutes(usage.monthSeconds + sessionSeconds);
   }
@@ -697,14 +733,14 @@ function renderAzureUsage() {
     const syncedAt = formatSyncTime(azureUsageCloud.syncedAt);
     const remaining = azureUsageCloud.remainingSeconds == null
       ? ""
-      : ` Remaining ${formatUsageMinutes(azureUsageCloud.remainingSeconds)}.`;
+      : ` / ${formatUsageMinutes(azureUsageCloud.remainingSeconds)} left`;
     azureUsageSyncText.textContent = azureUsageCloud.message
-      ? `${providerNeutralText(azureUsageCloud.message)}${syncedAt ? ` Synced ${syncedAt}.` : ""}`
-      : `Cloud usage synced${syncedAt ? ` ${syncedAt}` : ""}.${remaining}`;
+      ? `${providerNeutralText(azureUsageCloud.message)}${syncedAt ? ` / ${syncedAt}` : ""}`
+      : `Synced${syncedAt ? ` ${syncedAt}` : ""}${remaining}`;
   } else if (azureUsageCloud?.message) {
     azureUsageSyncText.textContent = providerNeutralText(azureUsageCloud.message);
   } else {
-    azureUsageSyncText.textContent = "This browser only. Cloud sync not connected.";
+    azureUsageSyncText.textContent = "Local estimate";
   }
 }
 
@@ -903,8 +939,12 @@ function renderSubtitle(item) {
 function renderLocalSubtitle(item) {
   if (item.sourceText && item.sourceText.trim()) {
     const draftId = item.sequenceId || "local-current-draft";
+    updateEnglishDraftTape(item, draftId);
+    englishDraftActiveItem = item;
     if (item.isFinal === false) {
-      promoteDraftLeadToContext(item, draftId);
+      if (englishDraftActiveId !== draftId) {
+        englishDraftActiveId = draftId;
+      }
       upsertEnglishLiveBuffer(item, draftId, false);
       englishDraftById.set(draftId, {
         ...(englishDraftById.get(draftId) || {}),
@@ -915,8 +955,8 @@ function renderLocalSubtitle(item) {
         sequenceId: draftId,
         isFinal: false,
       });
-      renderEnglishContext();
       renderEnglishDraft();
+      renderEnglishContext();
     } else {
       recordTranscriptEntry(item, "local");
       removeProvisionalContext(draftId);
@@ -927,7 +967,6 @@ function renderLocalSubtitle(item) {
         removeProvisionalContext(id);
         removeEnglishLiveBuffer(id);
       }
-      upsertEnglishLiveBuffer(item, draftId, true);
       upsertHistory(englishContextHistory, {
         ...item,
         translatedText: "",
@@ -968,6 +1007,52 @@ function renderEnglishDraft() {
   renderSubtitleList(englishDraftStack, draftWindow ? [draftWindow] : [], "draft");
 }
 
+function resetEnglishDraftPaging(activeId = englishDraftActiveId) {
+  englishDraftActiveId = activeId;
+  englishDraftActiveItem = null;
+  englishDraftLineStartWord = 0;
+  englishDraftLineEndWord = 0;
+  englishDraftLastWordCount = 0;
+  englishDraftPendingAdvance = false;
+}
+
+function updateEnglishDraftTape(item, draftId) {
+  const text = String(item.sourceText || "").replace(/\s+/g, " ").trim();
+  if (!text) {
+    return;
+  }
+  const previous = englishDraftTapeTextsById.get(draftId) || "";
+  const previousWords = previous.split(/\s+/).filter(Boolean);
+  const nextWords = text.split(/\s+/).filter(Boolean);
+  const commonCount = commonWordPrefixCount(previousWords, nextWords);
+  const appendedWords = nextWords.slice(commonCount);
+  if (appendedWords.length) {
+    englishDraftTapeWords.push(...appendedWords);
+  }
+  englishDraftTapeTextsById.set(draftId, text);
+  trimEnglishDraftTape();
+}
+
+function commonWordPrefixCount(leftWords, rightWords) {
+  const limit = Math.min(leftWords.length, rightWords.length);
+  let index = 0;
+  while (index < limit && leftWords[index].toLowerCase() === rightWords[index].toLowerCase()) {
+    index += 1;
+  }
+  return index;
+}
+
+function trimEnglishDraftTape() {
+  const maxWords = 180;
+  if (englishDraftTapeWords.length <= maxWords) {
+    return;
+  }
+  const removed = englishDraftTapeWords.length - maxWords;
+  englishDraftTapeWords = englishDraftTapeWords.slice(-maxWords);
+  englishDraftLineStartWord = Math.max(0, englishDraftLineStartWord - removed);
+  englishDraftLineEndWord = Math.max(0, englishDraftLineEndWord - removed);
+}
+
 function promoteDraftLeadToContext(item, draftId) {
   const text = String(item.sourceText || "").trim();
   const words = text.split(/\s+/).filter(Boolean);
@@ -995,7 +1080,9 @@ function promoteDraftLeadToContext(item, draftId) {
 
 function removeProvisionalContext(draftId) {
   englishContextHistory = englishContextHistory.filter(
-    (entry) => entry.sequenceId !== `${draftId}-provisional-context`,
+    (entry) =>
+      entry.sequenceId !== `${draftId}-provisional-context`
+      && !String(entry.sequenceId || "").startsWith(`${draftId}-draft-page-`),
   );
 }
 
@@ -1010,7 +1097,7 @@ function draftDisplayText(text) {
 
 function upsertEnglishLiveBuffer(item, sequenceId, isFinal) {
   const text = String(item.sourceText || "").replace(/\s+/g, " ").trim();
-  if (!text) {
+  if (!text || isFinal) {
     return;
   }
   const existingIndex = englishLiveBuffer.findIndex((entry) => entry.sequenceId === sequenceId);
@@ -1038,39 +1125,78 @@ function removeEnglishLiveBuffer(sequenceId) {
 }
 
 function buildEnglishDraftWindow() {
-  const entries = englishLiveBuffer.filter((entry) => entry.sourceText && entry.sourceText.trim());
-  if (!entries.length) {
+  const words = englishDraftTapeWords;
+  if (!words.length) {
     englishDraftLineStartWord = 0;
+    englishDraftLineEndWord = 0;
     englishDraftLastWordCount = 0;
     return null;
   }
-  const joinedText = entries.map((entry) => entry.sourceText).join(" ").replace(/\s+/g, " ").trim();
-  const words = joinedText.split(/\s+/).filter(Boolean);
-  if (words.length < englishDraftLastWordCount) {
+  if (words.length < englishDraftLastWordCount || englishDraftLineStartWord >= words.length) {
     englishDraftLineStartWord = 0;
+    englishDraftLineEndWord = 0;
+    englishDraftPendingAdvance = false;
   }
-  englishDraftLineStartWord = Math.min(englishDraftLineStartWord, words.length);
-  let clippedText = words.slice(englishDraftLineStartWord).join(" ");
-  if (draftTextWouldOverflow(clippedText) && words.length > englishDraftLineStartWord) {
-    const nextStart = Math.max(englishDraftLineStartWord + 1, englishDraftLastWordCount);
-    englishDraftLineStartWord = Math.min(nextStart, words.length - 1);
-    clippedText = words.slice(englishDraftLineStartWord).join(" ");
-    while (draftTextWouldOverflow(clippedText) && englishDraftLineStartWord < words.length - 1) {
-      englishDraftLineStartWord += 1;
-      clippedText = words.slice(englishDraftLineStartWord).join(" ");
-    }
+  if (
+    englishDraftPendingAdvance
+    && englishDraftLineEndWord > englishDraftLineStartWord
+    && englishDraftLineEndWord < words.length
+  ) {
+    const completedPage = {
+      startWord: englishDraftLineStartWord,
+      endWord: englishDraftLineEndWord,
+      text: words.slice(englishDraftLineStartWord, englishDraftLineEndWord).join(" "),
+    };
+    promoteDraftPageToContext(completedPage, englishDraftActiveItem, englishDraftActiveItem);
+    englishDraftLineStartWord = englishDraftLineEndWord;
+    englishDraftPendingAdvance = false;
   }
+  const draftWindow = longestFittingDraftPage(words, englishDraftLineStartWord);
+  englishDraftLineStartWord = draftWindow.startWord;
+  englishDraftLineEndWord = draftWindow.endWord;
+  englishDraftPendingAdvance = draftWindow.text && draftWindow.endWord < words.length;
   englishDraftLastWordCount = words.length;
-  const first = entries[0];
-  const last = entries[entries.length - 1];
   return {
     sequenceId: "local-live-window",
-    sourceText: clippedText,
+    sourceText: draftWindow.text,
     translatedText: "",
-    start: first.start,
-    end: last.end,
-    isFinal: entries.every((entry) => entry.isFinal),
+    start: englishDraftActiveItem?.start || 0,
+    end: englishDraftActiveItem?.end || 0,
+    isFinal: false,
   };
+}
+
+function promoteDraftPageToContext(page, firstEntry, lastEntry) {
+  const text = String(page.text || "").trim();
+  if (!text || !englishDraftActiveId) {
+    return;
+  }
+  const sequenceId = `${englishDraftActiveId}-draft-page-${page.startWord}-${page.endWord}`;
+  upsertHistory(englishContextHistory, {
+    ...(englishDraftActiveItem || firstEntry || {}),
+    sequenceId,
+    sourceText: text,
+    translatedText: "",
+    start: firstEntry?.start,
+    end: lastEntry?.end,
+    isFinal: true,
+    isProvisional: true,
+  });
+  englishContextHistory = englishContextHistory.slice(-24);
+}
+
+function longestFittingDraftPage(words, startWord = 0) {
+  if (!words.length) {
+    return { startWord: 0, endWord: 0, text: "" };
+  }
+  const safeStart = Math.max(0, Math.min(startWord, words.length - 1));
+  for (let endWord = words.length; endWord > safeStart; endWord -= 1) {
+    const text = words.slice(safeStart, endWord).join(" ");
+    if (!draftTextWouldOverflow(text)) {
+      return { startWord: safeStart, endWord, text };
+    }
+  }
+  return { startWord: safeStart, endWord: safeStart + 1, text: words[safeStart] };
 }
 
 function draftTextWouldOverflow(text) {
@@ -1081,7 +1207,7 @@ function draftTextWouldOverflow(text) {
   probe.className = "draft-measure-probe";
   probe.textContent = text;
   englishDraftStack.append(probe);
-  const availableWidth = Math.max(40, englishDraftStack.clientWidth - 56);
+  const availableWidth = Math.max(40, englishDraftStack.clientWidth - 44);
   const wouldOverflow = probe.scrollWidth > availableWidth;
   probe.remove();
   return wouldOverflow;
@@ -1582,6 +1708,7 @@ function start() {
   if (socket && socket.readyState === WebSocket.OPEN) {
     return;
   }
+  isLiveSessionActive = true;
   if (translationEngine.value === "azure" && !azureConfigured) {
     noticeText.textContent = "Cloud not configured";
     logText.textContent = "Cloud speech is not configured. Start may fail until cloud settings are available.";
@@ -1597,7 +1724,13 @@ function start() {
   englishDraftById = new Map();
   englishLiveBuffer = [];
   englishDraftLineStartWord = 0;
+  englishDraftLineEndWord = 0;
   englishDraftLastWordCount = 0;
+  englishDraftActiveId = "";
+  englishDraftActiveItem = null;
+  englishDraftPendingAdvance = false;
+  englishDraftTapeWords = [];
+  englishDraftTapeTextsById = new Map();
   englishContextRenderedText = "";
   if (englishContextTypeTimer) {
     clearTimeout(englishContextTypeTimer);
@@ -1679,6 +1812,9 @@ function start() {
   });
 
   socket.addEventListener("message", (event) => {
+    if (!isLiveSessionActive) {
+      return;
+    }
     let payload;
     try {
       payload = JSON.parse(event.data);
@@ -1714,6 +1850,7 @@ function start() {
   socket.addEventListener("close", () => {
     stopAzureUsageSession();
     stopButton.disabled = true;
+    isLiveSessionActive = false;
     if (!statusDot.classList.contains("error")) {
       setStatus("Stopped");
     }
@@ -1729,6 +1866,7 @@ function start() {
 }
 
 function stop() {
+  isLiveSessionActive = false;
   if (!socket) {
     return;
   }
@@ -1743,6 +1881,7 @@ function stop() {
 }
 
 async function endMeeting() {
+  isLiveSessionActive = false;
   stop();
   try {
     const response = await fetch("/api/end-meeting", { method: "POST" });
@@ -1959,6 +2098,8 @@ checkCloudNotesButton?.addEventListener("click", checkCloudNotesSetup);
 refreshRecordingsButton?.addEventListener("click", () => refreshRecordings(currentRecordingPath));
 openRecordingsFolderButton?.addEventListener("click", () => openProjectFolder("recordings"));
 openNotesFolderButton?.addEventListener("click", () => openProjectFolder("notes"));
+notesUtilityToggle?.addEventListener("click", () => toggleUtilityPanel("notes"));
+settingsUtilityToggle?.addEventListener("click", () => toggleUtilityPanel("settings"));
 downloadTranscriptButton.addEventListener("click", () => {
   downloadMarkdown("meeting-transcript", transcriptMarkdown());
 });

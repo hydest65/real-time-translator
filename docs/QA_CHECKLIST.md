@@ -77,6 +77,17 @@ Current closeout result on 2026-05-28:
 - Ollama local notes default is `qwen3:14b`; `gemma4:e4b` and `phi3:mini` were removed locally.
 - Aliyun Tingwu cloud notes support now includes OSS or Tencent Relay upload, diagnostics, progress reporting, raw result payloads, Markdown/DOCX output, and temporary audio cleanup.
 
+Current closeout result on 2026-05-30:
+
+- Backend Python syntax/import checks passed.
+- Frontend JavaScript syntax checks passed for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js`.
+- `scripts/translation-quality-preview.py` syntax check passed.
+- `git diff --check` passed.
+- Runtime smoke test passed for `GET /api/health` and `GET /static/diagnostics.html` on port `8000`.
+- Secret scan found placeholders only and no live Aliyun AccessKey, Tingwu AppKey, relay IP, or Azure secret in candidate committed paths.
+- Manual visual checks performed during development: compact UI, diagnostics entry, diagnostics page, and local draft visual tape behavior were inspected in the browser.
+- Known local model limitation: `qwen3:14b` is installed, but a polish test can fail on this machine when Ollama reports insufficient available memory. This does not block the live subtitle path.
+
 - Python syntax checks passed for `backend/main.py`, `backend/cloud_speech.py`, and `scripts/process-recording.py`.
 - Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.
 - Local runtime smoke test passed for `GET /` on port `8000`.

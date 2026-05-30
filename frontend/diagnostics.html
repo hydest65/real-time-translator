@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Subtitle Studio Diagnostics</title>
+    <link rel="stylesheet" href="/static/diagnostics.css?v=20260530b" />
+  </head>
+  <body>
+    <main class="diagnostics-shell">
+      <header class="diagnostics-topbar">
+        <div class="brand-lockup">
+          <span class="brand-dot"></span>
+          <div>
+            <p class="eyebrow">Subtitle Studio</p>
+            <h1>Diagnostics</h1>
+          </div>
+        </div>
+        <div class="top-actions">
+          <button id="refreshButton" type="button">Refresh</button>
+          <a href="/" class="ghost-link">Open App</a>
+        </div>
+      </header>
+
+      <section class="status-strip" aria-label="System summary">
+        <article class="metric-card">
+          <span class="metric-icon api-icon"></span>
+          <div>
+            <p>Backend</p>
+            <strong id="backendStatus">Checking</strong>
+          </div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon cloud-icon"></span>
+          <div>
+            <p>Live Cloud</p>
+            <strong id="liveCloudStatus">Checking</strong>
+          </div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon notes-icon"></span>
+          <div>
+            <p>Cloud Notes</p>
+            <strong id="cloudNotesStatus">Checking</strong>
+          </div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon local-icon"></span>
+          <div>
+            <p>Local Notes</p>
+            <strong id="localNotesStatus">Checking</strong>
+          </div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon file-icon"></span>
+          <div>
+            <p>Recordings</p>
+            <strong id="recordingStatus">Checking</strong>
+          </div>
+        </article>
+        <article class="metric-card">
+          <span class="metric-icon latest-icon"></span>
+          <div>
+            <p>Latest Notes</p>
+            <strong id="latestMinutesStatus">Checking</strong>
+          </div>
+        </article>
+      </section>
+
+      <section class="diagnostics-grid">
+        <article class="panel">
+          <div class="panel-head">
+            <span class="panel-icon config-icon"></span>
+            <h2>Configuration</h2>
+          </div>
+          <dl class="kv-list" id="configList"></dl>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <span class="panel-icon progress-icon"></span>
+            <h2>Meeting Notes Progress</h2>
+          </div>
+          <div class="progress-line">
+            <span id="progressStage">Idle</span>
+            <strong id="progressPercent">0%</strong>
+          </div>
+          <div class="progress-track">
+            <span id="progressFill"></span>
+          </div>
+          <p class="panel-note" id="progressMessage">No meeting notes task is running.</p>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <span class="panel-icon test-icon"></span>
+            <h2>Quick Tests</h2>
+          </div>
+          <div class="test-actions">
+            <button id="socketTestButton" type="button">Test Live Socket</button>
+            <button id="tingwuTestButton" type="button">Test Cloud Notes</button>
+          </div>
+          <div class="test-log" id="testLog">Ready.</div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-head">
+            <span class="panel-icon recording-icon"></span>
+            <h2>Latest Recordings</h2>
+          </div>
+          <div class="recording-list" id="recordingList">Checking recordings...</div>
+        </article>
+      </section>
+    </main>
+
+    <script src="/static/diagnostics.js?v=20260530b"></script>
+  </body>
+</html>

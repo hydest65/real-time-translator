@@ -11,10 +11,8 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - small red status lamp
   - input selector
   - speech selector
-  - `Start Meeting`
-  - `End Meeting`
-  - `Open Bilingual Notes`, when notes are ready
-  - advanced settings disclosure for lower-frequency controls
+  - compact `Start` and `End` meeting buttons
+  - icon-only shortcuts for notes, settings, and diagnostics
 - Left side panel:
   - current step
   - caption readiness
@@ -41,6 +39,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
 - In local mode, stable English context and complete Chinese translation render as continuous text blocks. The English context pane should fill its readable area first and then scroll.
 - In local mode, the English live draft stays in its own lower English pane and updates quickly.
+- The English live draft is intentionally one line. It should fill toward the right edge, then restart from the left edge with new text. It should not restart halfway across the row just because backend ASR sends a new draft segment.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
 - Cloud users can scroll up inside the subtitle monitor without losing incoming live subtitles.
@@ -68,6 +67,8 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - The main operation should be understandable as a simple sequence: start meeting, watch captions, end meeting, open bilingual notes.
 - The top-level topbar shell is transparent; the brand block and toolbar keep their own soft raised cards.
 - The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
+- Compact controls prefer familiar icon buttons over long labels when the meaning is clear. Any remaining text buttons should share the same soft capsule style as the rest of the UI.
+- Diagnostics uses a small monitor-style icon in the main toolbar and opens as a separate page, not an in-place panel, so it does not compete with the subtitle workspace.
 
 ## Visual UI Editor
 

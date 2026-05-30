@@ -26,6 +26,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - Local low-latency preset that uses shorter audio chunks, shows live English ASR draft immediately, and translates Chinese after sentence completion.
 - Fixed subtitle monitor with internal scrolling history for Azure.
 - Two-mode subtitle workspace: Azure keeps one bilingual monitor; local mode uses separate English context, English draft, and Chinese translation panes.
+- Local English draft pane behaves as a one-line visual tape: it fills the line, then starts again from the left edge without clearing stable English context.
 - Real-time live row plus final subtitle history.
 - Full-session final transcript capture for post-meeting export.
 - Bilingual Word meeting-minutes export with English professional minutes first and Chinese reading version second in the same document.
@@ -33,6 +34,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - Top-left red status lamp that remains visible when stopped and pulses while running.
 - Cloud usage panel for current-session timing, browser-local day/month estimates, and optional account-level synchronization.
 - Visual UI editor for local browser-side tuning of colors, subtitle size, panel width, corner radius, and background decoration.
+- Diagnostics monitor page for backend health, cloud notes readiness, local notes readiness, meeting-notes progress, recent recordings, and quick connection checks.
 - Lightweight paragraph turn detection by pause interval.
 
 ## Translation Mode
@@ -66,6 +68,7 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - In local mode, user can scan English live transcript and Chinese translations separately.
 - Local MarianMT and NLLB do not need to match Azure realtime behavior on this machine; they are comparison paths rather than the primary recommended route.
 - User can open `/static/ui-editor.html`, tune the visual style, save it locally, and see the saved style on the main subtitle page.
+- User can open `/static/diagnostics.html` from the compact monitor icon without stopping the main live translation page.
 - User can end a meeting and open the generated bilingual Word notes without manually looking for a Markdown file.
 - User can see whether Cloud usage is only a browser-local estimate or backed by account-level sync.
 - Tester-facing UI should avoid naming the underlying cloud provider.

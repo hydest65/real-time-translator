@@ -23,9 +23,11 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Local translation engine: `argos`
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
 - Frontend: Cloud mode uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
+- Local draft subtitles use a one-line visual tape that wraps back to the left edge only after the visible line is full
 - Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
 - Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
+- Diagnostics: monitor panel at `/static/diagnostics.html` opens separately so checking health does not stop the live translation page
 - Cloud usage panel: shows current-session cloud time, local browser day/month estimates, and optional account-level sync
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
 - Source language: English or Spanish, both translated into Simplified Chinese
@@ -71,12 +73,15 @@ real_time_translator/
     ui-editor.html
     ui-editor.css
     ui-editor.js
+    diagnostics.html
+    diagnostics.css
+    diagnostics.js
   README.md
 ```
 
 ## Version Closeout Docs
 
-- Current closeout: `0.2.0-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement`.
+- Current closeout: `0.2.1-compact-diagnostics-draft-tape - Compact UI, diagnostics, and stable draft captions`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
@@ -281,6 +286,14 @@ http://127.0.0.1:8000/static/ui-editor.html
 ```
 
 The UI editor previews the main page in a browser frame. Changes are stored in the browser's `localStorage` and applied by the main page on load. Use it for fast personal UI tuning before deciding whether a style should be written permanently into `frontend/style.css`.
+
+Diagnostics panel:
+
+```text
+http://127.0.0.1:8000/static/diagnostics.html
+```
+
+The diagnostics page shows backend health, cloud/local notes readiness, meeting-notes progress, recent recordings, and quick connection checks. Open it from the small monitor icon in the main UI; it uses a separate tab so the active subtitle session keeps running.
 
 Recommended first test:
 
