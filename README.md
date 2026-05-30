@@ -76,7 +76,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.1.12-cloud-branding-notes-fallback - Provider-Neutral UI and Stable Meeting Notes`.
+- Current closeout: `0.2.0-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.

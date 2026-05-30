@@ -1,6 +1,6 @@
 # Release Notes
 
-## 0.1.13-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement
+## 0.2.0-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement
 
 Date: 2026-05-30
 

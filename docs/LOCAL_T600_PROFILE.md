@@ -54,6 +54,6 @@ If syncing to GitHub later:
 
 ## Current T600 Closeout
 
-- Version: `0.1.12-cloud-branding-notes-fallback`
+- Version: `0.2.0-aliyun-tingwu-qwen-notes`
 - Branch intent: keep the guided meeting workflow, tester-friendly hardware tiers, provider-neutral Cloud UI, cloud usage sync, and bilingual Word meeting-notes behavior together for this laptop.
 - Notes behavior: end the meeting, generate one `.docx`, then open the bilingual document in Word. Post-meeting local fallback defaults to CPU unless `POST_MEETING_ASR_DEVICE` opts into CUDA/auto.
