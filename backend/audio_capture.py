@@ -13,6 +13,11 @@ import numpy as np
 import sounddevice as sd
 
 try:
+    import soundfile as sf
+except Exception:
+    sf = None
+
+try:
     import soundcard as sc
 except Exception:
     sc = None
@@ -80,6 +85,44 @@ class AppendableWavWriter:
         )
 
 
+class AppendableFlacWriter:
+    """Append mono audio samples to a FLAC file."""
+
+    def __init__(self, path: Path, sample_rate: int) -> None:
+        self.path = path
+        self.sample_rate = sample_rate
+        self.file = None
+
+    def open(self) -> None:
+        if sf is None:
+            raise RuntimeError("soundfile is required for FLAC recordings.")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        self.file = sf.SoundFile(
+            str(self.path),
+            mode="w",
+            samplerate=self.sample_rate,
+            channels=1,
+            format="FLAC",
+            subtype="PCM_16",
+        )
+
+    def writeframes(self, data: np.ndarray | bytes) -> None:
+        if self.file is None:
+            return
+        if isinstance(data, bytes):
+            samples = np.frombuffer(data, dtype=np.int16).astype(np.float32) / 32767.0
+        else:
+            samples = np.asarray(data, dtype=np.float32)
+        samples = np.nan_to_num(samples, nan=0.0, posinf=0.0, neginf=0.0)
+        self.file.write(np.clip(samples, -1.0, 1.0))
+
+    def close(self) -> None:
+        if self.file is None:
+            return
+        self.file.close()
+        self.file = None
+
+
 class MicrophoneAudioCapture:
     """Capture microphone or system audio and yield mono float32 audio."""
 
@@ -95,6 +138,7 @@ class MicrophoneAudioCapture:
         chunk_flush_rms_threshold: float = 0.008,
         audio_source: str = "microphone",
         recording_path: Path | None = None,
+        recording_format: str = "flac",
     ) -> None:
         self.sample_rate = sample_rate
         self.channels = channels
@@ -115,7 +159,8 @@ class MicrophoneAudioCapture:
         self._device: int | None = None
         self._input_sample_rate = sample_rate
         self._recording_path = recording_path
-        self._recording_wave: AppendableWavWriter | None = None
+        self._recording_format = recording_format if recording_format in {"flac", "wav"} else "flac"
+        self._recording_wave: AppendableWavWriter | AppendableFlacWriter | None = None
         self._recording_lock = threading.Lock()
         self.selected_source_label = "Audio input"
         self.selected_source_detail = "Not started"
@@ -141,7 +186,10 @@ class MicrophoneAudioCapture:
         if self._recording_path is None:
             return
         try:
-            self._recording_wave = AppendableWavWriter(self._recording_path, self.sample_rate)
+            if self._recording_format == "flac":
+                self._recording_wave = AppendableFlacWriter(self._recording_path, self.sample_rate)
+            else:
+                self._recording_wave = AppendableWavWriter(self._recording_path, self.sample_rate)
             self._recording_wave.open()
         except Exception as exc:
             print(f"[recording] disabled: {exc}", flush=True)
@@ -154,7 +202,10 @@ class MicrophoneAudioCapture:
         pcm16 = (np.clip(audio, -1.0, 1.0) * 32767.0).astype(np.int16)
         with self._recording_lock:
             if self._recording_wave is not None:
-                self._recording_wave.writeframes(pcm16.tobytes())
+                if isinstance(self._recording_wave, AppendableFlacWriter):
+                    self._recording_wave.writeframes(audio)
+                else:
+                    self._recording_wave.writeframes(pcm16.tobytes())
 
     def start(self) -> None:
         if self._stream is not None or self._system_recorder is not None:

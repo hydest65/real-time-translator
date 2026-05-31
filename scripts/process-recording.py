@@ -117,6 +117,11 @@ QUALITY_PRESETS = {
     },
 }
 
+AUDIO_CONTENT_TYPES = {
+    ".flac": "audio/flac",
+    ".wav": "audio/wav",
+}
+
 
 def format_time(seconds: float) -> str:
     total = max(0, int(seconds))
@@ -124,6 +129,10 @@ def format_time(seconds: float) -> str:
     minutes = (total % 3600) // 60
     secs = total % 60
     return f"{hours:02d}:{minutes:02d}:{secs:02d}"
+
+
+def audio_content_type(path: Path) -> str:
+    return AUDIO_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
 
 
 def transcribe_audio(args: argparse.Namespace) -> list[TranscriptSegment]:
@@ -218,7 +227,7 @@ def post_azure_fast_transcription(
             b"\r\n",
             f"--{boundary}\r\n".encode("utf-8"),
             f'Content-Disposition: form-data; name="audio"; filename="{audio.name}"\r\n'.encode("utf-8"),
-            b"Content-Type: audio/wav\r\n\r\n",
+            f"Content-Type: {audio_content_type(audio)}\r\n\r\n".encode("utf-8"),
             audio_bytes,
             b"\r\n",
             f"--{boundary}--\r\n".encode("utf-8"),
@@ -385,7 +394,7 @@ def upload_audio_to_blob_container(audio: Path, container_sas_url: str) -> str:
         data=audio.read_bytes(),
         headers={
             "x-ms-blob-type": "BlockBlob",
-            "Content-Type": "audio/wav",
+            "Content-Type": audio_content_type(audio),
         },
         method="PUT",
     )
@@ -555,7 +564,7 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
     meeting_prompt = build_meeting_prompt(limit=100)
     hotword_text = build_hotword_text(limit=100)
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
-    duration = wav_duration_seconds(args.audio)
+    duration = audio_duration_seconds(args.audio)
     chunk_seconds = max(0, int(args.asr_chunk_seconds or 0))
     if chunk_seconds and duration > chunk_seconds * 1.2:
         return transcribe_audio_faster_whisper_chunked(model, args, chunk_seconds, meeting_prompt, hotword_text)
@@ -570,7 +579,7 @@ def transcribe_audio_faster_whisper_chunked(
     hotword_text: str,
 ) -> list[TranscriptSegment]:
     with tempfile.TemporaryDirectory(prefix="meeting-asr-", dir=str(DEFAULT_MODEL_CACHE)) as temp_dir_name:
-        chunks = build_wav_chunks(args.audio, Path(temp_dir_name), chunk_seconds)
+        chunks = build_audio_chunks(args.audio, Path(temp_dir_name), chunk_seconds)
         if not chunks:
             return transcribe_faster_whisper_path(model, args, args.audio, 0.0, meeting_prompt, hotword_text)
         print(f"Using chunked ASR: {len(chunks)} chunk(s), {chunk_seconds}s each")
@@ -629,20 +638,30 @@ def transcribe_faster_whisper_path(
     return results
 
 
-def wav_duration_seconds(path: Path) -> float:
+def audio_duration_seconds(path: Path) -> float:
     try:
         with wave.open(str(path), "rb") as wav_file:
             frame_rate = wav_file.getframerate()
             if frame_rate:
                 return wav_file.getnframes() / frame_rate
     except (OSError, wave.Error):
+        pass
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+        if info.samplerate:
+            return float(info.frames) / float(info.samplerate)
+    except Exception:
         return 0.0
     return 0.0
 
 
-def build_wav_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
+def build_audio_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
     if chunk_seconds <= 0:
         return []
+    if audio.suffix.lower() != ".wav":
+        return build_soundfile_chunks(audio, temp_dir, chunk_seconds)
     chunks: list[tuple[Path, float]] = []
     try:
         with wave.open(str(audio), "rb") as source:
@@ -662,6 +681,37 @@ def build_wav_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tu
                     target.writeframes(frames)
                 chunks.append((chunk_path, start_frame / frame_rate if frame_rate else 0.0))
     except (OSError, wave.Error):
+        return []
+    return chunks
+
+
+def build_soundfile_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
+    try:
+        import numpy as np
+        import soundfile as sf
+    except ImportError:
+        return []
+
+    chunks: list[tuple[Path, float]] = []
+    try:
+        info = sf.info(str(audio))
+        if not info.samplerate or not info.frames:
+            return []
+        chunk_frames = max(1, int(chunk_seconds * info.samplerate))
+        with sf.SoundFile(str(audio), mode="r") as source:
+            for chunk_index, start_frame in enumerate(range(0, info.frames, chunk_frames), start=1):
+                source.seek(start_frame)
+                frames_to_read = min(chunk_frames, info.frames - start_frame)
+                samples = source.read(frames_to_read, dtype="float32", always_2d=True)
+                if samples.size == 0:
+                    continue
+                if samples.shape[1] > 1:
+                    samples = samples.mean(axis=1, keepdims=True)
+                samples = np.clip(samples, -1.0, 1.0)
+                chunk_path = temp_dir / f"{audio.stem}.chunk-{chunk_index:04d}.wav"
+                sf.write(str(chunk_path), samples, info.samplerate, format="WAV", subtype="PCM_16")
+                chunks.append((chunk_path, start_frame / float(info.samplerate)))
+    except Exception:
         return []
     return chunks
 
@@ -765,20 +815,12 @@ def diarize_audio(args: argparse.Namespace) -> list[SpeakerSegment]:
     try:
         import numpy as np
         import torch
-        from scipy.io import wavfile
+        import soundfile as sf
     except ImportError:
         diarization = pipeline(str(args.audio))
     else:
-        sample_rate, samples = wavfile.read(str(args.audio))
-        samples = np.asarray(samples)
-        if samples.ndim == 1:
-            samples = samples[None, :]
-        else:
-            samples = samples.T
-        if np.issubdtype(samples.dtype, np.integer):
-            samples = samples.astype("float32") / float(np.iinfo(samples.dtype).max)
-        else:
-            samples = samples.astype("float32")
+        samples, sample_rate = sf.read(str(args.audio), dtype="float32", always_2d=True)
+        samples = np.asarray(samples, dtype="float32").T
         waveform = torch.from_numpy(samples)
         diarization = pipeline({"waveform": waveform, "sample_rate": int(sample_rate)})
     if hasattr(diarization, "speaker_diarization"):
@@ -2117,9 +2159,9 @@ def speaker_segments_from_transcript(transcript: list[TranscriptSegment]) -> lis
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Turn a recorded meeting WAV into transcript and meeting-minutes Markdown files.",
+        description="Turn a recorded meeting audio file into transcript and meeting-minutes Markdown files.",
     )
-    parser.add_argument("audio", type=Path, help="Path to recordings/session-*.wav")
+    parser.add_argument("audio", type=Path, help="Path to recordings/session-*.flac or session-*.wav")
     parser.add_argument(
         "--asr-engine",
         choices=["faster-whisper", "funasr", "azure-fast", "azure-batch"],
@@ -2155,7 +2197,7 @@ def main() -> int:
         "--asr-chunk-seconds",
         type=int,
         default=600,
-        help="Split long WAV files into ASR chunks. Use 0 to disable. Default: 600",
+        help="Split long audio files into ASR chunks. Use 0 to disable. Default: 600",
     )
     parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--azure-fast-max-speakers", type=int, default=5)

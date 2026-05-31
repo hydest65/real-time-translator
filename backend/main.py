@@ -43,7 +43,8 @@ RECORDING_RESUME_SECONDS = 5 * 60
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 active_recording_path: Path | None = None
 last_recording_stop_at = 0.0
-RECORDING_PATTERNS = ("rec-*.wav", "session-*.wav")
+AUDIO_RECORDING_SUFFIXES = {".flac", ".wav"}
+RECORDING_PATTERNS = ("rec-*.flac", "rec-*.wav", "session-*.flac", "session-*.wav")
 MINUTES_PATTERNS = ("rec-*.minutes.docx", "rec-*.minutes.md", "session-*.minutes.docx", "session-*.minutes.md")
 POST_MEETING_TIMEOUT_SECONDS = 30 * 60
 active_post_meeting_process: asyncio.subprocess.Process | None = None
@@ -1364,6 +1365,14 @@ def recording_duration_seconds(path: Path) -> float:
             if frame_rate:
                 return wav_file.getnframes() / frame_rate
     except (OSError, wave.Error):
+        pass
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+        if info.samplerate:
+            return float(info.frames) / float(info.samplerate)
+    except Exception:
         return 0.0
     return 0.0
 
@@ -1551,7 +1560,11 @@ def resolve_recording_paths(requested_recordings: object) -> list[Path]:
         try:
             requested_path = requested_path.resolve()
             recordings_root = RECORDINGS_DIR.resolve()
-            if recordings_root == requested_path.parent and requested_path.suffix.lower() == ".wav" and requested_path.exists():
+            if (
+                recordings_root == requested_path.parent
+                and requested_path.suffix.lower() in AUDIO_RECORDING_SUFFIXES
+                and requested_path.exists()
+            ):
                 paths.append(requested_path)
         except OSError:
             pass
@@ -1944,6 +1957,8 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["system_vad_rms_threshold"] = max(0.004, min(0.05, float(merged["system_vad_rms_threshold"])))
     if merged["audio_source"] not in ("microphone", "system"):
         merged["audio_source"] = "microphone"
+    if merged["recording_format"] not in ("flac", "wav"):
+        merged["recording_format"] = "flac"
     merged["turn_detector_enabled"] = bool(merged["turn_detector_enabled"])
     merged["turn_pause_seconds"] = max(0.6, min(4.0, float(merged["turn_pause_seconds"])))
     merged["noise_min_words"] = max(1, min(5, int(merged["noise_min_words"])))
@@ -1987,18 +2002,21 @@ def effective_vad_rms_threshold(active_config: AppConfig) -> float:
     return active_config.vad_rms_threshold
 
 
-def session_recording_path() -> Path:
+def session_recording_path(recording_format: str = "flac") -> Path:
     global active_recording_path
     now = time.time()
+    suffix = ".wav" if recording_format == "wav" else ".flac"
     if (
         active_recording_path is not None
         and active_recording_path.exists()
+        and suffix == ".wav"
+        and active_recording_path.suffix.lower() == suffix
         and now - last_recording_stop_at <= RECORDING_RESUME_SECONDS
     ):
         return active_recording_path
 
     timestamp = datetime.now().strftime("%m%d-%H%M%S")
-    active_recording_path = RECORDINGS_DIR / f"rec-{timestamp}.wav"
+    active_recording_path = RECORDINGS_DIR / f"rec-{timestamp}{suffix}"
     return active_recording_path
 
 
@@ -2311,7 +2329,8 @@ async def subtitles(websocket: WebSocket) -> None:
             chunk_flush_silence_seconds=active_config.chunk_flush_silence_seconds,
             chunk_flush_rms_threshold=effective_vad_rms_threshold(active_config),
             audio_source=active_config.audio_source,
-            recording_path=session_recording_path(),
+            recording_path=session_recording_path(active_config.recording_format),
+            recording_format=active_config.recording_format,
         )
         capture.start()
         put_latest(status_queue, capture.source_notice())

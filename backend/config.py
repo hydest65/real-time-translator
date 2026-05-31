@@ -9,6 +9,7 @@ from typing import Literal
 DevicePreference = Literal["auto", "cuda", "cpu"]
 TranslationEngine = Literal["argos", "marianmt", "nllb", "azure"]
 AudioSource = Literal["microphone", "system"]
+RecordingFormat = Literal["flac", "wav"]
 
 
 def load_dotenv_file() -> None:
@@ -50,6 +51,7 @@ class AppConfig:
     target_language: str = "zho_Hans"
     translation_engine: TranslationEngine = "azure"
     audio_source: AudioSource = "system"
+    recording_format: RecordingFormat = "flac"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
     chunk_seconds: float = 2.0
