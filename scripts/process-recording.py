@@ -24,8 +24,9 @@ if str(PROJECT_ROOT) not in sys.path:
 from backend.terminology import build_hotword_text, build_meeting_prompt
 
 DEFAULT_MODEL_CACHE = PROJECT_ROOT / ".model-cache"
-DEFAULT_HF_CACHE = DEFAULT_MODEL_CACHE / "huggingface"
+DEFAULT_HF_CACHE = PROJECT_ROOT / ".cache" / "huggingface"
 DEFAULT_MODEL_CACHE.mkdir(parents=True, exist_ok=True)
+DEFAULT_HF_CACHE.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MODELSCOPE_CACHE", str(DEFAULT_MODEL_CACHE))
 os.environ.setdefault("HF_HOME", str(DEFAULT_HF_CACHE))
 os.environ.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_CACHE / "hub"))
@@ -67,6 +68,11 @@ FUNASR_LOCAL_MODEL_DIRS = {
     "iic/SenseVoiceSmall": DEFAULT_MODEL_CACHE / "models" / "iic" / "SenseVoiceSmall",
     "fsmn-vad": DEFAULT_MODEL_CACHE / "models" / "iic" / "speech_fsmn_vad_zh-cn-16k-common-pytorch",
     "ct-punc": DEFAULT_MODEL_CACHE / "models" / "iic" / "punc_ct-transformer_cn-en-common-vocab471067-large",
+}
+
+AUDIO_CONTENT_TYPES = {
+    ".flac": "audio/flac",
+    ".wav": "audio/wav",
 }
 
 
@@ -218,7 +224,7 @@ def post_azure_fast_transcription(
             b"\r\n",
             f"--{boundary}\r\n".encode("utf-8"),
             f'Content-Disposition: form-data; name="audio"; filename="{audio.name}"\r\n'.encode("utf-8"),
-            b"Content-Type: audio/wav\r\n\r\n",
+            f"Content-Type: {audio_content_type(audio)}\r\n\r\n".encode("utf-8"),
             audio_bytes,
             b"\r\n",
             f"--{boundary}--\r\n".encode("utf-8"),
@@ -385,7 +391,7 @@ def upload_audio_to_blob_container(audio: Path, container_sas_url: str) -> str:
         data=audio.read_bytes(),
         headers={
             "x-ms-blob-type": "BlockBlob",
-            "Content-Type": "audio/wav",
+            "Content-Type": audio_content_type(audio),
         },
         method="PUT",
     )
@@ -555,7 +561,7 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
     meeting_prompt = build_meeting_prompt(limit=100)
     hotword_text = build_hotword_text(limit=100)
     model = WhisperModel(args.model, device=args.device, compute_type=args.compute_type)
-    duration = wav_duration_seconds(args.audio)
+    duration = audio_duration_seconds(args.audio)
     chunk_seconds = max(0, int(args.asr_chunk_seconds or 0))
     if chunk_seconds and duration > chunk_seconds * 1.2:
         return transcribe_audio_faster_whisper_chunked(model, args, chunk_seconds, meeting_prompt, hotword_text)
@@ -570,7 +576,7 @@ def transcribe_audio_faster_whisper_chunked(
     hotword_text: str,
 ) -> list[TranscriptSegment]:
     with tempfile.TemporaryDirectory(prefix="meeting-asr-", dir=str(DEFAULT_MODEL_CACHE)) as temp_dir_name:
-        chunks = build_wav_chunks(args.audio, Path(temp_dir_name), chunk_seconds)
+        chunks = build_audio_chunks(args.audio, Path(temp_dir_name), chunk_seconds)
         if not chunks:
             return transcribe_faster_whisper_path(model, args, args.audio, 0.0, meeting_prompt, hotword_text)
         print(f"Using chunked ASR: {len(chunks)} chunk(s), {chunk_seconds}s each")
@@ -629,20 +635,34 @@ def transcribe_faster_whisper_path(
     return results
 
 
-def wav_duration_seconds(path: Path) -> float:
+def audio_content_type(path: Path) -> str:
+    return AUDIO_CONTENT_TYPES.get(path.suffix.lower(), "application/octet-stream")
+
+
+def audio_duration_seconds(path: Path) -> float:
     try:
         with wave.open(str(path), "rb") as wav_file:
             frame_rate = wav_file.getframerate()
             if frame_rate:
                 return wav_file.getnframes() / frame_rate
     except (OSError, wave.Error):
-        return 0.0
+        pass
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+        if info.samplerate:
+            return float(info.frames) / float(info.samplerate)
+    except Exception:
+        pass
     return 0.0
 
 
-def build_wav_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
+def build_audio_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
     if chunk_seconds <= 0:
         return []
+    if audio.suffix.lower() != ".wav":
+        return build_soundfile_wav_chunks(audio, temp_dir, chunk_seconds)
     chunks: list[tuple[Path, float]] = []
     try:
         with wave.open(str(audio), "rb") as source:
@@ -662,6 +682,31 @@ def build_wav_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tu
                     target.writeframes(frames)
                 chunks.append((chunk_path, start_frame / frame_rate if frame_rate else 0.0))
     except (OSError, wave.Error):
+        return []
+    return chunks
+
+
+def build_soundfile_wav_chunks(audio: Path, temp_dir: Path, chunk_seconds: int) -> list[tuple[Path, float]]:
+    chunks: list[tuple[Path, float]] = []
+    try:
+        import soundfile as sf
+
+        with sf.SoundFile(str(audio), "r") as source:
+            frame_rate = int(source.samplerate)
+            chunk_frames = max(1, int(chunk_seconds * frame_rate))
+            chunk_index = 1
+            while True:
+                start_frame = int(source.tell())
+                frames = source.read(chunk_frames, dtype="float32", always_2d=False)
+                if len(frames) == 0:
+                    break
+                if getattr(frames, "ndim", 1) > 1:
+                    frames = frames.mean(axis=1)
+                chunk_path = temp_dir / f"{audio.stem}.chunk-{chunk_index:04d}.wav"
+                sf.write(str(chunk_path), frames, frame_rate, format="WAV", subtype="PCM_16")
+                chunks.append((chunk_path, start_frame / frame_rate if frame_rate else 0.0))
+                chunk_index += 1
+    except Exception:
         return []
     return chunks
 
@@ -765,20 +810,13 @@ def diarize_audio(args: argparse.Namespace) -> list[SpeakerSegment]:
     try:
         import numpy as np
         import torch
-        from scipy.io import wavfile
+        import soundfile as sf
     except ImportError:
         diarization = pipeline(str(args.audio))
     else:
-        sample_rate, samples = wavfile.read(str(args.audio))
+        samples, sample_rate = sf.read(str(args.audio), dtype="float32", always_2d=True)
         samples = np.asarray(samples)
-        if samples.ndim == 1:
-            samples = samples[None, :]
-        else:
-            samples = samples.T
-        if np.issubdtype(samples.dtype, np.integer):
-            samples = samples.astype("float32") / float(np.iinfo(samples.dtype).max)
-        else:
-            samples = samples.astype("float32")
+        samples = samples.T
         waveform = torch.from_numpy(samples)
         diarization = pipeline({"waveform": waveform, "sample_rate": int(sample_rate)})
     if hasattr(diarization, "speaker_diarization"):
@@ -1634,7 +1672,12 @@ def transformers_notes_max_new_tokens() -> int:
         return 1400
 
 
-def transcript_for_writer(transcript: list[TranscriptSegment], max_chars: int = 14000) -> str:
+def transcript_for_writer(transcript: list[TranscriptSegment], max_chars: int = 0) -> str:
+    if max_chars <= 0:
+        try:
+            max_chars = max(14000, int(os.getenv("POST_MEETING_WRITER_MAX_CHARS", "42000")))
+        except ValueError:
+            max_chars = 42000
     rows: list[str] = []
     for item in transcript:
         text = clean_sentence(item.text)
@@ -1647,17 +1690,321 @@ def transcript_for_writer(transcript: list[TranscriptSegment], max_chars: int = 
     return body[:max_chars].rsplit("\n", 1)[0].rstrip()
 
 
+def transcript_has_enough_writer_content(source: str) -> bool:
+    word_count = len(re.findall(r"\b[\w'-]+\b", source))
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", source))
+    return word_count >= 80 or cjk_count >= 120
+
+
+ROMAN_NUMERALS = ["I", "II", "III", "IV", "V", "VI", "VII", "VIII"]
+
+
+def roman_label(index: int) -> str:
+    if 0 <= index < len(ROMAN_NUMERALS):
+        return ROMAN_NUMERALS[index]
+    return str(index + 1)
+
+
+def audio_meeting_datetime(audio: Path) -> tuple[str, str]:
+    stamp = time.localtime(audio.stat().st_mtime if audio.exists() else time.time())
+    date_text = f"{stamp.tm_year}-{stamp.tm_mon}-{stamp.tm_mday}"
+    time_text = time.strftime("%Y-%m-%d %H:%M", stamp)
+    return date_text, time_text
+
+
+def compact_topic_title(text: str, fallback: str = "Meeting Notes") -> str:
+    cleaned = clean_sentence(re.sub(r"^[\dIVXLCMivxlcm.\-\s]+", "", text or "")).strip()
+    cleaned = re.sub(r"\s+", " ", cleaned)
+    if not cleaned:
+        return fallback
+    words = cleaned.split()
+    if len(words) > 8:
+        cleaned = " ".join(words[:8])
+    return cleaned[:90].rstrip(" ,.;:")
+
+
+def sample_minutes_mode(notes_language: str | None) -> str:
+    return "zh" if is_chinese_language(notes_language) else "bilingual"
+
+
+def sample_minutes_markdown_valid(content: str, mode: str = "bilingual") -> bool:
+    if mode == "zh":
+        required = ["摘要", "会议信息", "会议议程", "会议结论"]
+    elif mode == "bilingual":
+        required = ["English Minutes", "Summary", "Meeting Information", "中文纪要", "摘要", "会议信息"]
+    else:
+        required = ["Summary", "Meeting Information", "Meeting Agenda", "Meeting Conclusions"]
+    return bool(content.strip().startswith("# ")) and all(item in content for item in required)
+
+
+def repair_common_mojibake(text: str) -> str:
+    replacements = {
+        "鈥檚": "'s",
+        "鈥檛": "n't",
+        "鈥檙": "'r",
+        "鈥檒": "'l",
+        "鈥檝": "'v",
+        "鈥檇": "'d",
+        "鈥": "'",
+        "鈥�": "'",
+        "â€™": "'",
+        "â€˜": "'",
+        "â€œ": '"',
+        "â€�": '"',
+        "â€“": "-",
+        "â€”": "-",
+        "Â": "",
+    }
+    for bad, good in replacements.items():
+        text = text.replace(bad, good)
+    return text
+
+
+def normalize_sample_minutes_markdown(content: str) -> str:
+    content = content.replace("```markdown", "").replace("```", "").strip()
+    raw_lines = [line.rstrip() for line in content.splitlines()]
+    lines: list[str] = []
+    for raw_line in raw_lines:
+        line = repair_common_mojibake(raw_line.strip())
+        if not line:
+            lines.append("")
+            continue
+        if line.lower().startswith("generated with "):
+            continue
+        line = re.sub(r"^\*\*(.+)\*\*$", r"\1", line)
+        line = re.sub(r"^Subtopic heading:\s*", "", line, flags=re.IGNORECASE)
+        line = re.sub(r"^\*\*Subtopic heading:\s*(.+)\*\*$", r"\1", line, flags=re.IGNORECASE)
+        line = re.sub(r"^小标题[:：]\s*", "", line)
+        lines.append(line)
+
+    title_candidate = ""
+    for line in lines:
+        agenda_match = re.match(r"^-\s*(?:[IVX]+\.\s*)?(.+)$", line)
+        roman_match = re.match(r"^(?:I|II|III|IV|V|VI|VII|VIII|IX|X)\.\s+(.+)$", line)
+        if agenda_match:
+            title_candidate = compact_topic_title(agenda_match.group(1))
+            break
+        if roman_match:
+            title_candidate = compact_topic_title(roman_match.group(1))
+            break
+
+    if lines and lines[0].startswith("# "):
+        title_text = lines[0][2:].strip()
+        if re.search(r"\bShort Meeting Topic\b|\bMeeting Topic\b|\bMeeting Notes\b|会议主题|会议纪要", title_text, re.IGNORECASE):
+            date_match = re.match(r"^(\d{4}-\d{1,2}-\d{1,2})", title_text)
+            date_text = date_match.group(1) if date_match else ""
+            replacement_title = title_candidate or "Meeting Discussion"
+            lines[0] = f"# {date_text}  {replacement_title}".strip()
+
+    return "\n".join(lines).strip()
+
+
+def sample_minutes_prompt(
+    audio: Path,
+    total_start: float,
+    total_end: float,
+    speakers: list[str],
+    source: str,
+    mode: str = "bilingual",
+) -> str:
+    meeting_date, meeting_time = audio_meeting_datetime(audio)
+    speaker_text = ", ".join(speakers) if speakers else "No information"
+    if mode == "zh":
+        return f"""
+音频：{audio.name}
+时长：{format_time(total_start)}-{format_time(total_end)}
+会议时间：{meeting_time}
+说话人：{speaker_text}
+
+请将转写内容润色成正式中文会议纪要，严格采用以下 Word 文档结构：
+
+# {meeting_date}  会议主题
+
+摘要
+用一个自然、正式的中文段落概括会议重点。
+
+会议信息
+| 项目 | 说明 |
+| --- | --- |
+| 会议时间 | {meeting_time} |
+| 会议地点 | 无信息 |
+| 参会人员 | {speaker_text} |
+
+会议议程
+- I. 主要议题
+- II. 主要议题
+
+I. 主要议题
+小标题
+- 忠于原文的讨论要点。
+- 忠于原文的讨论要点。
+
+II. 主要议题
+小标题
+- 忠于原文的讨论要点。
+- 忠于原文的讨论要点。
+
+会议结论
+- 结论、决议、风险或后续事项。
+
+要求：
+- 只输出中文纪要，不要输出英文版本。
+- 严格保持：标题、摘要、会议信息、会议议程、罗马数字议题、小标题、项目符号、会议结论。
+- 对转写内容做中文润色，语言自然、正式、适合对外分享。
+- 英文人名、公司名、产品名、品牌名和技术专有名词保持英文原文，不要音译或翻译。
+- 内容充足时使用 3-6 个主要议题；每个议题下 1-3 个小标题，每个小标题 2-5 条要点。
+- 不要编造决议、负责人、日期、地点或参会人员；没有信息写“无信息”。
+- 明确出现的数字、专有名词、负责人、产品名和时间必须保留。
+
+转写内容：
+{source}
+""".strip()
+
+    if mode == "bilingual":
+        return f"""
+Audio: {audio.name}
+Duration: {format_time(total_start)}-{format_time(total_end)}
+Meeting Time: {meeting_time}
+Speakers: {speaker_text}
+
+Write polished bilingual meeting minutes for an English meeting. The English version is the master version, followed by a natural Simplified Chinese polished version. This must be a detailed discussion record, not only an executive summary. Strictly follow this structure:
+
+# {meeting_date}  Short Meeting Topic
+
+English Minutes
+
+Summary
+One concise English paragraph summarizing the meeting.
+
+Meeting Information
+| Item | Description |
+| --- | --- |
+| Meeting Time | {meeting_time} |
+| Meeting Location | No information |
+| Attendees | {speaker_text} |
+
+Meeting Agenda
+- I. Main agenda topic
+- II. Main agenda topic
+
+I. Main agenda topic
+Participants Involved
+- List the speaker labels or real names involved in this topic, and describe each person's role or viewpoint when the transcript supports it.
+
+Discussion Details
+- Faithful English discussion bullet with concrete context, examples, constraints, numbers, and alternatives.
+- Faithful English discussion bullet with what each side asked, answered, challenged, or clarified.
+- Faithful English discussion bullet capturing concerns, tradeoffs, or unresolved details.
+
+Next Steps / Open Points
+- Follow-up item, owner, timing, or open question if explicitly discussed.
+
+Meeting Conclusions
+- English conclusion, decision, risk, or follow-up item.
+
+中文纪要
+
+摘要
+用一个自然、正式的中文段落概括会议重点。
+
+会议信息
+| 项目 | 说明 |
+| --- | --- |
+| 会议时间 | {meeting_time} |
+| 会议地点 | 无信息 |
+| 参会人员 | {speaker_text} |
+
+会议议程
+- I. 主要议题
+- II. 主要议题
+
+I. 主要议题
+小标题
+- 忠于英文原文的中文润色要点。
+- 忠于英文原文的中文润色要点。
+
+会议结论
+- 中文结论、决议、风险或后续事项。
+
+Rules:
+- English meetings must output both English Minutes and 中文纪要 in one document.
+- The Chinese version must be polished natural Simplified Chinese, not a literal sentence-by-sentence translation.
+- In the Chinese version, keep English person names, company names, product names, brand names, and technical proper nouns in English. Do not transliterate or translate them.
+- Keep the uploaded Word sample structure inside each language version: title, summary, meeting information table, agenda, roman-numbered sections, subtopic headings, bullets, conclusions.
+- Use 4-7 main agenda topics when the transcript has enough content.
+- For each main topic, include participants involved, detailed discussion points, concerns/tradeoffs, and next steps/open points.
+- Each substantial topic should usually contain 5-10 bullets across its subheadings. Keep important discussion details instead of compressing the topic into one or two bullets.
+- Distinguish who said or requested what using real names when present, otherwise use speaker labels such as SPEAKER_02. Do not merge all views into "the team" when participants had different positions.
+- Do not invent decisions, owners, dates, places, attendees, or action items. Use "No information" / "无信息" when missing.
+- Preserve explicit numbers, owners, product names, technical terms, and timestamps.
+
+Transcript:
+{source}
+""".strip()
+
+    return f"""
+Audio: {audio.name}
+Duration: {format_time(total_start)}-{format_time(total_end)}
+Meeting Time: {meeting_time}
+Speakers: {speaker_text}
+
+Write meeting minutes that strictly follow this Word-document style:
+
+# {meeting_date}  Short Meeting Topic
+
+Summary
+One concise paragraph summarizing the meeting.
+
+Meeting Information
+| Item | Description |
+| --- | --- |
+| Meeting Time | {meeting_time}
+| Meeting Location | No information |
+| Attendees | {speaker_text} |
+
+Meeting Agenda
+- I. Main agenda topic
+- II. Main agenda topic
+
+I. Main agenda topic
+Subtopic heading
+- Faithful discussion bullet.
+- Faithful discussion bullet.
+
+II. Main agenda topic
+Subtopic heading
+- Faithful discussion bullet.
+- Faithful discussion bullet.
+
+Meeting Conclusions
+- Conclusion, decision, risk, or follow-up item.
+
+Rules:
+- Match the uploaded Word sample structure exactly: title, Summary, Meeting Information, Meeting Agenda, roman-numbered sections, subtopic headings, bullets, Meeting Conclusions.
+- Use 3-6 main agenda topics when the transcript has enough content; otherwise use fewer.
+- Each main topic should have 1-3 short subtopic headings and 2-5 faithful bullets.
+- Final output must be English. Translate Chinese source content into natural business English when needed.
+- Do not add Chinese reading sections, transcript dumps, generated-by footers, or extra headings.
+- Do not invent decisions, owners, dates, places, or attendees. Use "No information" when the transcript does not provide them.
+- Preserve factual terms, numbers, owners, product names, and timestamps only when explicit.
+
+Transcript:
+{source}
+""".strip()
+
+
 def ollama_minutes_markdown(
     audio: Path,
     transcript: list[TranscriptSegment],
     total_start: float,
     total_end: float,
     speakers: list[str],
+    notes_language: str = "en",
 ) -> str:
     if not notes_llm_enabled():
         return ""
     source = transcript_for_writer(transcript)
-    if len(source.split()) < 80:
+    if not transcript_has_enough_writer_content(source):
         return ""
     model = ollama_notes_model()
     system_prompt = (
@@ -1711,6 +2058,42 @@ Rules:
 Transcript:
 {source}
 """.strip()
+    mode = sample_minutes_mode(notes_language)
+    if mode == "zh":
+        system_prompt = (
+            "You are a professional Chinese meeting-minutes writer. "
+            "Create concise, faithful, polished Simplified Chinese meeting minutes from an ASR transcript. "
+            "Strictly follow the provided Word-document structure. "
+            "Do not invent decisions, owners, dates, places, attendees, or action items. "
+            "Return Markdown only."
+        )
+    else:
+        system_prompt = (
+            "You are a professional bilingual meeting-minutes writer. "
+        "Create detailed, faithful English meeting minutes and a polished Simplified Chinese version from an English ASR transcript. "
+            "Strictly follow the provided Word-document structure. "
+            "Do not invent decisions, owners, dates, places, attendees, or action items. "
+            "Return Markdown only."
+        )
+    user_prompt = sample_minutes_prompt(audio, total_start, total_end, speakers, source, mode)
+    if mode == "zh":
+        user_prompt += """
+
+Additional detailed Chinese-minutes requirements:
+- 只输出中文纪要，但英文人名、公司名、产品名、品牌名、技术专有名词保持英文原文。
+- 每个罗马数字议题下必须包含“涉及人员”“讨论细节”“分歧/担忧”“后续事项 / 待确认点”等小标题。
+- 每个主要议题通常写 5-10 条要点，保留背景、问题、方案、数字、约束、不同人的观点和具体追问，不要压缩成一两句。
+- 如果不同人员观点不同，请用英文人名或 SPEAKER_02 这类标签区分谁提出、谁回应、谁质疑、谁需要跟进。
+""".strip()
+    elif mode == "bilingual":
+        user_prompt += """
+
+Additional bilingual detail requirements:
+- Mirror the detailed English topic structure in the Chinese version.
+- In 中文纪要, each topic must include “涉及人员”“讨论细节”“分歧/担忧”“后续事项 / 待确认点”.
+- In 中文纪要, keep English person names, company names, product names, brand names, and technical proper nouns in English.
+- Do not compress participant viewpoints into generic team statements when the transcript shows different positions.
+""".strip()
     payload = {
         "model": model,
         "stream": False,
@@ -1720,7 +2103,7 @@ Transcript:
         ],
         "options": {
             "temperature": 0.2,
-            "num_ctx": 8192,
+            "num_ctx": 32768,
         },
     }
     data = json.dumps(payload).encode("utf-8")
@@ -1737,11 +2120,11 @@ Transcript:
         return ""
 
     content = str((result.get("message") or {}).get("content") or "").strip()
-    if not content or "# Meeting Notes" not in content or "## English Version" not in content:
+    content = normalize_sample_minutes_markdown(content)
+    if not content or not sample_minutes_markdown_valid(content, mode):
         return ""
-    content = content.replace("```markdown", "").replace("```", "").strip()
     print(f"Used Ollama notes writer: {model}")
-    return content + "\n\n---\n\nGenerated with Ollama model `" + model + "`.\n"
+    return content + "\n"
 
 
 def transformers_minutes_markdown(
@@ -1750,11 +2133,12 @@ def transformers_minutes_markdown(
     total_start: float,
     total_end: float,
     speakers: list[str],
+    notes_language: str = "en",
 ) -> str:
     if not notes_llm_enabled():
         return ""
     source = transcript_for_writer(transcript)
-    if len(source.split()) < 80:
+    if not transcript_has_enough_writer_content(source):
         return ""
 
     model_name = transformers_notes_model()
@@ -1802,6 +2186,43 @@ Rules:
 
 Transcript:
 {source}
+""".strip()
+
+    mode = sample_minutes_mode(notes_language)
+    if mode == "zh":
+        system_prompt = (
+            "You are a professional Chinese meeting-minutes writer. "
+            "Create concise, faithful, polished Simplified Chinese meeting minutes from an ASR transcript. "
+            "Strictly follow the provided Word-document structure. "
+            "Do not invent decisions, owners, dates, places, attendees, or action items. "
+            "Return Markdown only."
+        )
+    else:
+        system_prompt = (
+            "You are a professional bilingual meeting-minutes writer. "
+            "Create detailed, faithful English meeting minutes and a polished Simplified Chinese version from an English ASR transcript. "
+            "Strictly follow the provided Word-document structure. "
+            "Do not invent decisions, owners, dates, places, attendees, or action items. "
+            "Return Markdown only."
+        )
+    user_prompt = sample_minutes_prompt(audio, total_start, total_end, speakers, source, mode)
+    if mode == "zh":
+        user_prompt += """
+
+Additional detailed Chinese-minutes requirements:
+- 只输出中文纪要，但英文人名、公司名、产品名、品牌名、技术专有名词保持英文原文。
+- 每个罗马数字议题下必须包含“涉及人员”“讨论细节”“分歧/担忧”“后续事项 / 待确认点”等小标题。
+- 每个主要议题通常写 5-10 条要点，保留背景、问题、方案、数字、约束、不同人的观点和具体追问，不要压缩成一两句。
+- 如果不同人员观点不同，请用英文人名或 SPEAKER_02 这类标签区分谁提出、谁回应、谁质疑、谁需要跟进。
+""".strip()
+    elif mode == "bilingual":
+        user_prompt += """
+
+Additional bilingual detail requirements:
+- Mirror the detailed English topic structure in the Chinese version.
+- In 中文纪要, each topic must include “涉及人员”“讨论细节”“分歧/担忧”“后续事项 / 待确认点”.
+- In 中文纪要, keep English person names, company names, product names, brand names, and technical proper nouns in English.
+- Do not compress participant viewpoints into generic team statements when the transcript shows different positions.
 """.strip()
 
     try:
@@ -1852,11 +2273,11 @@ Transcript:
         print(f"Direct Transformers notes writer unavailable: {exc}", flush=True)
         return ""
 
-    if not content or "# Meeting Notes" not in content or "## English Version" not in content:
+    content = normalize_sample_minutes_markdown(content)
+    if not content or not sample_minutes_markdown_valid(content, mode):
         return ""
-    content = content.replace("```markdown", "").replace("```", "").strip()
     print(f"Used direct Transformers notes writer: {model_name} on {device}", flush=True)
-    return content + "\n\n---\n\nGenerated with direct Transformers model `" + model_name + "`.\n"
+    return content + "\n"
 
 
 def llm_minutes_markdown(
@@ -1865,20 +2286,241 @@ def llm_minutes_markdown(
     total_start: float,
     total_end: float,
     speakers: list[str],
+    notes_language: str = "en",
 ) -> str:
     provider = notes_llm_provider()
     if provider in {"transformers", "hf", "huggingface", "direct"}:
-        direct_minutes = transformers_minutes_markdown(audio, transcript, total_start, total_end, speakers)
+        direct_minutes = transformers_minutes_markdown(audio, transcript, total_start, total_end, speakers, notes_language)
         if direct_minutes:
             return direct_minutes
         if os.getenv("POST_MEETING_LLM_FALLBACK", "1").strip().lower() in {"0", "false", "no", "off"}:
             return ""
-    return ollama_minutes_markdown(audio, transcript, total_start, total_end, speakers)
+    return ollama_minutes_markdown(audio, transcript, total_start, total_end, speakers, notes_language)
+
+
+def fallback_sample_minutes_markdown(
+    audio: Path,
+    usable: list[TranscriptSegment],
+    paragraphs: list[tuple[float, float, str]],
+    topic_sections: list[TopicSection],
+    summary_points: list[str],
+    decisions: list[tuple[TranscriptSegment, str]],
+    actions: list[tuple[TranscriptSegment, str]],
+    risks: list[tuple[TranscriptSegment, str]],
+    speakers: list[str],
+    total_start: float,
+    total_end: float,
+    is_substantive: bool,
+    notes_language: str = "en",
+) -> str:
+    if sample_minutes_mode(notes_language) == "zh":
+        return fallback_chinese_sample_minutes_markdown(
+            audio,
+            usable,
+            paragraphs,
+            topic_sections,
+            summary_points,
+            decisions,
+            actions,
+            risks,
+            speakers,
+            total_start,
+            total_end,
+            is_substantive,
+        )
+    meeting_date, meeting_time = audio_meeting_datetime(audio)
+    title_source = topic_sections[0].title if topic_sections else (summary_points[0] if summary_points else audio.stem)
+    title = compact_topic_title(title_source, "Meeting Notes")
+    attendee_text = ", ".join(speakers) if speakers else "No information"
+    summary_text = " ".join(summary_points[:3]).strip()
+    if not summary_text and paragraphs:
+        summary_text = " ".join(paragraph for _, _, paragraph in paragraphs[:2]).strip()
+    if not is_substantive:
+        summary_text = "The recording did not contain enough clean discussion to generate reliable professional minutes."
+    elif not summary_text:
+        summary_text = "No substantial transcript text was captured."
+
+    topics = topic_sections[:6]
+    if not topics:
+        fallback_bullets = [
+            clean_sentence(item.text)
+            for item in usable[:6]
+            if clean_sentence(item.text)
+        ]
+        topics = [
+            TopicSection(
+                start=total_start,
+                end=total_end,
+                title="Main Discussion",
+                bullets=fallback_bullets or ["No clear discussion points were detected."],
+            )
+        ]
+
+    lines = [
+        f"# {meeting_date}  {title}",
+        "",
+        "English Minutes",
+        "",
+        "Summary",
+        summary_text,
+        "",
+        "Meeting Information",
+        "| Item | Description |",
+        "| --- | --- |",
+        f"| Meeting Time | {meeting_time} |",
+        "| Meeting Location | No information |",
+        f"| Attendees | {attendee_text} |",
+        "",
+        "Meeting Agenda",
+    ]
+
+    for index, topic in enumerate(topics):
+        lines.append(f"- {roman_label(index)}. {compact_topic_title(topic.title, 'Main Discussion')}")
+
+    lines.append("")
+    for index, topic in enumerate(topics):
+        lines.append(f"{roman_label(index)}. {compact_topic_title(topic.title, 'Main Discussion')}")
+        lines.append("Core Discussion")
+        bullets = [clean_sentence(bullet) for bullet in topic.bullets if clean_sentence(bullet)]
+        if not bullets:
+            bullets = ["No clear supporting details were detected for this topic."]
+        for bullet in bullets[:5]:
+            lines.append(f"- {bullet}")
+        lines.append("")
+
+    conclusion_items: list[str] = []
+    conclusion_items.extend(sentence for _, sentence in decisions[:4])
+    conclusion_items.extend(sentence for _, sentence in actions[:4])
+    conclusion_items.extend(sentence for _, sentence in risks[:3])
+    if not conclusion_items and is_substantive:
+        conclusion_items = summary_points[:3]
+    if not conclusion_items:
+        conclusion_items = ["No explicit conclusions or follow-up items were detected."]
+
+    lines.append("Meeting Conclusions")
+    for item in conclusion_items[:8]:
+        lines.append(f"- {clean_sentence(item)}")
+
+    zh_lines = fallback_chinese_sample_minutes_markdown(
+        audio,
+        usable,
+        paragraphs,
+        topic_sections,
+        summary_points,
+        decisions,
+        actions,
+        risks,
+        speakers,
+        total_start,
+        total_end,
+        is_substantive,
+        include_title=False,
+    ).splitlines()
+    lines.extend(["", "中文纪要", ""])
+    lines.extend(zh_lines)
+
+    return "\n".join(lines).strip()
+
+
+def fallback_chinese_sample_minutes_markdown(
+    audio: Path,
+    usable: list[TranscriptSegment],
+    paragraphs: list[tuple[float, float, str]],
+    topic_sections: list[TopicSection],
+    summary_points: list[str],
+    decisions: list[tuple[TranscriptSegment, str]],
+    actions: list[tuple[TranscriptSegment, str]],
+    risks: list[tuple[TranscriptSegment, str]],
+    speakers: list[str],
+    total_start: float,
+    total_end: float,
+    is_substantive: bool,
+    include_title: bool = True,
+) -> str:
+    _ = usable
+    _ = total_start
+    _ = total_end
+    meeting_date, meeting_time = audio_meeting_datetime(audio)
+    title_source = topic_sections[0].title if topic_sections else (summary_points[0] if summary_points else audio.stem)
+    title = compact_topic_title(title_source, "会议纪要")
+    attendee_text = ", ".join(speakers) if speakers else "无信息"
+    summary_text = " ".join(summary_points[:3]).strip()
+    if not summary_text and paragraphs:
+        summary_text = " ".join(paragraph for _, _, paragraph in paragraphs[:2]).strip()
+    if not is_substantive:
+        summary_text = "录音内容不够清晰或不够完整，暂时无法可靠生成完整会议纪要。"
+    elif not summary_text:
+        summary_text = "未检测到足够清晰的摘要内容。"
+
+    topics = topic_sections[:6]
+    if not topics:
+        topics = [
+            TopicSection(
+                start=total_start,
+                end=total_end,
+                title="主要讨论",
+                bullets=["未检测到清晰的讨论要点。"],
+            )
+        ]
+
+    lines: list[str] = []
+    if include_title:
+        lines.extend([f"# {meeting_date}  {title}", ""])
+    lines.extend(
+        [
+            "摘要",
+            summary_text,
+            "",
+            "会议信息",
+            "| 项目 | 说明 |",
+            "| --- | --- |",
+            f"| 会议时间 | {meeting_time} |",
+            "| 会议地点 | 无信息 |",
+            f"| 参会人员 | {attendee_text} |",
+            "",
+            "会议议程",
+        ]
+    )
+
+    for index, topic in enumerate(topics):
+        lines.append(f"- {roman_label(index)}. {compact_chinese_topic_title(topic.title, index)}")
+
+    lines.append("")
+    for index, topic in enumerate(topics):
+        lines.append(f"{roman_label(index)}. {compact_chinese_topic_title(topic.title, index)}")
+        lines.append("核心讨论")
+        bullets = [clean_sentence(bullet) for bullet in topic.bullets if clean_sentence(bullet)]
+        if not bullets:
+            bullets = ["未检测到该议题下的明确支撑信息。"]
+        for bullet in bullets[:5]:
+            lines.append(f"- {bullet}")
+        lines.append("")
+
+    conclusion_items: list[str] = []
+    conclusion_items.extend(sentence for _, sentence in decisions[:4])
+    conclusion_items.extend(sentence for _, sentence in actions[:4])
+    conclusion_items.extend(sentence for _, sentence in risks[:3])
+    if not conclusion_items and is_substantive:
+        conclusion_items = summary_points[:3]
+    if not conclusion_items:
+        conclusion_items = ["未检测到明确结论或后续事项。"]
+
+    lines.append("会议结论")
+    for item in conclusion_items[:8]:
+        lines.append(f"- {clean_sentence(item)}")
+    return "\n".join(lines).strip()
+
+
+def compact_chinese_topic_title(text: str, index: int) -> str:
+    cleaned = compact_topic_title(text, "")
+    if not cleaned or re.match(r"^Topic\s+\d+", cleaned, re.IGNORECASE):
+        return f"主要议题 {index + 1}"
+    if len(re.findall(r"[\u4e00-\u9fff]", cleaned)) >= 2:
+        return cleaned
+    return f"主要议题 {index + 1}"
 
 
 def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_language: str = "en") -> str:
-    if is_chinese_language(notes_language):
-        return chinese_minutes_markdown(audio, transcript)
     cleaned_transcript = [
         TranscriptSegment(
             start=item.start,
@@ -1901,10 +2543,27 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_lan
     actions = extract_action_items(sentences)
     risks = extract_risks(sentences)
     readable_word_count = sum(len(sentence.split()) for _, sentence in sentences)
-    is_substantive = readable_word_count >= 80 and len(sentences) >= 3
-    llm_minutes = llm_minutes_markdown(audio, usable, total_start, total_end, speakers)
+    readable_cjk_count = sum(len(re.findall(r"[\u4e00-\u9fff]", sentence)) for _, sentence in sentences)
+    is_substantive = (readable_word_count >= 80 or readable_cjk_count >= 120) and len(sentences) >= 3
+    llm_minutes = llm_minutes_markdown(audio, usable, total_start, total_end, speakers, notes_language)
     if llm_minutes:
         return llm_minutes
+
+    return fallback_sample_minutes_markdown(
+        audio,
+        usable,
+        paragraphs,
+        topic_sections,
+        summary_points,
+        decisions,
+        actions,
+        risks,
+        speakers,
+        total_start,
+        total_end,
+        is_substantive,
+        notes_language,
+    )
 
     lines = [
         "# Meeting Notes",
@@ -2117,9 +2776,9 @@ def speaker_segments_from_transcript(transcript: list[TranscriptSegment]) -> lis
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Turn a recorded meeting WAV into transcript and meeting-minutes Markdown files.",
+        description="Turn a recorded meeting audio file into transcript and meeting-minutes Markdown files.",
     )
-    parser.add_argument("audio", type=Path, help="Path to recordings/session-*.wav")
+    parser.add_argument("audio", type=Path, help="Path to a recordings/session audio file.")
     parser.add_argument(
         "--asr-engine",
         choices=["faster-whisper", "funasr", "azure-fast", "azure-batch"],
@@ -2155,7 +2814,7 @@ def main() -> int:
         "--asr-chunk-seconds",
         type=int,
         default=600,
-        help="Split long WAV files into ASR chunks. Use 0 to disable. Default: 600",
+        help="Split long audio files into ASR chunks. Use 0 to disable. Default: 600",
     )
     parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--azure-fast-max-speakers", type=int, default=5)

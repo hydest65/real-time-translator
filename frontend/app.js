@@ -3,6 +3,8 @@ const stopButton = document.querySelector("#stopButton");
 const endMeetingButton = document.querySelector("#endMeetingButton");
 const statusText = document.querySelector("#statusText");
 const statusDot = document.querySelector("#statusDot");
+const audioMeter = document.querySelector("#audioMeter");
+const audioMeterBars = audioMeter ? Array.from(audioMeter.querySelectorAll("span")) : [];
 const subtitleStack = document.querySelector("#subtitleStack");
 const azureSubtitleBox = document.querySelector("#azureSubtitleBox");
 const localSubtitleLayout = document.querySelector("#localSubtitleLayout");
@@ -54,6 +56,10 @@ const azureUsageMonthText = document.querySelector("#azureUsageMonthText");
 const azureUsageDayLabel = document.querySelector("#azureUsageDayLabel");
 const azureUsageMonthLabel = document.querySelector("#azureUsageMonthLabel");
 const azureUsageSyncText = document.querySelector("#azureUsageSyncText");
+const setupSection = document.querySelector("#setupSection");
+const setupStatusText = document.querySelector("#setupStatusText");
+const setupDetailText = document.querySelector("#setupDetailText");
+const setupProgressBar = document.querySelector("#setupProgressBar");
 
 let socket = null;
 let finalSubtitleHistory = [];
@@ -69,6 +75,7 @@ let englishDraftPendingAdvance = false;
 let englishDraftTapeWords = [];
 let englishDraftTapeTextsById = new Map();
 let englishContextRenderedText = "";
+let englishContextTargetText = "";
 let englishContextTypeTimer = null;
 let chineseTranslationHistory = [];
 let liveSubtitle = null;
@@ -104,6 +111,13 @@ let azureUsageStartedAt = null;
 let azureUsageTimer = null;
 let azureUsageCloud = null;
 let azureUsageSyncTimer = null;
+let setupReady = false;
+let setupRunning = false;
+let setupSupported = false;
+let setupPollTimer = null;
+let lastSetupPayload = {};
+let audioMeterLevel = 0;
+let audioMeterPhase = 0;
 const maxDisplayHistory = 80;
 const maxChineseFlowCharacters = 520;
 const localDraftPromoteWordCount = 26;
@@ -146,7 +160,151 @@ function cloudCheckStatusText(item) {
 
 function applyDefaultInputMode() {
   audioSource.value = "system";
-  translationEngine.value = "azure";
+  translationEngine.value = "marianmt";
+}
+
+function currentModelSetupView(payload = lastSetupPayload) {
+  const engine = translationEngine?.value || "marianmt";
+  const asrProfile = engine === "azure" ? null : localAsrProfile();
+  const localStatus = payload.status || (setupReady ? "Ready" : "Checking");
+  const localDetail = payload.detail || "Checking local model cache.";
+  if (engine === "azure") {
+    return {
+      status: azureConfigured ? "Cloud ready" : "Cloud setup",
+      detail: azureConfigured
+        ? "Cloud Speech Translation configured. Local models are not used for live cloud mode."
+        : "Cloud Speech Translation is selected, but cloud key or region is missing.",
+      percent: azureConfigured ? 100 : 0,
+      ready: azureConfigured,
+      running: false,
+      error: !azureConfigured,
+    };
+  }
+  if (engine === "marianmt") {
+    return {
+      status: setupRunning ? "Preparing" : setupReady ? "MarianMT CT2" : localStatus,
+      detail: setupReady
+        ? `${asrProfile.model} ${asrProfile.device}/${asrProfile.computeType} + Helsinki-NLP opus-mt-en-zh via CTranslate2 int8_float16.`
+        : localDetail,
+      percent: Number(payload.percent || 0),
+      ready: setupReady,
+      running: setupRunning,
+      error: Boolean(payload.error) && !setupRunning,
+    };
+  }
+  if (engine === "argos") {
+    return {
+      status: setupReady ? "Argos local" : localStatus,
+      detail: setupReady
+        ? `${asrProfile.model} ${asrProfile.device}/${asrProfile.computeType} + Argos Translate package loaded on first use.`
+        : localDetail,
+      percent: Number(payload.percent || 0),
+      ready: setupReady,
+      running: setupRunning,
+      error: Boolean(payload.error) && !setupRunning,
+    };
+  }
+  return {
+    status: setupReady ? "NLLB 600M" : localStatus,
+    detail: setupReady
+      ? `${asrProfile.model} ${asrProfile.device}/${asrProfile.computeType} + facebook/nllb-200-distilled-600M loaded on first use.`
+      : localDetail,
+    percent: Number(payload.percent || 0),
+    ready: setupReady,
+    running: setupRunning,
+    error: Boolean(payload.error) && !setupRunning,
+  };
+}
+
+function renderSetupStatus(payload = {}) {
+  lastSetupPayload = payload;
+  setupReady = Boolean(payload.ready);
+  setupRunning = Boolean(payload.running);
+  const view = currentModelSetupView(payload);
+  const percent = Math.max(0, Math.min(100, Number(view.percent || 0)));
+  if (setupStatusText) {
+    setupStatusText.textContent = view.status;
+    setupStatusText.classList.toggle("muted", !view.ready);
+  }
+  if (setupDetailText) {
+    setupDetailText.textContent = view.detail;
+  }
+  if (setupProgressBar) {
+    setupProgressBar.style.width = `${percent}%`;
+    setupProgressBar.parentElement?.setAttribute("aria-valuenow", String(percent));
+  }
+  if (setupSection) {
+    setupSection.classList.toggle("ready", view.ready);
+    setupSection.classList.toggle("error", Boolean(view.error) && !view.running);
+  }
+  updateMeetingActionButtons();
+}
+
+async function refreshSetupStatus() {
+  try {
+    const response = await fetch("/api/setup-status");
+    const payload = await response.json().catch(() => ({}));
+    if (response.ok) {
+      setupSupported = true;
+      renderSetupStatus(payload);
+    } else {
+      setupSupported = false;
+      renderSetupStatus({
+        ready: true,
+        running: false,
+        status: "Local setup",
+        detail: "Local model setup status is not available on this backend.",
+        percent: 100,
+      });
+    }
+  } catch (error) {
+    setupSupported = false;
+    renderSetupStatus({
+      ready: true,
+      running: false,
+      status: "Local setup",
+      detail: "Local model setup status is not available on this backend.",
+      percent: 100,
+    });
+  }
+}
+
+function scheduleSetupPoll() {
+  if (setupPollTimer) {
+    window.clearTimeout(setupPollTimer);
+  }
+  if (!setupReady && setupRunning) {
+    setupPollTimer = window.setTimeout(async () => {
+      await refreshSetupStatus();
+      scheduleSetupPoll();
+    }, 800);
+  }
+}
+
+async function startFirstRunSetup() {
+  await refreshSetupStatus();
+  if (!setupSupported || setupReady || setupRunning) {
+    scheduleSetupPoll();
+    return;
+  }
+  try {
+    const response = await fetch("/api/prepare-first-run", { method: "POST" });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) {
+      throw new Error(payload.detail || "Could not start local model setup.");
+    }
+    renderSetupStatus(payload);
+    scheduleSetupPoll();
+  } catch (error) {
+    renderSetupStatus({
+      ready: false,
+      running: false,
+      status: "Setup failed",
+      detail: error.message || "Could not start local model setup.",
+      percent: 0,
+      error: "setup-start-failed",
+    });
+  }
 }
 
 async function loadRuntimeConfig() {
@@ -284,9 +442,11 @@ function selectedRecordings() {
 function updateMeetingActionButtons() {
   const isMeetingLive = Boolean(socket && socket.readyState === WebSocket.OPEN);
   const hasSelectedRecordings = selectedRecordings().length > 0;
-  startButton.innerHTML = '<span class="button-glyph start-glyph"></span><span>Start</span>';
+  const setupBlockingLocal = setupSupported && translationEngine.value !== "azure" && !setupReady;
+  const setupLabel = setupRunning ? "Preparing Models" : "Setup Required";
+  startButton.innerHTML = `<span class="button-glyph start-glyph"></span><span>${setupBlockingLocal ? setupLabel : "Start"}</span>`;
   startButton.classList.remove("is-danger", "is-ready");
-  startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive;
+  startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive || setupBlockingLocal;
   endMeetingButton.disabled = isProcessingNotes || (!isMeetingLive && !isRecordingActive);
   openMinutesButton.classList.toggle("hidden", !latestMinutesPath && !isProcessingNotes);
 
@@ -352,13 +512,13 @@ function notesBuildHint() {
       const missing = aliyunTingwuMissing.length ? ` Missing: ${aliyunTingwuMissing.join(", ")}.` : "";
       return `Aliyun Tingwu needs its cloud settings before notes can run. Upload path: ${uploadLabel}.${missing}`;
     }
-    return `Build Notes will use Aliyun Tingwu for speaker-separated cloud transcription and meeting summary via ${uploadLabel}.`;
+    return `Build Notes will use cloud speaker-separated transcription via ${uploadLabel}, then local bilingual notes refinement.`;
   }
   if (notesEngine?.value === "azure-fast") {
     if (!azureConfigured) {
-      return "Cloud Speech is selected, but Azure Speech to Text is not configured yet.";
+      return "Cloud Speech is selected, but cloud speech credentials are not configured yet.";
     }
-    return "Build Notes will use Azure Speech to Text, then refine the transcript locally.";
+    return "Build Notes will use Cloud Speech to Text, then refine the transcript locally.";
   }
   if (notesEngine?.value === "funasr") {
     if (!funasrConfigured) {
@@ -555,12 +715,37 @@ function setStatus(status, detail = "") {
   statusText.textContent = status;
   logText.textContent = providerNeutralText(detail || status);
   updateDelayHintFromStatus(status, detail);
+  const isActiveStatus = ["Connecting", "Listening", "Transcribing", "Translating", "Loading models", "Connecting cloud"].includes(status);
   statusDot.classList.toggle(
     "active",
-    ["Connecting", "Listening", "Transcribing", "Translating", "Loading models", "Connecting cloud"].includes(status),
+    isActiveStatus,
   );
   statusDot.classList.toggle("error", status === "Error");
+  audioMeter?.classList.toggle("active", isActiveStatus);
+  audioMeter?.classList.toggle("error", status === "Error");
+  if (!isActiveStatus) {
+    setAudioMeterLevel(0);
+  }
   updateMeetingActionButtons();
+}
+
+function setAudioMeterLevel(level = 0) {
+  audioMeterLevel = Math.max(0, Math.min(1, Number(level) || 0));
+  audioMeterPhase += 0.45;
+  if (!audioMeter || !audioMeterBars.length) {
+    return;
+  }
+  const active = audioMeter.classList.contains("active");
+  const quietFloor = active ? 0.12 : 0.04;
+  const shape = [0.32, 0.48, 0.7, 0.92, 0.62, 0.84, 1, 0.76, 0.58, 0.88, 0.5, 0.36];
+  audioMeterBars.forEach((bar, index) => {
+    const shimmer = 0.82 + 0.18 * Math.sin(audioMeterPhase + index * 0.9);
+    const strength = quietFloor + audioMeterLevel * shape[index % shape.length] * shimmer;
+    const height = Math.round(4 + Math.min(1, strength) * 17);
+    const alpha = 0.22 + Math.min(1, strength) * 0.62;
+    bar.style.setProperty("--meter-height", `${height}px`);
+    bar.style.setProperty("--meter-alpha", alpha.toFixed(2));
+  });
 }
 
 function formatDuration(milliseconds) {
@@ -1280,6 +1465,7 @@ function renderEnglishContextTypewriter(target, nextText) {
     paragraph.className = "flow-text english-flow-text";
     target.append(paragraph);
     englishContextRenderedText = "";
+    englishContextTargetText = "";
   }
 
   const currentText = paragraph.textContent || "";
@@ -1288,32 +1474,57 @@ function renderEnglishContextTypewriter(target, nextText) {
     englishContextTypeTimer = null;
   }
 
-  if (nextText.length < currentText.length || !nextText.startsWith(currentText)) {
-    const commonPrefix = commonTextPrefix(currentText, nextText);
-    if (commonPrefix.length >= Math.min(24, Math.floor(currentText.length * 0.6))) {
-      englishContextRenderedText = commonPrefix;
-      paragraph.textContent = commonPrefix;
-    } else {
-      englishContextRenderedText = nextText;
-      paragraph.textContent = nextText;
-      paragraph.classList.toggle("typing", Boolean(nextText));
-      return;
-    }
-  } else {
+  englishContextTargetText = nextText;
+  if (nextText === currentText) {
     englishContextRenderedText = currentText;
+    paragraph.classList.toggle("typing", Boolean(nextText));
+    return;
   }
 
-  paragraph.classList.toggle("typing", englishContextRenderedText.length < nextText.length);
+  if (nextText.startsWith(currentText)) {
+    englishContextRenderedText = currentText;
+    paragraph.dataset.rewriteBase = "";
+    paragraph.dataset.rewritePending = "";
+  } else {
+    englishContextRenderedText = currentText;
+    paragraph.dataset.rewriteBase = commonTextPrefix(currentText, nextText);
+    paragraph.dataset.rewritePending = "true";
+  }
+
+  paragraph.classList.toggle("typing", true);
 
   const tick = () => {
-    if (englishContextRenderedText.length >= nextText.length) {
-      paragraph.classList.toggle("typing", Boolean(nextText));
+    const targetText = englishContextTargetText;
+    const rewriteBase = paragraph.dataset.rewriteBase || "";
+    if (paragraph.dataset.rewritePending === "true" && !targetText.startsWith(englishContextRenderedText)) {
+      if (englishContextRenderedText.length > rewriteBase.length) {
+        const deleteStep = Math.max(englishContextTypeChunk * 4, Math.ceil((englishContextRenderedText.length - rewriteBase.length) / 10));
+        englishContextRenderedText = englishContextRenderedText.slice(
+          0,
+          Math.max(rewriteBase.length, englishContextRenderedText.length - deleteStep),
+        );
+        paragraph.textContent = englishContextRenderedText;
+        englishContextTypeTimer = window.setTimeout(tick, englishContextTypeDelayMs);
+        return;
+      }
+      paragraph.dataset.rewriteBase = "";
+      paragraph.dataset.rewritePending = "";
+    }
+
+    if (englishContextRenderedText.length >= targetText.length) {
+      paragraph.classList.toggle("typing", Boolean(targetText));
       englishContextTypeTimer = null;
       return;
     }
-    englishContextRenderedText = nextText.slice(
+    const remaining = targetText.length - englishContextRenderedText.length;
+    const typeChunk = remaining > 1000
+      ? englishContextTypeChunk * 6
+      : remaining > 400
+      ? englishContextTypeChunk * 3
+      : englishContextTypeChunk;
+    englishContextRenderedText = targetText.slice(
       0,
-      Math.min(nextText.length, englishContextRenderedText.length + englishContextTypeChunk),
+      Math.min(targetText.length, englishContextRenderedText.length + typeChunk),
     );
     paragraph.textContent = englishContextRenderedText;
     if (autoFollowEnglishContext) {
@@ -1379,6 +1590,7 @@ function updateEngineControls() {
     applyLocalAsrPreset();
     applyLocalLatencyPreset();
   }
+  renderSetupStatus(lastSetupPayload);
 }
 
 function recordTranscriptEntry(item, mode) {
@@ -1543,7 +1755,7 @@ function formatDateTime(value) {
 }
 
 function localAsrProfile() {
-  const preset = localAsrPreset?.value || "igpu";
+  const preset = localAsrPreset?.value || "hp";
   const isSystemAudio = audioSource?.value === "system";
   if (preset === "igpu" || preset === "fast") {
     return {
@@ -1565,20 +1777,20 @@ function localAsrProfile() {
   }
   if (preset === "hp" || preset === "t600" || preset === "accurate") {
     return {
-      model: "small.en",
-      computeType: "int8_float16",
+      model: "medium.en",
+      computeType: "int8",
       device: "cuda",
       beamSize: 3,
       bestOf: 3,
-      patience: 1.2,
-      conditionOnPreviousText: false,
+      patience: 1.1,
+      conditionOnPreviousText: true,
       noSpeechThreshold: isSystemAudio ? 0.66 : 0.55,
       logProbThreshold: isSystemAudio ? -0.9 : -1.2,
       compressionRatioThreshold: 2.4,
       hallucinationSilenceThreshold: isSystemAudio ? 0.9 : 1.5,
       repetitionPenalty: 1.06,
       noRepeatNgramSize: 3,
-      label: "HP: 16GB RAM assumed - small / int8_float16 / beam 3",
+      label: "5070Ti: medium.en / cuda int8 / beam 3",
     };
   }
   return {
@@ -1616,18 +1828,18 @@ function applyLocalLatencyPreset() {
     return;
   }
   if (localLatencyPreset.value === "low") {
-    chunkSeconds.value = "2";
+    chunkSeconds.value = "1.5";
   } else {
-    chunkSeconds.value = "3";
+    chunkSeconds.value = "2";
   }
 }
 
 function effectiveLocalChunkSeconds(isLowLatencyLocal) {
   const selectedChunk = Number(chunkSeconds.value);
   if (!isLowLatencyLocal) {
-    return Math.min(Math.max(selectedChunk || 3, 2), 3);
+    return Math.min(selectedChunk || 2, 2);
   }
-  const cappedChunk = Math.min(Math.max(selectedChunk || 2, 1.5), 2);
+  const cappedChunk = Math.min(selectedChunk || 1.5, 1.5);
   chunkSeconds.value = String(cappedChunk);
   return cappedChunk;
 }
@@ -1637,13 +1849,13 @@ function localRealtimeTuning() {
   const isSystemAudio = audioSource?.value === "system";
   if (isLowLatencyLocal) {
     return {
-      overlap_seconds: isSystemAudio ? 0.15 : 0.3,
+      overlap_seconds: isSystemAudio ? 0.25 : 0.3,
       adaptive_chunking_enabled: !isSystemAudio,
-      min_chunk_seconds: isSystemAudio ? 2 : 1,
+      min_chunk_seconds: isSystemAudio ? 1.5 : 1,
       chunk_flush_silence_seconds: isSystemAudio ? 0 : 0.35,
-      queue_max_size: 2,
-      segmenter_pause_seconds: isSystemAudio ? 1.1 : 0.9,
-      segmenter_max_words: isSystemAudio ? 22 : 28,
+      queue_max_size: 1,
+      segmenter_pause_seconds: isSystemAudio ? 0.8 : 0.9,
+      segmenter_max_words: isSystemAudio ? 24 : 28,
       segmenter_max_seconds: isSystemAudio ? 6 : 8,
       context_buffer_enabled: false,
       context_buffer_min_words: 10,
@@ -1652,14 +1864,14 @@ function localRealtimeTuning() {
     };
   }
   return {
-    overlap_seconds: isSystemAudio ? 0.2 : 0.5,
+    overlap_seconds: isSystemAudio ? 0.3 : 0.5,
     adaptive_chunking_enabled: !isSystemAudio,
-    min_chunk_seconds: isSystemAudio ? 3 : 1.5,
+    min_chunk_seconds: isSystemAudio ? 2 : 1.5,
     chunk_flush_silence_seconds: isSystemAudio ? 0 : 0.45,
-    queue_max_size: 2,
-    segmenter_pause_seconds: 1.2,
-    segmenter_max_words: isSystemAudio ? 30 : 36,
-    segmenter_max_seconds: isSystemAudio ? 9 : 12,
+    queue_max_size: 1,
+    segmenter_pause_seconds: 1.1,
+    segmenter_max_words: isSystemAudio ? 32 : 36,
+    segmenter_max_seconds: isSystemAudio ? 8 : 12,
     context_buffer_enabled: false,
     context_buffer_min_words: 14,
     context_buffer_max_words: 52,
@@ -1708,6 +1920,13 @@ function start() {
   if (socket && socket.readyState === WebSocket.OPEN) {
     return;
   }
+  if (setupSupported && translationEngine.value !== "azure" && !setupReady) {
+    noticeText.textContent = "Preparing local models";
+    logText.textContent = "Local model setup is still running. Watch the setup progress panel, then start captions when it reaches Ready.";
+    startFirstRunSetup();
+    updateMeetingActionButtons();
+    return;
+  }
   isLiveSessionActive = true;
   if (translationEngine.value === "azure" && !azureConfigured) {
     noticeText.textContent = "Cloud not configured";
@@ -1732,6 +1951,7 @@ function start() {
   englishDraftTapeWords = [];
   englishDraftTapeTextsById = new Map();
   englishContextRenderedText = "";
+  englishContextTargetText = "";
   if (englishContextTypeTimer) {
     clearTimeout(englishContextTypeTimer);
     englishContextTypeTimer = null;
@@ -1824,6 +2044,10 @@ function start() {
     }
     if (payload.type === "status") {
       setStatus(payload.status, providerNeutralText(payload.detail));
+      return;
+    }
+    if (payload.type === "audioLevel") {
+      setAudioMeterLevel(payload.level);
       return;
     }
     if (payload.type === "notice") {
@@ -2109,6 +2333,7 @@ downloadMinutesButton.addEventListener("click", () => {
 translationEngine.addEventListener("change", updateEngineControls);
 translationEngine.addEventListener("change", updateLanguageHints);
 translationEngine.addEventListener("change", renderAzureUsage);
+translationEngine.addEventListener("change", updateMeetingActionButtons);
 notesEngine?.addEventListener("change", updateMeetingActionButtons);
 localAsrPreset.addEventListener("change", applyLocalAsrPreset);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
@@ -2126,6 +2351,7 @@ updateEngineControls();
 updateLanguageHints();
 renderAzureUsage();
 startAzureUsageCloudPolling();
+startFirstRunSetup();
 loadRuntimeConfig();
 refreshLatestMinutesState();
 refreshRecordings();

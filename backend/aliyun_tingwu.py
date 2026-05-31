@@ -326,7 +326,7 @@ def upload_audio_to_relay(
 ) -> TingwuUploadRef:
     boundary = f"subtitle-studio-{uuid.uuid4().hex}"
     filename = audio.name
-    content_type = "audio/wav" if audio.suffix.lower() == ".wav" else "application/octet-stream"
+    content_type = "audio/flac" if audio.suffix.lower() == ".flac" else "audio/wav" if audio.suffix.lower() == ".wav" else "application/octet-stream"
     head = (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
@@ -471,16 +471,10 @@ def create_tingwu_task(
     )
     parameters = tingwu_models.CreateTaskRequestParameters(
         transcription=transcription,
-        meeting_assistance_enabled=True,
-        meeting_assistance=tingwu_models.CreateTaskRequestParametersMeetingAssistance(
-            types=["Actions", "KeyInformation"]
-        ),
-        summarization_enabled=True,
-        summarization=tingwu_models.CreateTaskRequestParametersSummarization(
-            types=["Paragraph", "Conversational", "QuestionsAnswering"]
-        ),
-        text_polish_enabled=True,
-        auto_chapters_enabled=True,
+        meeting_assistance_enabled=False,
+        summarization_enabled=False,
+        text_polish_enabled=False,
+        auto_chapters_enabled=False,
         translation_enabled=False,
         llm_output_language="cn",
     )
@@ -494,7 +488,7 @@ def create_tingwu_task(
         ),
         parameters=parameters,
     )
-    print("Aliyun Tingwu: creating cloud meeting-notes task", flush=True)
+    print("Aliyun Tingwu: creating cloud transcription task", flush=True)
     if progress_callback:
         progress_callback("submitting", "Submitting the recording to Aliyun Tingwu.", None)
     response = client.create_task(request)
@@ -559,7 +553,7 @@ def build_tingwu_notes(
     )
     print("Aliyun Tingwu: downloading task results", flush=True)
     if progress_callback:
-        progress_callback("downloading", "Downloading Tingwu transcript and meeting-notes results.", None)
+        progress_callback("downloading", "Downloading Tingwu transcript result.", None)
     notes.transcript_json = download_json(notes.transcript_url)
     notes.meeting_json = download_json(notes.meeting_url)
     notes.summary_json = download_json(notes.summary_url)

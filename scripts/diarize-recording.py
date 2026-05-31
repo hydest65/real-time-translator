@@ -15,9 +15,9 @@ def format_time(seconds: float) -> str:
 
 def main() -> int:
     parser = argparse.ArgumentParser(
-        description="Post-process a meeting WAV file with local speaker diarization.",
+        description="Post-process a meeting audio file with local speaker diarization.",
     )
-    parser.add_argument("audio", type=Path, help="Path to the recorded meeting WAV file.")
+    parser.add_argument("audio", type=Path, help="Path to the recorded meeting audio file.")
     parser.add_argument(
         "--model",
         default="pyannote/speaker-diarization-3.1",
@@ -54,20 +54,13 @@ def main() -> int:
     try:
         import numpy as np
         import torch
-        from scipy.io import wavfile
+        import soundfile as sf
     except ImportError:
         diarization = pipeline(str(args.audio))
     else:
-        sample_rate, samples = wavfile.read(str(args.audio))
+        samples, sample_rate = sf.read(str(args.audio), dtype="float32", always_2d=True)
         samples = np.asarray(samples)
-        if samples.ndim == 1:
-            samples = samples[None, :]
-        else:
-            samples = samples.T
-        if np.issubdtype(samples.dtype, np.integer):
-            samples = samples.astype("float32") / float(np.iinfo(samples.dtype).max)
-        else:
-            samples = samples.astype("float32")
+        samples = samples.T
         waveform = torch.from_numpy(samples)
         diarization = pipeline({"waveform": waveform, "sample_rate": int(sample_rate)})
     if hasattr(diarization, "speaker_diarization"):

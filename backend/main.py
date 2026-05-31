@@ -43,10 +43,26 @@ RECORDING_RESUME_SECONDS = 5 * 60
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
 active_recording_path: Path | None = None
 last_recording_stop_at = 0.0
-RECORDING_PATTERNS = ("rec-*.wav", "session-*.wav")
+AUDIO_RECORDING_SUFFIXES = {".wav", ".flac"}
+RECORDING_PATTERNS = ("rec-*.flac", "rec-*.wav", "session-*.flac", "session-*.wav")
 MINUTES_PATTERNS = ("rec-*.minutes.docx", "rec-*.minutes.md", "session-*.minutes.docx", "session-*.minutes.md")
 POST_MEETING_TIMEOUT_SECONDS = 30 * 60
 active_post_meeting_process: asyncio.subprocess.Process | None = None
+post_meeting_writer_module: Any | None = None
+FIRST_RUN_READY_MARKER = ROOT / ".model-cache" / "first-run-ready-5070ti-v1.json"
+MARIAN_CT2_MODEL = ROOT / ".model-cache" / "marianmt-ct2" / "Helsinki-NLP_opus-mt-en-zh-int8_float16" / "model.bin"
+MARIAN_CT2_TOKENIZER = MARIAN_CT2_MODEL.parent / "tokenizer_config.json"
+WHISPER_MEDIUM_CACHE = ROOT / ".cache" / "huggingface" / "hub" / "models--Systran--faster-whisper-medium.en" / "snapshots"
+first_run_setup_task: asyncio.Task | None = None
+first_run_setup_state: dict[str, Any] = {
+    "ready": False,
+    "running": False,
+    "status": "Checking",
+    "detail": "Checking local model cache.",
+    "percent": 0,
+    "error": "",
+    "updatedAt": time.time(),
+}
 post_meeting_progress: dict[str, Any] = {
     "ok": True,
     "running": False,
@@ -446,6 +462,8 @@ class Runtime:
                 or self.current_config.nllb_model_name != next_config.nllb_model_name
                 or self.current_config.marian_en_zh_model_name != next_config.marian_en_zh_model_name
                 or self.current_config.marian_es_zh_model_name != next_config.marian_es_zh_model_name
+                or self.current_config.marianmt_backend != next_config.marianmt_backend
+                or self.current_config.marianmt_ct2_compute_type != next_config.marianmt_ct2_compute_type
             )
 
             if needs_asr:
@@ -484,6 +502,8 @@ class Runtime:
                         next_config.marian_en_zh_model_name,
                         next_config.marian_es_zh_model_name,
                         next_config.asr_device,
+                        next_config.marianmt_backend,
+                        next_config.marianmt_ct2_compute_type,
                     )
                 else:
                     print("[load] NLLB", flush=True)
@@ -753,6 +773,134 @@ async def health() -> dict[str, Any]:
     return {"ok": True, "message": "Backend is running", "config": public_config_payload(runtime.current_config)}
 
 
+def first_run_models_ready() -> bool:
+    return (
+        FIRST_RUN_READY_MARKER.exists()
+        and whisper_medium_ready()
+        and MARIAN_CT2_MODEL.exists()
+        and MARIAN_CT2_TOKENIZER.exists()
+    )
+
+
+def whisper_medium_ready() -> bool:
+    if not WHISPER_MEDIUM_CACHE.exists():
+        return False
+    return any(
+        (snapshot / "model.bin").exists()
+        and (snapshot / "config.json").exists()
+        and (snapshot / "tokenizer.json").exists()
+        for snapshot in WHISPER_MEDIUM_CACHE.iterdir()
+        if snapshot.is_dir()
+    )
+
+
+def update_first_run_setup_state(**updates: Any) -> None:
+    first_run_setup_state.update(updates)
+    first_run_setup_state["updatedAt"] = time.time()
+
+
+async def read_setup_stream(stream: asyncio.StreamReader | None, is_error: bool = False) -> None:
+    if stream is None:
+        return
+    prefix = "[subtitle-studio-progress] "
+    while True:
+        line = await stream.readline()
+        if not line:
+            break
+        text = line.decode("utf-8", errors="replace").strip()
+        if not text:
+            continue
+        if text.startswith(prefix):
+            try:
+                payload = json.loads(text[len(prefix) :])
+            except json.JSONDecodeError:
+                continue
+            update_first_run_setup_state(
+                status=payload.get("status") or first_run_setup_state["status"],
+                detail=payload.get("detail") or first_run_setup_state["detail"],
+                percent=int(payload.get("percent") or first_run_setup_state["percent"]),
+                error="",
+            )
+        elif is_error:
+            update_first_run_setup_state(detail=text[-260:])
+
+
+async def run_first_run_setup() -> None:
+    script_path = ROOT / "scripts" / "prepare-first-run.py"
+    update_first_run_setup_state(
+        ready=False,
+        running=True,
+        status="Starting",
+        detail="Starting local model preparation.",
+        percent=2,
+        error="",
+    )
+    process = await asyncio.create_subprocess_exec(
+        sys.executable,
+        str(script_path),
+        cwd=str(ROOT),
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    await asyncio.gather(
+        read_setup_stream(process.stdout),
+        read_setup_stream(process.stderr, True),
+    )
+    return_code = await process.wait()
+    if return_code == 0 and first_run_models_ready():
+        update_first_run_setup_state(
+            ready=True,
+            running=False,
+            status="Ready",
+            detail="Local 5070Ti models are ready.",
+            percent=100,
+            error="",
+        )
+    else:
+        detail = first_run_setup_state.get("detail") or "Model preparation failed."
+        update_first_run_setup_state(
+            ready=False,
+            running=False,
+            status="Failed",
+            detail=detail,
+            percent=0,
+            error=detail,
+        )
+
+
+@app.get("/api/setup-status")
+async def setup_status() -> dict[str, Any]:
+    if first_run_models_ready():
+        update_first_run_setup_state(
+            ready=True,
+            running=False,
+            status="Ready",
+            detail="Local 5070Ti models are ready.",
+            percent=100,
+            error="",
+        )
+    return dict(first_run_setup_state)
+
+
+@app.post("/api/prepare-first-run")
+async def prepare_first_run() -> dict[str, Any]:
+    global first_run_setup_task
+    if first_run_models_ready():
+        update_first_run_setup_state(
+            ready=True,
+            running=False,
+            status="Ready",
+            detail="Local 5070Ti models are already cached.",
+            percent=100,
+            error="",
+        )
+        return dict(first_run_setup_state)
+    if first_run_setup_task is None or first_run_setup_task.done():
+        first_run_setup_task = asyncio.create_task(run_first_run_setup())
+    update_first_run_setup_state(running=True)
+    return dict(first_run_setup_state)
+
+
 @app.get("/api/aliyun-tingwu-diagnostics")
 async def aliyun_tingwu_diagnostics(uploadProvider: str = "") -> dict[str, Any]:
     return diagnose_tingwu_setup(uploadProvider)
@@ -935,6 +1083,73 @@ def set_post_meeting_progress(**updates: Any) -> None:
     post_meeting_progress["percent"] = max(0, min(100, int(post_meeting_progress.get("percent") or 0)))
 
 
+def load_post_meeting_writer_module() -> Any:
+    global post_meeting_writer_module
+    if post_meeting_writer_module is not None:
+        return post_meeting_writer_module
+    module_name = "subtitle_studio_process_recording"
+    script_path = ROOT / "scripts" / "process-recording.py"
+    spec = importlib.util.spec_from_file_location(module_name, script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Could not load meeting-notes writer from {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[module_name] = module
+    spec.loader.exec_module(module)
+    post_meeting_writer_module = module
+    return module
+
+
+def tingwu_transcript_for_local_writer(notes: Any) -> list[Any]:
+    writer = load_post_meeting_writer_module()
+    transcript: list[Any] = []
+    for item in notes.segments:
+        speaker_id = re.sub(r"\D+", "", str(item.speaker or ""))
+        speaker = f"SPEAKER_{int(speaker_id):02d}" if speaker_id else str(item.speaker or "Speaker ?")
+        transcript.append(
+            writer.TranscriptSegment(
+                start=float(item.start or 0.0),
+                end=float(item.end or item.start or 0.0),
+                text=str(item.text or "").strip(),
+                speaker=speaker,
+            )
+        )
+    return [item for item in transcript if item.text]
+
+
+def render_tingwu_local_writer_minutes(audio: Path, notes: Any, notes_language: str = "en") -> str:
+    writer = load_post_meeting_writer_module()
+    transcript = tingwu_transcript_for_local_writer(notes)
+    if not transcript:
+        return ""
+    total_start = min((item.start for item in transcript), default=0.0)
+    total_end = max((item.end for item in transcript), default=0.0)
+    speakers = sorted({item.speaker for item in transcript if item.speaker})
+    llm_minutes = writer.llm_minutes_markdown(audio, transcript, total_start, total_end, speakers, notes_language)
+    if llm_minutes:
+        return llm_minutes
+    return writer.minutes_markdown(audio, transcript, notes_language)
+
+
+def render_tingwu_speaker_segments_markdown(audio_path: Path, notes: Any) -> None:
+    transcript = tingwu_transcript_for_local_writer(notes)
+    if not transcript:
+        return
+    writer = load_post_meeting_writer_module()
+    speaker_segments = writer.speaker_segments_from_transcript(transcript)
+    if not speaker_segments:
+        return
+    speakers_path = audio_path.with_suffix(".speakers.md")
+    lines = [
+        "# Speaker Segments",
+        "",
+        "These are anonymous speaker clusters from the cloud transcription result, not verified real names.",
+        "",
+    ]
+    for item in speaker_segments:
+        lines.append(f"- {writer.format_time(item.start)}-{writer.format_time(item.end)} `{item.speaker}`")
+    speakers_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 async def process_one_tingwu_recording(
     audio_path: Path,
     notes_language: str,
@@ -1009,7 +1224,7 @@ async def process_one_tingwu_recording(
         running=True,
         percent=max_percent,
         stage="writing",
-        message=f"Writing Aliyun Tingwu meeting-notes files for {audio_path.name}.",
+        message=f"Refining {audio_path.name} into local bilingual meeting notes.",
         recording=audio_path.name,
         current=index,
         total=total,
@@ -1022,9 +1237,11 @@ async def process_one_tingwu_recording(
     tingwu_meeting_json_path = audio_path.with_suffix(".tingwu.meeting.json")
     tingwu_polish_json_path = audio_path.with_suffix(".tingwu.polish.json")
     transcript_text = render_tingwu_transcript(audio_path, notes)
-    minutes_text = render_tingwu_minutes(audio_path, notes, notes_language)
+    local_minutes_text = await asyncio.to_thread(render_tingwu_local_writer_minutes, audio_path, notes, notes_language)
+    minutes_text = local_minutes_text or render_tingwu_minutes(audio_path, notes, notes_language)
     transcript_path.write_text(transcript_text, encoding="utf-8")
     minutes_path.write_text(minutes_text, encoding="utf-8")
+    render_tingwu_speaker_segments_markdown(audio_path, notes)
     tingwu_transcript_json_path.write_text(json.dumps(notes.transcript_json, ensure_ascii=False, indent=2), encoding="utf-8")
     tingwu_summary_json_path.write_text(json.dumps(notes.summary_json, ensure_ascii=False, indent=2), encoding="utf-8")
     tingwu_meeting_json_path.write_text(json.dumps(notes.meeting_json, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1033,7 +1250,8 @@ async def process_one_tingwu_recording(
     logs.append(
         "\n".join(
             [
-                "Aliyun Tingwu: completed cloud meeting-notes task.",
+                "Aliyun Tingwu: completed cloud transcription and speaker-separation task.",
+                "Final notes writer: local LLM/rules from Tingwu transcript." if local_minutes_text else "Final notes writer: Tingwu fallback renderer.",
                 f"TaskId: {notes.task_id}",
                 f"Segments: {len(notes.segments)}",
                 f"Wrote {transcript_path}",
@@ -1097,7 +1315,7 @@ async def process_one_recording(
         "--language",
         notes_language,
         "--notes-language",
-        "en",
+        notes_language,
         "--device",
         post_meeting_device(),
         cwd=str(ROOT),
@@ -1364,7 +1582,15 @@ def recording_duration_seconds(path: Path) -> float:
             if frame_rate:
                 return wav_file.getnframes() / frame_rate
     except (OSError, wave.Error):
-        return 0.0
+        pass
+    try:
+        import soundfile as sf
+
+        info = sf.info(str(path))
+        if info.samplerate:
+            return float(info.frames) / float(info.samplerate)
+    except Exception:
+        pass
     return 0.0
 
 
@@ -1478,7 +1704,8 @@ def post_meeting_mode_message(ui_engine: object, effective_engine: str, notes_la
     if selected_engine in {"azure-fast", "cloud-fast", "cloud"}:
         return f"Cloud Speech mode: using Azure Speech to Text for {language_label}, then local notes refinement. Speaker separation is not used in this mode."
     if selected_engine in {"aliyun-tingwu", "tingwu", "aliyun"}:
-        return f"Aliyun Tingwu mode: cloud meeting notes for {language_label} with speaker separation and AI summary."
+        notes_label = "Chinese notes refinement" if is_chinese_post_meeting_language(notes_language) else "bilingual notes refinement"
+        return f"Aliyun Tingwu mode: cloud transcription and speaker separation for {language_label}, then local {notes_label}."
     if selected_engine in {"funasr", "local-funasr", "local"}:
         return f"Local mode: using FunASR transcription for {language_label} without speaker separation."
     return f"Local mode: using local transcription for {language_label} without speaker separation."
@@ -1551,7 +1778,11 @@ def resolve_recording_paths(requested_recordings: object) -> list[Path]:
         try:
             requested_path = requested_path.resolve()
             recordings_root = RECORDINGS_DIR.resolve()
-            if recordings_root == requested_path.parent and requested_path.suffix.lower() == ".wav" and requested_path.exists():
+            if (
+                recordings_root == requested_path.parent
+                and requested_path.suffix.lower() in AUDIO_RECORDING_SUFFIXES
+                and requested_path.exists()
+            ):
                 paths.append(requested_path)
         except OSError:
             pass
@@ -1905,6 +2136,202 @@ def word_table_cell(text: str, width: str, is_header: bool) -> str:
     )
 
 
+def write_minutes_docx(markdown_path: Path, docx_path: Path) -> None:
+    body_parts: list[str] = []
+    lines = markdown_path.read_text(encoding="utf-8", errors="replace").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index].strip()
+        if not line:
+            index += 1
+            continue
+        if line in {"Summary", "摘要"}:
+            summary_text = ""
+            next_index = index + 1
+            while next_index < len(lines):
+                candidate = lines[next_index].strip()
+                if candidate:
+                    summary_text = candidate
+                    break
+                next_index += 1
+            body_parts.append(sample_summary_paragraph_xml(summary_text, line))
+            index = next_index + 1
+            continue
+        if is_markdown_table_line(line):
+            table_lines: list[str] = []
+            while index < len(lines):
+                candidate = lines[index].strip()
+                if not is_markdown_table_line(candidate):
+                    break
+                table_lines.append(candidate)
+                index += 1
+            table_xml = markdown_table_xml(table_lines)
+            if table_xml:
+                body_parts.append(table_xml)
+            continue
+
+        style = "Body"
+        text = line
+        if line.startswith("# "):
+            style = "Title"
+            text = line[2:].strip()
+        elif line.startswith("- [ ] "):
+            style = "Bullet"
+            text = line[6:].strip()
+        elif line.startswith("- "):
+            style = "Bullet"
+            text = line[2:].strip()
+        elif is_sample_minutes_heading(line):
+            style = "Heading"
+        body_parts.append(sample_word_paragraph_xml(text, style))
+        index += 1
+
+    document_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        "<w:body>"
+        + "".join(body_parts)
+        + '<w:sectPr><w:pgSz w:w="11906" w:h="16838"/>'
+        '<w:pgMar w:top="1440" w:right="1800" w:bottom="1440" w:left="1800" w:header="720" w:footer="720" w:gutter="0"/>'
+        "</w:sectPr></w:body></w:document>"
+    )
+    content_types_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">'
+        '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>'
+        '<Default Extension="xml" ContentType="application/xml"/>'
+        '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>'
+        '<Override PartName="/word/numbering.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.numbering+xml"/>'
+        "</Types>"
+    )
+    root_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>'
+        "</Relationships>"
+    )
+    document_rels_xml = (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">'
+        '<Relationship Id="rIdNumbering" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/numbering" Target="numbering.xml"/>'
+        "</Relationships>"
+    )
+    with zipfile.ZipFile(docx_path, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+        archive.writestr("[Content_Types].xml", content_types_xml)
+        archive.writestr("_rels/.rels", root_rels_xml)
+        archive.writestr("word/_rels/document.xml.rels", document_rels_xml)
+        archive.writestr("word/document.xml", document_xml)
+        archive.writestr("word/numbering.xml", sample_numbering_xml())
+
+
+def is_sample_minutes_heading(line: str) -> bool:
+    if line in {"English Minutes", "中文纪要", "Meeting Information", "Meeting Agenda", "Meeting Conclusions", "会议信息", "会议议程", "会议结论"}:
+        return True
+    if re.match(r"^(I|II|III|IV|V|VI|VII|VIII|IX|X)\.\s+\S", line):
+        return True
+    return len(line) <= 90 and not line.endswith(".")
+
+
+def sample_word_paragraph_xml(text: str, style: str) -> str:
+    safe_text = escape(text)
+    if style == "Title":
+        p_props = '<w:spacing w:after="180"/>'
+        r_props = sample_run_props(size=32, bold=False)
+    elif style == "Heading":
+        p_props = '<w:spacing w:before="120" w:after="60"/>'
+        r_props = sample_run_props(size=21, bold=True)
+    elif style == "Bullet":
+        p_props = (
+            '<w:numPr><w:ilvl w:val="0"/><w:numId w:val="1"/></w:numPr>'
+            '<w:spacing w:after="50"/>'
+            '<w:ind w:left="720" w:hanging="360"/>'
+        )
+        r_props = sample_run_props(size=21, bold=False)
+    else:
+        p_props = '<w:spacing w:after="80"/>'
+        r_props = sample_run_props(size=21, bold=False)
+    return f'<w:p><w:pPr>{p_props}</w:pPr><w:r><w:rPr>{r_props}</w:rPr><w:t xml:space="preserve">{safe_text}</w:t></w:r></w:p>'
+
+
+def sample_summary_paragraph_xml(summary_text: str, label: str = "Summary") -> str:
+    safe_summary = escape(summary_text or "No substantial transcript text was captured.")
+    safe_label = escape(label)
+    bold_props = sample_run_props(size=21, bold=True)
+    body_props = sample_run_props(size=21, bold=False)
+    return (
+        '<w:p><w:pPr><w:spacing w:after="120"/></w:pPr>'
+        f'<w:r><w:rPr>{bold_props}</w:rPr><w:t>{safe_label}</w:t><w:br/></w:r>'
+        f'<w:r><w:rPr>{body_props}</w:rPr><w:t xml:space="preserve">{safe_summary}</w:t></w:r>'
+        "</w:p>"
+    )
+
+
+def sample_run_props(size: int, bold: bool = False) -> str:
+    bold_xml = "<w:b/>" if bold else ""
+    return (
+        f'{bold_xml}<w:sz w:val="{size}"/><w:color w:val="181C1F"/>'
+        '<w:rFonts w:ascii="Segoe UI" w:eastAsia="Microsoft YaHei" w:hAnsi="Segoe UI"/>'
+    )
+
+
+def sample_numbering_xml() -> str:
+    return (
+        '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>'
+        '<w:numbering xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">'
+        '<w:abstractNum w:abstractNumId="0">'
+        '<w:multiLevelType w:val="hybridMultilevel"/>'
+        '<w:lvl w:ilvl="0">'
+        '<w:start w:val="1"/><w:numFmt w:val="bullet"/><w:lvlText w:val="•"/><w:lvlJc w:val="left"/>'
+        '<w:pPr><w:ind w:left="720" w:hanging="360"/></w:pPr>'
+        '<w:rPr><w:rFonts w:ascii="Symbol" w:hAnsi="Symbol"/></w:rPr>'
+        '</w:lvl></w:abstractNum>'
+        '<w:num w:numId="1"><w:abstractNumId w:val="0"/></w:num>'
+        "</w:numbering>"
+    )
+
+
+def markdown_table_xml(lines: list[str]) -> str:
+    rows = [parse_markdown_table_row(line) for line in lines if line.strip()]
+    if len(rows) < 2 or not is_markdown_separator_row(rows[1]):
+        return ""
+    data_rows = [rows[0]] + rows[2:]
+    column_count = max(len(row) for row in data_rows) if data_rows else 0
+    if column_count == 0:
+        return ""
+    normalized_rows = [row + [""] * (column_count - len(row)) for row in data_rows]
+    width = str(int(9000 / max(1, column_count)))
+    xml_rows = [
+        "<w:tr>" + "".join(word_table_cell(cell, width, row_index == 0) for cell in row) + "</w:tr>"
+        for row_index, row in enumerate(normalized_rows)
+    ]
+    return (
+        '<w:tbl>'
+        '<w:tblPr><w:tblW w:w="0" w:type="auto"/>'
+        '<w:tblBorders>'
+        '<w:top w:val="single" w:sz="4" w:space="0" w:color="B7B7B7"/>'
+        '<w:left w:val="single" w:sz="4" w:space="0" w:color="B7B7B7"/>'
+        '<w:bottom w:val="single" w:sz="4" w:space="0" w:color="B7B7B7"/>'
+        '<w:right w:val="single" w:sz="4" w:space="0" w:color="B7B7B7"/>'
+        '<w:insideH w:val="single" w:sz="4" w:space="0" w:color="B7B7B7"/>'
+        '<w:insideV w:val="single" w:sz="4" w:space="0" w:color="B7B7B7"/>'
+        '</w:tblBorders></w:tblPr>'
+        + "".join(xml_rows)
+        + "</w:tbl>"
+    )
+
+
+def word_table_cell(text: str, width: str, is_header: bool) -> str:
+    safe_text = escape(text)
+    run_props = sample_run_props(size=21, bold=is_header)
+    return (
+        "<w:tc>"
+        f'<w:tcPr><w:tcW w:w="{width}" w:type="dxa"/></w:tcPr>'
+        '<w:p><w:pPr><w:spacing w:before="40" w:after="40"/></w:pPr>'
+        f'<w:r><w:rPr>{run_props}</w:rPr><w:t xml:space="preserve">{safe_text}</w:t></w:r>'
+        "</w:p></w:tc>"
+    )
+
+
 def build_config(payload: dict[str, Any]) -> AppConfig:
     merged = asdict(config)
     for key, value in payload.items():
@@ -1924,6 +2351,10 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["chunk_flush_silence_seconds"] = max(0.0, min(1.0, float(merged["chunk_flush_silence_seconds"])))
     if merged["asr_compute_type"] not in ("int8", "int8_float16", "float16", "float32"):
         merged["asr_compute_type"] = "int8"
+    if merged["marianmt_backend"] not in ("auto", "ctranslate2", "transformers"):
+        merged["marianmt_backend"] = "auto"
+    if merged["marianmt_ct2_compute_type"] not in ("default", "int8", "int8_float16", "float16", "float32"):
+        merged["marianmt_ct2_compute_type"] = "int8_float16"
     merged["asr_beam_size"] = max(1, min(5, int(merged["asr_beam_size"])))
     merged["asr_best_of"] = max(1, min(5, int(merged["asr_best_of"])))
     merged["asr_patience"] = max(0.8, min(1.5, float(merged["asr_patience"])))
@@ -1940,6 +2371,8 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
     merged["queue_max_size"] = max(1, min(4, int(merged["queue_max_size"])))
     merged["audio_sample_rate"] = int(merged["audio_sample_rate"])
     merged["audio_channels"] = int(merged["audio_channels"])
+    if merged["recording_format"] not in ("flac", "wav"):
+        merged["recording_format"] = "flac"
     merged["vad_rms_threshold"] = float(merged["vad_rms_threshold"])
     merged["system_vad_rms_threshold"] = max(0.004, min(0.05, float(merged["system_vad_rms_threshold"])))
     if merged["audio_source"] not in ("microphone", "system"):
@@ -1987,18 +2420,21 @@ def effective_vad_rms_threshold(active_config: AppConfig) -> float:
     return active_config.vad_rms_threshold
 
 
-def session_recording_path() -> Path:
+def session_recording_path(recording_format: str = "flac") -> Path:
     global active_recording_path
+    suffix = ".wav" if recording_format == "wav" else ".flac"
     now = time.time()
     if (
-        active_recording_path is not None
+        suffix == ".wav"
+        and active_recording_path is not None
+        and active_recording_path.suffix.lower() == suffix
         and active_recording_path.exists()
         and now - last_recording_stop_at <= RECORDING_RESUME_SECONDS
     ):
         return active_recording_path
 
     timestamp = datetime.now().strftime("%m%d-%H%M%S")
-    active_recording_path = RECORDINGS_DIR / f"rec-{timestamp}.wav"
+    active_recording_path = RECORDINGS_DIR / f"rec-{timestamp}{suffix}"
     return active_recording_path
 
 
@@ -2059,6 +2495,35 @@ async def audio_capture_worker(
             )
             continue
         put_latest(audio_queue, ASRJob(chunk=chunk))
+
+
+def normalize_audio_meter_level(rms: float) -> float:
+    # System loopback and microphone RMS values vary widely; sqrt compression keeps
+    # speech movement visible without making loud moments flash aggressively.
+    return max(0.0, min(1.0, (max(0.0, rms) / 0.075) ** 0.5))
+
+
+async def audio_level_worker(
+    capture: MicrophoneAudioCapture,
+    status_queue: asyncio.Queue,
+    stop_event: asyncio.Event,
+) -> None:
+    last_sent = 0.0
+    async for rms in capture.levels():
+        if stop_event.is_set():
+            break
+        now = time.perf_counter()
+        if now - last_sent < 0.08:
+            continue
+        last_sent = now
+        put_latest(
+            status_queue,
+            {
+                "type": "audioLevel",
+                "level": round(normalize_audio_meter_level(rms), 3),
+                "rms": round(float(rms), 5),
+            },
+        )
 
 
 async def asr_worker(
@@ -2299,7 +2764,7 @@ async def subtitles(websocket: WebSocket) -> None:
         audio_queue = create_queue(active_config.queue_max_size)
         translate_queue = asyncio.Queue()
         subtitle_queue = create_queue(max(6, active_config.queue_max_size))
-        status_queue = create_queue(max(3, active_config.queue_max_size))
+        status_queue = create_queue(max(16, active_config.queue_max_size))
 
         capture = MicrophoneAudioCapture(
             sample_rate=active_config.audio_sample_rate,
@@ -2311,7 +2776,8 @@ async def subtitles(websocket: WebSocket) -> None:
             chunk_flush_silence_seconds=active_config.chunk_flush_silence_seconds,
             chunk_flush_rms_threshold=effective_vad_rms_threshold(active_config),
             audio_source=active_config.audio_source,
-            recording_path=session_recording_path(),
+            recording_path=session_recording_path(active_config.recording_format),
+            recording_format=active_config.recording_format,
         )
         capture.start()
         put_latest(status_queue, capture.source_notice())
@@ -2330,6 +2796,7 @@ async def subtitles(websocket: WebSocket) -> None:
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
                 asyncio.create_task(stream_microphone_to_azure(capture, azure_session, stop_event)),
+                asyncio.create_task(audio_level_worker(capture, status_queue, stop_event)),
                 asyncio.create_task(
                     websocket_push_worker(
                         websocket,
@@ -2344,6 +2811,7 @@ async def subtitles(websocket: WebSocket) -> None:
         else:
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
+                asyncio.create_task(audio_level_worker(capture, status_queue, stop_event)),
                 asyncio.create_task(audio_capture_worker(capture, audio_queue, status_queue, active_config, stop_event)),
                 asyncio.create_task(asr_worker(audio_queue, translate_queue, subtitle_queue, status_queue, active_config, stop_event)),
                 asyncio.create_task(translate_worker(translate_queue, subtitle_queue, status_queue, active_config, stop_event)),

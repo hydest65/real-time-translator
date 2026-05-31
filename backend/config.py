@@ -8,7 +8,9 @@ from typing import Literal
 
 DevicePreference = Literal["auto", "cuda", "cpu"]
 TranslationEngine = Literal["argos", "marianmt", "nllb", "azure"]
+MarianMTBackend = Literal["auto", "ctranslate2", "transformers"]
 AudioSource = Literal["microphone", "system"]
+RecordingFormat = Literal["flac", "wav"]
 
 
 def load_dotenv_file() -> None:
@@ -31,13 +33,13 @@ load_dotenv_file()
 
 @dataclass
 class AppConfig:
-    asr_model_size: str = "small.en"
+    asr_model_size: str = "medium.en"
     asr_device: DevicePreference = "cuda"
     asr_compute_type: str = "int8"
     asr_beam_size: int = 3
     asr_best_of: int = 3
-    asr_patience: float = 1.2
-    asr_condition_on_previous_text: bool = False
+    asr_patience: float = 1.1
+    asr_condition_on_previous_text: bool = True
     asr_no_speech_threshold: float = 0.58
     asr_log_prob_threshold: float = -1.1
     asr_compression_ratio_threshold: float = 2.4
@@ -48,22 +50,25 @@ class AppConfig:
     asr_use_default_hotwords: bool = False
     source_language: str = "eng_Latn"
     target_language: str = "zho_Hans"
-    translation_engine: TranslationEngine = "azure"
+    translation_engine: TranslationEngine = "marianmt"
     audio_source: AudioSource = "system"
     audio_sample_rate: int = 16_000
     audio_channels: int = 1
-    chunk_seconds: float = 2.0
-    overlap_seconds: float = 0.3
+    recording_format: RecordingFormat = "flac"
+    chunk_seconds: float = 1.5
+    overlap_seconds: float = 0.25
     adaptive_chunking_enabled: bool = True
     min_chunk_seconds: float = 1.0
     chunk_flush_silence_seconds: float = 0.35
     max_subtitles: int = 1
-    queue_max_size: int = 2
+    queue_max_size: int = 1
     vad_rms_threshold: float = 0.008
     system_vad_rms_threshold: float = 0.016
     nllb_model_name: str = "facebook/nllb-200-distilled-600M"
     marian_en_zh_model_name: str = "Helsinki-NLP/opus-mt-en-zh"
     marian_es_zh_model_name: str = "Helsinki-NLP/opus-mt-es-zh"
+    marianmt_backend: MarianMTBackend = "auto"
+    marianmt_ct2_compute_type: str = "int8_float16"
     azure_speech_key: str = field(default_factory=lambda: os.getenv("AZURE_SPEECH_KEY", ""))
     azure_speech_region: str = field(default_factory=lambda: os.getenv("AZURE_SPEECH_REGION", ""))
     azure_source_language: str = "en-US"

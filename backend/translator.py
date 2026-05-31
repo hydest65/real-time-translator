@@ -10,6 +10,7 @@ DEFAULT_HF_CACHE = PROJECT_ROOT / ".cache" / "huggingface"
 DEFAULT_HF_CACHE.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("HF_HOME", str(DEFAULT_HF_CACHE))
 os.environ.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_CACHE / "hub"))
+MARIAN_CT2_CACHE = PROJECT_ROOT / ".model-cache" / "marianmt-ct2"
 
 
 class Translator(Protocol):
@@ -142,7 +143,7 @@ class ArgosTranslator:
 
 
 class MarianMTTranslator:
-    """Local neural translation through Helsinki-NLP MarianMT models."""
+    """Local neural translation through MarianMT, preferring CTranslate2 when available."""
 
     engine_name = "marianmt"
 
@@ -151,34 +152,98 @@ class MarianMTTranslator:
         en_zh_model_name: str,
         es_zh_model_name: str,
         device_preference: str = "cuda",
+        backend: str = "auto",
+        ct2_compute_type: str = "int8_float16",
     ) -> None:
         import torch
-        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer
+        from transformers import AutoModelForSeq2SeqLM, AutoTokenizer, MarianTokenizer
 
         self.torch = torch
         self.AutoModelForSeq2SeqLM = AutoModelForSeq2SeqLM
         self.AutoTokenizer = AutoTokenizer
+        self.MarianTokenizer = MarianTokenizer
         self.model_names = {
             "eng_Latn": en_zh_model_name,
             "spa_Latn": es_zh_model_name,
         }
         self.device = self._resolve_device(device_preference)
-        self._models: dict[str, tuple[object, object]] = {}
+        self.backend_preference = os.getenv("MARIANMT_BACKEND", backend).strip().lower() or "auto"
+        self.ct2_compute_type = os.getenv("MARIANMT_CT2_COMPUTE_TYPE", ct2_compute_type).strip() or "int8_float16"
+        if self.device == "cpu" and self.ct2_compute_type == "int8_float16":
+            self.ct2_compute_type = "int8"
+        self._torch_models: dict[str, tuple[object, object]] = {}
+        self._ct2_models: dict[str, tuple[object, object]] = {}
 
     def _resolve_device(self, device_preference: str) -> str:
         if device_preference == "cpu":
             return "cpu"
         return "cuda" if self.torch.cuda.is_available() else "cpu"
 
-    def _get_model(self, source_language: str):
+    def _model_name_for_source(self, source_language: str) -> str:
+        return self.model_names.get(source_language, self.model_names["eng_Latn"])
+
+    def _get_torch_model(self, source_language: str):
         model_name = self.model_names.get(source_language, self.model_names["eng_Latn"])
-        if model_name not in self._models:
+        if model_name not in self._torch_models:
             tokenizer = self.AutoTokenizer.from_pretrained(model_name)
             model = self.AutoModelForSeq2SeqLM.from_pretrained(model_name)
             model.to(self.device)
             model.eval()
-            self._models[model_name] = (tokenizer, model)
-        return self._models[model_name]
+            self._torch_models[model_name] = (tokenizer, model)
+        self.engine_name = "marianmt-transformers"
+        return self._torch_models[model_name]
+
+    def _get_ct2_model(self, source_language: str):
+        model_name = self._model_name_for_source(source_language)
+        cache_key = f"{model_name}|{self.device}|{self.ct2_compute_type}"
+        if cache_key not in self._ct2_models:
+            import ctranslate2
+
+            model_dir = self._ensure_ct2_model(model_name)
+            tokenizer = self.MarianTokenizer.from_pretrained(str(model_dir), local_files_only=True)
+            translator = ctranslate2.Translator(
+                str(model_dir),
+                device=self.device,
+                compute_type=self.ct2_compute_type,
+            )
+            self._ct2_models[cache_key] = (tokenizer, translator)
+        self.engine_name = f"marianmt-ct2-{self.ct2_compute_type}"
+        return self._ct2_models[cache_key]
+
+    def _ensure_ct2_model(self, model_name: str) -> Path:
+        from ctranslate2.converters import TransformersConverter
+
+        class CompatibleTransformersConverter(TransformersConverter):
+            def load_model(self, model_class, model_name_or_path, **kwargs):
+                if kwargs.get("dtype") is None:
+                    kwargs.pop("dtype", None)
+                return super().load_model(model_class, model_name_or_path, **kwargs)
+
+        safe_name = "".join(char if char.isalnum() or char in "._-" else "_" for char in model_name).strip("_")
+        output_dir = MARIAN_CT2_CACHE / f"{safe_name}-{self.ct2_compute_type}"
+        if (output_dir / "model.bin").exists():
+            self._ensure_ct2_tokenizer(model_name, output_dir)
+            return output_dir
+
+        output_dir.mkdir(parents=True, exist_ok=True)
+        print(f"[load] converting MarianMT to CTranslate2 at {output_dir}", flush=True)
+        converter = CompatibleTransformersConverter(model_name)
+        converter.convert(
+            str(output_dir),
+            quantization=None if self.ct2_compute_type == "default" else self.ct2_compute_type,
+            force=True,
+        )
+        self._ensure_ct2_tokenizer(model_name, output_dir)
+        return output_dir
+
+    def _ensure_ct2_tokenizer(self, model_name: str, output_dir: Path) -> None:
+        if (output_dir / "tokenizer_config.json").exists():
+            return
+        try:
+            tokenizer = self.MarianTokenizer.from_pretrained(model_name, local_files_only=True)
+        except Exception:
+            tokenizer = self.MarianTokenizer.from_pretrained(model_name)
+        tokenizer.save_pretrained(str(output_dir))
 
     async def translate(
         self,
@@ -192,8 +257,37 @@ class MarianMTTranslator:
         cleaned = text.strip()
         if not cleaned:
             return ""
-        tokenizer, model = self._get_model(source_language)
-        inputs = tokenizer(cleaned, return_tensors="pt", truncation=True, max_length=128)
+        if self.backend_preference != "transformers":
+            try:
+                return self._translate_ct2(cleaned, source_language)
+            except Exception as exc:
+                if self.backend_preference == "ctranslate2":
+                    raise
+                print(f"[warn] MarianMT CTranslate2 unavailable, falling back to Transformers: {exc}", flush=True)
+        return self._translate_transformers(cleaned, source_language)
+
+    def _translate_ct2(self, text: str, source_language: str) -> str:
+        tokenizer, translator = self._get_ct2_model(source_language)
+        source_tokens = tokenizer.convert_ids_to_tokens(
+            tokenizer.encode(text, truncation=True, max_length=128)
+        )
+        results = translator.translate_batch(
+            [source_tokens],
+            beam_size=4,
+            patience=1.0,
+            length_penalty=1.05,
+            repetition_penalty=1.05,
+            no_repeat_ngram_size=3,
+            max_decoding_length=128,
+            replace_unknowns=True,
+        )
+        target_tokens = results[0].hypotheses[0]
+        target_ids = tokenizer.convert_tokens_to_ids(target_tokens)
+        return tokenizer.decode(target_ids, skip_special_tokens=True).strip()
+
+    def _translate_transformers(self, text: str, source_language: str) -> str:
+        tokenizer, model = self._get_torch_model(source_language)
+        inputs = tokenizer(text, return_tensors="pt", truncation=True, max_length=128)
         inputs = {key: value.to(self.device) for key, value in inputs.items()}
         with self.torch.inference_mode():
             output_tokens = model.generate(**inputs, max_new_tokens=96, num_beams=1)

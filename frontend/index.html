@@ -4,7 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=draft-visual-tape-20260530" />
+    <link rel="stylesheet" href="/static/style.css?v=ui-refresh-20260531" />
   </head>
   <body>
     <main class="studio">
@@ -51,9 +51,33 @@
             <div class="status-row">
               <span class="notice-pill" id="statusText">Stopped</span>
             </div>
+            <div class="audio-meter" id="audioMeter" aria-hidden="true">
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+              <span></span>
+            </div>
             <div class="status-row">
               <span class="notice-pill muted" id="noticeText">Ready</span>
             </div>
+          </div>
+          <div class="panel-section summary-card setup-summary" id="setupSection">
+            <div class="status-row">
+              <p class="panel-label panel-icon setup-panel-icon" title="Local model setup" aria-label="Local model setup"></p>
+              <span class="notice-pill muted" id="setupStatusText">Checking</span>
+            </div>
+            <div class="setup-progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+              <div class="setup-progress-bar" id="setupProgressBar"></div>
+            </div>
+            <p class="panel-line setup-detail" id="setupDetailText">Checking local model cache.</p>
           </div>
           <div class="panel-section summary-card recording-summary">
             <div class="status-row recording-row">
@@ -81,20 +105,6 @@
             </div>
             <p class="panel-line usage-note" id="azureUsageSyncText">This browser only. Cloud sync not connected.</p>
           </div>
-          <div class="panel-section summary-card notes-summary">
-            <p class="panel-label panel-icon notes-panel-icon" title="Meeting notes" aria-label="Meeting notes"></p>
-            <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
-            <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
-              <div class="notes-progress-header">
-                <span id="notesProgressStage">Preparing</span>
-                <span id="notesProgressPercent">0%</span>
-              </div>
-              <p class="notes-progress-detail" id="notesProgressDetail">Preparing selected recordings.</p>
-              <div class="notes-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                <div class="notes-progress-fill" id="notesProgressFill"></div>
-              </div>
-            </div>
-          </div>
           <p class="panel-line hidden" id="logText">Ready.</p>
           <p class="panel-line hidden" id="perfText">Waiting for first subtitle.</p>
         </aside>
@@ -114,13 +124,26 @@
           <div class="utility-card notes-utility">
             <button class="utility-toggle notes-toggle" id="notesUtilityToggle" type="button" aria-label="Meeting notes" aria-expanded="false" aria-controls="notesUtilityBody"></button>
             <div class="utility-body hidden" id="notesUtilityBody">
-              <label class="notes-engine-control tool-select-row" title="Notes engine">
-                <span class="field-icon notes-mini-icon" aria-label="Notes engine"></span>
-                <select id="notesEngine">
-                  <option value="aliyun-tingwu" selected>Cloud</option>
-                  <option value="funasr">Local</option>
-                </select>
-              </label>
+              <div class="notes-utility-head">
+                <label class="notes-engine-control tool-select-row" title="Notes engine">
+                  <span class="field-icon notes-mini-icon" aria-label="Notes engine"></span>
+                  <select id="notesEngine">
+                    <option value="aliyun-tingwu" selected>Cloud</option>
+                    <option value="funasr">Local</option>
+                  </select>
+                </label>
+                <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
+              </div>
+              <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
+                <div class="notes-progress-header">
+                  <span id="notesProgressStage">Preparing</span>
+                  <span id="notesProgressPercent">0%</span>
+                </div>
+                <p class="notes-progress-detail" id="notesProgressDetail">Preparing selected recordings.</p>
+                <div class="notes-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
+                  <div class="notes-progress-fill" id="notesProgressFill"></div>
+                </div>
+              </div>
               <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
               <div class="recording-picker" aria-label="Recorded meeting files">
                 <div class="recording-list" id="recordingList"></div>
@@ -145,9 +168,9 @@
                 <label class="tool-select-row" title="Translation engine">
                   <span class="field-icon engine-mini-icon" aria-label="Translation engine"></span>
                   <select id="translationEngine">
-                    <option value="azure" selected>Cloud</option>
+                    <option value="azure">Cloud</option>
                     <option value="argos">Argos</option>
-                    <option value="marianmt">MarianMT</option>
+                    <option value="marianmt" selected>MarianMT</option>
                     <option value="nllb">NLLB</option>
                   </select>
                 </label>
@@ -155,18 +178,18 @@
                 <label class="local-control local-extension local-preset-control tool-select-row" title="Local preset">
                   <span class="field-icon config-mini-icon" aria-label="Local preset"></span>
                   <select id="localAsrPreset">
-                    <option value="igpu" selected>iGPU</option>
+                    <option value="igpu">iGPU</option>
                     <option value="dgpu">dGPU</option>
-                    <option value="hp">HP</option>
+                    <option value="hp" selected>5070Ti</option>
                   </select>
                 </label>
 
                 <label class="local-control local-extension internal-control hidden tool-select-row" title="ASR model">
                   <span class="field-icon asr-mini-icon" aria-label="ASR model"></span>
                   <select id="modelSize">
-                    <option value="small.en" selected>small.en</option>
+                    <option value="small.en">small.en</option>
                     <option value="base.en">base.en</option>
-                    <option value="medium.en">medium.en</option>
+                    <option value="medium.en" selected>medium.en</option>
                   </select>
                 </label>
 
@@ -191,8 +214,8 @@
                   <span class="field-icon chunk-mini-icon" aria-label="Chunk size"></span>
                   <select id="chunkSeconds">
                     <option value="1">1s</option>
-                    <option value="1.5">1.5s</option>
-                    <option value="2" selected>2s</option>
+                    <option value="1.5" selected>1.5s</option>
+                    <option value="2">2s</option>
                     <option value="3">3s</option>
                     <option value="5">5s</option>
                   </select>
@@ -246,7 +269,7 @@
       </section>
     </main>
 
-    <script src="/static/app.js?v=draft-visual-tape-20260530"></script>
+    <script src="/static/app.js?v=ui-refresh-20260531"></script>
   </body>
 </html>
 

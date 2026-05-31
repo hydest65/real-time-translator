@@ -7,25 +7,25 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 
 ## Current Low-Latency Defaults
 
-- Engine: `Cloud` for lowest latency, or local engines when privacy/offline mode matters
+- Engine: `marianmt` local by default on the 5070Ti profile; `azure` remains available for cloud streaming
 - Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input. Use `Mic` when you want room or headset microphone audio.
 - Local ASR: `faster-whisper`
-- Local ASR preset: `Balanced`
-- Whisper model: `small.en`
+- Local ASR preset: `5070Ti`
+- Whisper model: `medium.en`
 - Speed option: `base.en`
-- Accuracy experiment: `small.en + int8_float16`, or manual `medium.en + int8` if GPU memory allows
+- Accuracy profile: `medium.en + cuda + int8`
 - Device: prefer `cuda + int8`, automatically falls back to `cpu + int8`
-- Local ASR decoding: `Fast` uses beam 1, `Balanced` uses beam 2, and `Accurate` uses beam 3
-- Local default chunk: `2s`
-- Local low-latency preset: `2s` max audio chunk, `1s` adaptive minimum, `0.35s` silence flush, `0.3s` overlap, queue max size `2`
-- Local steady preset: `3s` max audio chunk, `1.5s` adaptive minimum, `0.45s` silence flush, `0.5s` overlap, queue max size `2`
+- Local ASR decoding: 5070Ti profile uses beam 3 / best-of 3 with previous-text conditioning enabled
+- Local default chunk: `1.5s`
+- Local low-latency preset: `1.5s` max audio chunk, `1.5s` system-audio minimum, `0.25s` overlap, queue max size `1`
+- Local steady preset: `2s` max audio chunk, `2s` system-audio minimum, `0.3s` overlap, queue max size `1`
 - VAD: skip low-RMS silence before ASR; `System` input uses a stricter default gate than `Mic` to avoid loopback silence/weak-noise hallucinations
-- Local translation engine: `argos`
+- Local translation engine: `marianmt` through CTranslate2 by default
 - Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
 - Frontend: Cloud mode uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
 - Local draft subtitles use a one-line visual tape that wraps back to the left edge only after the visible line is full
 - Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
-- Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
+- Audio archive: each session saves a local FLAC file under `recordings/` for post-meeting speaker diarization and notes
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
 - Diagnostics: monitor panel at `/static/diagnostics.html` opens separately so checking health does not stop the live translation page
 - Cloud usage panel: shows current-session cloud time, local browser day/month estimates, and optional account-level sync
@@ -40,11 +40,11 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 ## Translation Engines
 
 - `azure`: internal cloud streaming speech translation route. Best for Teams meetings and low latency.
-- `argos`: lowest latency local translation. Best offline/default local choice.
-- `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
+- `argos`: lowest latency local fallback translation.
+- `marianmt`: local neural translation through Helsinki-NLP MarianMT models, using CTranslate2 when available and falling back to Transformers only when needed.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
-First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
+First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`. The main UI shows local model preparation progress through `/api/prepare-first-run` and `/api/setup-status`.
 
 Spanish mode notes:
 
@@ -166,7 +166,7 @@ $env:POST_MEETING_ASR_ENGINE="azure-batch"
 $env:AZURE_BATCH_CONTAINER_SAS_URL="https://<storage>.blob.core.windows.net/<container>?<sas>"
 ```
 
-The SAS URL should point to a private Blob container and allow create/write/read/list for the processing window. The app uploads the original WAV, submits Azure Batch Transcription with diarization enabled, polls the job, downloads the transcript, and then builds the notes locally. If the SAS URL is missing, the app falls back to local transcription without speaker separation.
+The SAS URL should point to a private Blob container and allow create/write/read/list for the processing window. The app uploads the original recording, submits Azure Batch Transcription with diarization enabled, polls the job, downloads the transcript, and then builds the notes locally. If the SAS URL is missing, the app falls back to local transcription without speaker separation.
 
 Post-meeting notes follow the selected live engine: Azure Cloud mode attempts Azure Batch meeting notes, while Argos, MarianMT, and NLLB modes use local post-meeting transcription without speaker separation.
 
@@ -188,17 +188,17 @@ The paragraph detector is intentionally lightweight. It uses the pause between f
 
 Meeting export uses the final subtitle stream rather than the visible history window, so the downloaded transcript can keep the full meeting text even though the on-screen monitor only keeps a compact rolling display. Speaker labels in the export are pause-based `Turn` labels, not verified voiceprints.
 
-Each started session also writes a WAV file to `recordings/session-YYYYMMDD-HHMMSS.wav`. The folder is ignored by Git because meeting audio may contain private information.
+Each started session also writes a FLAC file to `recordings/rec-MMDD-HHMMSS.flac` by default. WAV is still supported for older recordings and explicit fallback settings. The folder is ignored by Git because meeting audio may contain private information.
 
-If you accidentally press Stop and then Start again within 5 minutes, the app continues appending to the same WAV file instead of creating a new meeting recording. After a longer break, it creates a new session file.
+If WAV recording is selected and you accidentally press Stop and then Start again within 5 minutes, the app continues appending to the same WAV file instead of creating a new meeting recording. FLAC sessions start a fresh file because FLAC is finalized on close.
 
-Use `End Meeting` when the meeting is truly over. It closes the current recording session, so the next `Start` creates a new WAV even if it happens within 5 minutes.
+Use `End Meeting` when the meeting is truly over. It closes the current recording session, so the next `Start` creates a new recording.
 
 Optional post-meeting speaker diarization can be run against that WAV file in a separate Python environment with `pyannote.audio` installed:
 
 ```powershell
 $env:HF_TOKEN="your_huggingface_token"
-python scripts\diarize-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
+python scripts\diarize-recording.py recordings\rec-MMDD-HHMMSS.flac
 ```
 
 This writes `.speakers.rttm` and `.speakers.md` files with anonymous speaker clusters such as `SPEAKER_00`. Those labels are not real names and still need human review.
@@ -206,35 +206,35 @@ This writes `.speakers.rttm` and `.speakers.md` files with anonymous speaker clu
 To turn a recording into post-meeting transcript and minutes files, run:
 
 ```powershell
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
+python scripts\process-recording.py recordings\rec-MMDD-HHMMSS.flac
 ```
 
 This writes `.transcript.md` and `.minutes.md`. Add `--diarize` when `pyannote.audio` and `HF_TOKEN` are ready:
 
-The UI generates notes when the meeting is ended. After `End Meeting`, the app processes the latest `recordings/session-*.wav` file and writes a readable bilingual Word document. The document keeps the English professional meeting minutes first, then adds the Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
+The UI generates notes when the meeting is ended. After `End Meeting`, the app processes selected `.flac` or `.wav` recordings and writes a readable meeting-notes Word document. English meetings output English plus Chinese notes; Chinese meetings output Chinese notes. Without diarization it falls back to pause-based turn labels; with diarization or Tingwu it uses anonymous speaker clusters.
 
-Quality presets for this T600 4GB GPU machine:
+Post-meeting quality presets:
 
 ```powershell
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality fast
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality balanced
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality high
+python scripts\process-recording.py recordings\rec-MMDD-HHMMSS.flac --quality fast
+python scripts\process-recording.py recordings\rec-MMDD-HHMMSS.flac --quality balanced
+python scripts\process-recording.py recordings\rec-MMDD-HHMMSS.flac --quality high
 ```
 
-`balanced` uses `small.en + int8 + beam 2` and is the default. `high` uses `medium.en + int8 + beam 3`; use it only for post-meeting processing because it can be slow or may fall back if GPU memory is tight.
+`balanced` uses `small.en + int8 + beam 2`. `high` uses `medium.en + int8 + beam 3`; on the 5070Ti profile this is the preferred quality target.
 
 Optional Alibaba/FunASR post-meeting ASR:
 
 ```powershell
 python -m pip install funasr
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --asr-engine funasr
+python scripts\process-recording.py recordings\rec-MMDD-HHMMSS.flac --asr-engine funasr
 ```
 
 The FunASR path defaults to `iic/SenseVoiceSmall` with VAD and punctuation. It is intended for post-meeting experiments, not the realtime subtitle path.
 
 ```powershell
 $env:HF_TOKEN="your_huggingface_token"
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --diarize
+python scripts\process-recording.py recordings\rec-MMDD-HHMMSS.flac --diarize
 ```
 
 For Teams meetings, keep `Input: System`. The app now prefers the current default Windows playback device through loopback capture when available. If loopback is unavailable, it falls back to Stereo Mix / speaker-monitor input. If the app still reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
@@ -299,10 +299,10 @@ Recommended first test:
 
 ```text
 Source: English
-ASR: small.en
+ASR: medium.en
 Device: cuda
-Chunk: 2s
-Engine: Azure Cloud
+Chunk: 1.5s
+Engine: MarianMT
 Input: System, if available for Teams audio
 ```
 
@@ -310,37 +310,37 @@ Recommended Spanish test:
 
 ```text
 Source: Spanish
-ASR: small.en
+ASR: medium.en
 Device: cuda
-Chunk: 2s
-Engine: Azure Cloud
+Chunk: 1.5s
+Engine: MarianMT
 ```
 
 Recommended private/offline test:
 
 ```text
-ASR Preset: Balanced
-ASR: small.en
+ASR Preset: 5070Ti
+ASR: medium.en
 Device: cuda
 Latency: Low
-Chunk: 2s
-Engine: Argos
+Chunk: 1.5s
+Engine: MarianMT
 ```
 
 Local ASR presets:
 
 - `Fast`: `base.en + int8 + beam 1`, for lower latency when wording does not need to be perfect.
-- `Balanced`: `small.en + int8 + beam 2`, recommended default for the NVIDIA T600 Laptop GPU with 4GB VRAM.
-- `Accurate`: `small.en + int8_float16 + beam 3`, for a quality test when enough GPU memory is free.
+- `Balanced`: `small.en + int8 + beam 2`, retained for lower-memory GPUs.
+- `5070Ti`: `medium.en + cuda + int8 + beam 3`, the current high-performance default.
 
-The local ASR presets also tune decoding behavior. `Fast` and `Balanced` do not condition on previous chunk text, which reduces repeated or drifting phrases during short streaming chunks. `Accurate` keeps previous-text conditioning for experiments where wording quality matters more than latency.
+The local ASR presets also tune decoding behavior. `Fast` and `Balanced` do not condition on previous chunk text, which reduces repeated or drifting phrases during short streaming chunks. `5070Ti` keeps previous-text conditioning because the larger model and GPU budget can preserve more meeting context.
 
-Manual model note: `medium.en` is available in the ASR dropdown for experiments, but it is not the default on a 4GB GPU because it can load slowly or run out of memory during meetings.
+Manual model note: `small.en` remains available in the ASR dropdown for machines that cannot comfortably run `medium.en`.
 
 For better recognition accuracy:
 
 ```text
-ASR: small.en
+ASR: medium.en
 ```
 
 ## Runtime Pipeline
@@ -356,7 +356,7 @@ audio_capture_worker
   -> websocket_push_worker
 ```
 
-In the Low latency preset, the audio queue uses max size `2`. The English draft still updates quickly, but the local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
+In the Low latency preset, the audio queue uses max size `1`. The English draft still updates quickly, but the local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
 
 For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
 
@@ -389,8 +389,8 @@ The browser shows this in the Perf line. If you see an `argos-asr` or similar en
 ## Notes
 
 - `azure` is the best choice when you want the lowest latency and can use a cloud service.
-- `argos` is the best local default for low latency.
-- `marianmt` may be better when you can accept a bit more delay.
+- `marianmt` with CTranslate2 is the current local default for the 5070Ti profile.
+- `argos` is the fastest local fallback when model download or conversion is not ready.
 - `nllb` is not recommended for real-time use on this machine.
-- English local mode can use `base.en` for speed, `small.en` for the recommended default, and `medium.en` for manual experiments. Spanish local mode automatically uses the matching multilingual Whisper model.
-- Current MarianMT runs through Transformers, not CTranslate2 int8 yet.
+- English local mode can use `base.en` for speed, `small.en` for lower-memory GPUs, and `medium.en` for the 5070Ti profile. Spanish local mode automatically uses the matching multilingual Whisper model.
+- MarianMT now prefers CTranslate2 `int8_float16`; Transformers is the fallback path.
