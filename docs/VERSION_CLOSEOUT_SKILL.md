@@ -4,11 +4,13 @@ Use this local project skill whenever closing a version of `real_time_translator
 
 ## Core Continuation Docs
 
-Read these three files early when continuing product, architecture, or UI work:
+Read these files early when continuing product, architecture, UI, meeting-notes, or closeout work:
 
 - `docs/PRODUCT_REQUIREMENTS.md`: product goal, target users, MVP scope, fast-only mode, and out-of-scope items.
-- `docs/TECHNICAL_ARCHITECTURE.md`: Azure cloud route, local fallback route, backend modules, and environment variables.
+- `docs/TECHNICAL_ARCHITECTURE.md`: Cloud route, local fallback route, meeting-notes routes, backend modules, and environment variables.
 - `docs/UI_STYLE.md`: compact Subtitle Studio layout, subtitle monitor behavior, scrolling rules, and visual direction.
+- `docs/RELEASE_NOTES.md`: current released baseline and verification notes.
+- `README.md`: user-facing setup, run, and operations notes.
 
 ## Closeout Steps
 
@@ -16,12 +18,16 @@ Read these three files early when continuing product, architecture, or UI work:
    - `docs/PRODUCT_REQUIREMENTS.md`
    - `docs/TECHNICAL_ARCHITECTURE.md`
    - `docs/UI_STYLE.md`
+   - `docs/RELEASE_NOTES.md`
+   - `docs/QA_CHECKLIST.md`
    - `backend/config.py`
    - `backend/main.py`
    - `backend/cloud_speech.py`
    - `backend/audio_capture.py`
    - `backend/asr.py`
    - `backend/translator.py`
+   - `scripts/process-recording.py`
+   - `scripts/translation-quality-preview.py`
    - `frontend/index.html`
    - `frontend/style.css`
    - `frontend/app.js`
@@ -35,11 +41,17 @@ Read these three files early when continuing product, architecture, or UI work:
 
 2. Confirm the active architecture:
    - Cloud mode is the primary low-latency path in tester-facing UI.
+   - Tester-facing labels remain provider-neutral: use `Cloud`, `Cloud Usage`, and neutral status/error text.
    - Local ASR/translation remains a fallback path.
    - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
    - Fast/direct translation is the only active mode.
    - The browser UI is the main operating surface.
    - Diagnostics opens separately and must not replace or stop the active subtitle page.
+   - Cloud usage shows current-session timing, browser-local estimates, and optional account-level sync.
+   - Local subtitles keep the split reading model: stable English context, one-line live English draft tape, and complete Chinese translation.
+   - Meeting notes are Word-first: English professional minutes first, Chinese reading version second, in one `.docx`.
+   - Cloud meeting notes can use Aliyun Tingwu/Tencent Relay/OSS or Azure Batch when configured; local engines use local post-meeting processing.
+   - Ollama `qwen3:14b` is a post-meeting refinement model only, not a realtime subtitle model.
 
 3. Update documentation:
    - `README.md`
@@ -48,11 +60,15 @@ Read these three files early when continuing product, architecture, or UI work:
    - `docs/UI_STYLE.md`
    - `docs/RELEASE_NOTES.md`
    - `docs/QA_CHECKLIST.md`
+   - `docs/VERSION_CLOSEOUT_SKILL.md`
 
 4. Run safe checks:
    - Python compile check for backend.
    - Backend import check.
-   - JavaScript syntax check when Node is available.
+   - JavaScript syntax check for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js` when Node is available.
+   - `scripts/translation-quality-preview.py` syntax check when that script changed.
+   - `git diff --check` when Git is available.
+   - Secret scan candidate committed paths for real API keys, service-principal secrets, relay IPs, SAS URLs, and app keys.
    - Runtime smoke test when credentials and audio devices are available.
 
 5. Report closeout:
@@ -60,20 +76,21 @@ Read these three files early when continuing product, architecture, or UI work:
    - technical changes
    - UI changes
    - verification result
+   - GitHub sync result or blocker
    - known limitations
    - next recommended step
 
 ## Version Discipline
 
-- Do not commit API keys.
-- Do not keep copied browser sessions, account exports, access tokens, or temporary login dumps in the repository.
+- Do not commit API keys, service-principal secrets, relay endpoints with credentials, SAS URLs, AppKeys, copied browser sessions, account exports, access tokens, or temporary login dumps.
 - Do not reintroduce MiniMax, Balanced, or Quality modes unless explicitly requested.
-- Do not split long Azure final subtitles purely by time.
+- Do not split long Cloud final subtitles purely by time.
 - Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
-- Preserve the Azure subtitle monitor scrollbar and scroll-review behavior.
+- Preserve the Cloud subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the local split reading model: stable English context, live English draft, and complete Chinese translation.
 - Preserve the local draft visual tape behavior: one line fills first, then starts again from the left edge.
 - Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then `Open Bilingual Notes`.
 - Preserve Word-first bilingual notes: English minutes first, Chinese reading version second, in one `.docx` file.
 - Preserve provider-neutral UI wording for testers: use `Cloud` in visible labels, status messages, usage panel text, and common errors.
+- Keep private `.env`, `backend/glossary.csv`, recordings, generated notes, model caches, browser session exports, and temporary auth dumps out of Git.
 - Keep true speaker diarization as a future feature unless explicitly implemented.
