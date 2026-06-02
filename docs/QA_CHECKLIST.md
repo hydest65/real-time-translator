@@ -88,6 +88,16 @@ Current closeout result on 2026-05-30:
 - Manual visual checks performed during development: compact UI, diagnostics entry, diagnostics page, and local draft visual tape behavior were inspected in the browser.
 - Known local model limitation: `qwen3:14b` is installed, but a polish test can fail on this machine when Ollama reports insufficient available memory. This does not block the live subtitle path.
 
+Current closeout result on 2026-06-03:
+
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Codex Node runtime.
+- Python syntax checks passed for `backend/main.py`, `asr/subtitle_state.py`, and the FunASR streaming modules.
+- `git diff --check` passed.
+- Runtime smoke test passed for `GET /` on port `8000`.
+- `/ws/asr/funasr` route registration was verified.
+- Local Chinese FunASR mode now shows startup progress text, live-window captions, and manual meeting-notes behavior after End Meeting.
+- Current performance limitation: the venv has CPU-only Torch, so CUDA acceleration requires installing CUDA-enabled PyTorch.
+
 - Python syntax checks passed for `backend/main.py`, `backend/cloud_speech.py`, and `scripts/process-recording.py`.
 - Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.
 - Local runtime smoke test passed for `GET /` on port `8000`.
@@ -129,11 +139,11 @@ Test matrix:
 - Red status lamp pulses slowly while running or connecting.
 - Live subtitles appear without waiting for full paragraphs.
 - In local Low latency mode, the English upper area keeps continuous readable context and begins scrolling only after the pane fills.
-- In local Low latency mode, the lower English draft pane updates live while ASR is still forming the utterance.
 - In local Low latency mode, the Chinese monitor appends complete translated sentences as a continuous text flow.
 - Azure mode keeps one bilingual subtitle monitor.
 - Azure mode still uses subtitle rows, internal scroll history, and bottom auto-follow.
-- Local mode shows English context, English draft, and Chinese complete translations as separate panes.
+- English/Spanish local mode shows source context and Chinese complete translations as separate panes.
+- Chinese local FunASR mode shows recent live Chinese captions without the old draft pane.
 - `Input: System` can capture the current active Windows playback device when loopback is available.
 - Switching Source to Spanish updates the subtitle direction and still starts the stream.
 - Final subtitles enter history.
@@ -159,7 +169,7 @@ Test matrix:
 - Starting a session creates a local WAV file in `recordings/`.
 - Pressing Stop and Start again within 5 minutes appends to the same WAV file instead of splitting the meeting audio.
 - Pressing End Meeting closes the recording session so the next Start creates a new WAV file.
-- Pressing End Meeting runs post-meeting processing for the latest `recordings/session-*.wav` file and does not select append-test recordings.
+- Pressing End Meeting does not auto-run meeting-notes processing; notes are built manually from the Notes tools.
 - `recordings/` is ignored by Git.
 - `scripts/diarize-recording.py` exits with a clear setup message if `pyannote.audio` or `HF_TOKEN` is missing.
 - `scripts/process-recording.py` can generate `.transcript.md` and `.minutes.md` from a WAV file.

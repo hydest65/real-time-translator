@@ -1,5 +1,41 @@
 # Release Notes
 
+## 0.3.0-funasr-streaming-live-window - Local Chinese FunASR Streaming Subtitles
+
+Date: 2026-06-03
+
+### Product
+
+- Added a dedicated local Chinese realtime subtitle path based on FunASR Paraformer streaming.
+- Kept the realtime goal focused on low-latency Chinese ASR instead of post-meeting translation quality.
+- Changed End Meeting behavior so ending a live session saves/stops recording only; meeting notes are built manually from the notes tools.
+- Preserved System audio as the default test path for local Chinese meeting/video audio.
+
+### UI
+
+- Added explicit startup feedback in the Chinese subtitle pane while FunASR connects, loads the model, and starts listening.
+- Reworked realtime Chinese display into a recent live subtitle window instead of showing the entire accumulated transcript as one machine-like paragraph.
+- Added live subtitle line wrapping and status styling for FunASR so short streaming updates feel closer to natural captions.
+- Updated frontend asset versioning to `funasr-live-window-20260603`.
+
+### Technical
+
+- Added `asr/funasr_streaming.py`, `asr/audio_capture.py`, and `asr/subtitle_state.py` for PCM16 16 kHz mono chunk streaming, queue-limited capture, streaming cache reuse, partial/final subtitle state, and low-latency WebSocket events.
+- Added FastAPI WebSocket `/ws/asr/funasr` for FunASR streaming messages with `partial`, `final`, `status`, and `error` event types.
+- Added FunASR/model download dependencies through `funasr`, `modelscope`, and `huggingface-hub`.
+- Improved partial subtitle merging so FunASR's short incremental fragments accumulate without replacing the full current caption.
+- Tuned CPU fallback for stability with 800 ms chunks, `[5, 10, 5]` chunk size, queue size 3, and short-phrase partial updates.
+- Added runtime logging for chunk inference time, latency, RTF, model/device load, and dropped stale chunks.
+
+### Verification
+
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Codex Node runtime.
+- Python syntax checks passed for `backend/main.py`, `asr/subtitle_state.py`, and the FunASR streaming modules.
+- `git diff --check` passed for the candidate code and docs.
+- Runtime smoke test passed for `GET /` on port `8000`.
+- FunASR route registration was verified for `/ws/asr/funasr`.
+- Current local limitation: the active virtual environment still has CPU-only Torch, so FunASR does not use the NVIDIA GPU until CUDA PyTorch is installed.
+
 ## 0.2.1-compact-diagnostics-draft-tape - Compact UI, Diagnostics, and Stable Draft Captions
 
 Date: 2026-05-30

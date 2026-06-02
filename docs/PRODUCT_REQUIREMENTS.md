@@ -20,13 +20,13 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - Local fallback engines for offline/private testing:
   - faster-whisper `base.en` / `small.en` for English
   - multilingual faster-whisper `base` / `small` automatically for Spanish
+  - FunASR Paraformer streaming for local Chinese realtime subtitles
   - Argos Translate as the recommended local realtime engine
   - MarianMT for local comparison / quality testing
   - NLLB for local comparison / non-realtime use
-- Local low-latency preset that uses shorter audio chunks, shows live English ASR draft immediately, and translates Chinese after sentence completion.
+- Local low-latency preset that uses shorter audio chunks, keeps source ASR responsive, and translates Chinese after sentence completion.
 - Fixed subtitle monitor with internal scrolling history for Azure.
-- Two-mode subtitle workspace: Azure keeps one bilingual monitor; local mode uses separate English context, English draft, and Chinese translation panes.
-- Local English draft pane behaves as a one-line visual tape: it fills the line, then starts again from the left edge without clearing stable English context.
+- Two-mode subtitle workspace: Azure keeps one bilingual monitor; local mode uses source context and Chinese translation panes, while local Chinese FunASR uses a recent Chinese live caption window.
 - Real-time live row plus final subtitle history.
 - Full-session final transcript capture for post-meeting export.
 - Bilingual Word meeting-minutes export with English professional minutes first and Chinese reading version second in the same document.
@@ -42,7 +42,8 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - `Fast` is the only active mode.
 - Cloud mode streams live bilingual subtitles directly from the configured cloud speech route.
 - Local fallback shows ASR drafts immediately, then translates complete ready utterances through a short contextual buffer rather than a slower polishing or quality-mode path.
-- Local fallback shows stable English context as a continuous text pane that fills first and then scrolls, keeps the current live draft in a separate lower English pane, then sends complete Chinese sentence translations to a continuous Chinese pane.
+- Local fallback shows stable source context as a continuous text pane that fills first and then scrolls, then sends complete Chinese sentence translations to a continuous Chinese pane.
+- Local Chinese speech uses FunASR streaming partials in the Chinese monitor. The realtime pane favors quick readable captions; richer punctuation and polishing belong to later final/notes processing.
 
 ## Out Of Scope For This Version
 
@@ -61,7 +62,8 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - User can open `http://127.0.0.1:8000`, click Start, and see live bilingual subtitles.
 - User can choose English or Spanish as the source language before starting.
 - Cloud mode should feel close to real time during normal speech.
-- Local Low latency mode should keep the live ASR draft responsive while stable English context and Chinese complete sentences stay readable as continuous text flows.
+- Local Low latency mode should keep ASR responsive while stable source context and Chinese complete sentences stay readable as continuous text flows.
+- Local Chinese FunASR mode should show startup progress, begin emitting partial captions without waiting for full sentences, and keep the visible live window readable instead of displaying the entire raw transcript as one paragraph.
 - The interface should not show MiniMax, Balanced, or Quality mode controls.
 - The status lamp should be visible when stopped and gently pulse after Start.
 - In Cloud mode, user can scroll subtitle history inside the subtitle monitor while new subtitles continue to arrive.
@@ -69,6 +71,6 @@ Build a Windows real-time subtitle translator for meetings. The first usable ver
 - Local MarianMT and NLLB do not need to match Azure realtime behavior on this machine; they are comparison paths rather than the primary recommended route.
 - User can open `/static/ui-editor.html`, tune the visual style, save it locally, and see the saved style on the main subtitle page.
 - User can open `/static/diagnostics.html` from the compact monitor icon without stopping the main live translation page.
-- User can end a meeting and open the generated bilingual Word notes without manually looking for a Markdown file.
+- User can end a meeting, build bilingual Word notes from the Notes tools, and open the generated document without manually looking for a Markdown file.
 - User can see whether Cloud usage is only a browser-local estimate or backed by account-level sync.
 - Tester-facing UI should avoid naming the underlying cloud provider.

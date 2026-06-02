@@ -29,17 +29,16 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - live row plus final bilingual rows
 - Cloud mode keeps the single bilingual subtitle monitor and its scroll-review behavior.
 - Local mode uses two stacked monitors:
-  - upper monitor split into stable English context above and live ASR draft below
-  - lower monitor for slightly delayed complete Chinese sentence translation
+  - upper monitor for stable source context when English/Spanish local fallback is active
+  - lower monitor for slightly delayed complete Chinese sentence translation, or recent live Chinese captions when FunASR local Chinese mode is active
 
 ## Subtitle Behavior
 
 - Chinese translation is visually emphasized.
 - Cloud mode keeps English source visible above the Chinese in each subtitle row.
 - In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
-- In local mode, stable English context and complete Chinese translation render as continuous text blocks. The English context pane should fill its readable area first and then scroll.
-- In local mode, the English live draft stays in its own lower English pane and updates quickly.
-- The English live draft is intentionally one line. It should fill toward the right edge, then restart from the left edge with new text. It should not restart halfway across the row just because backend ASR sends a new draft segment.
+- In local Chinese FunASR mode, the Chinese monitor acts as a live caption window: startup status is shown immediately, then only the recent 2-3 lines of realtime text stay visible while the full transcript remains available internally.
+- In English/Spanish local mode, stable source context and complete Chinese translation render as continuous text blocks. The source context pane should fill its readable area first and then scroll.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
 - Cloud users can scroll up inside the subtitle monitor without losing incoming live subtitles.

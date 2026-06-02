@@ -59,12 +59,13 @@ def env_flag(name: str, default: bool = False) -> bool:
 
 FUNASR_MODEL_BY_QUALITY = {
     "fast": "iic/SenseVoiceSmall",
-    "balanced": "iic/SenseVoiceSmall",
-    "high": "iic/SenseVoiceSmall",
+    "balanced": "paraformer-zh",
+    "high": "paraformer-zh",
 }
 
 FUNASR_LOCAL_MODEL_DIRS = {
     "iic/SenseVoiceSmall": DEFAULT_MODEL_CACHE / "models" / "iic" / "SenseVoiceSmall",
+    "paraformer-zh": DEFAULT_MODEL_CACHE / "models" / "iic" / "speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
     "fsmn-vad": DEFAULT_MODEL_CACHE / "models" / "iic" / "speech_fsmn_vad_zh-cn-16k-common-pytorch",
     "ct-punc": DEFAULT_MODEL_CACHE / "models" / "iic" / "punc_ct-transformer_cn-en-common-vocab471067-large",
 }
@@ -688,12 +689,16 @@ def transcribe_audio_funasr(args: argparse.Namespace) -> list[TranscriptSegment]
         device=device,
         disable_update=True,
     )
-    output = model.generate(
-        input=str(args.audio),
-        language="auto" if args.language == "auto" else args.language,
-        use_itn=True,
-        batch_size_s=args.funasr_batch_size,
-    )
+    generate_args = {
+        "input": str(args.audio),
+        "language": "auto" if args.language == "auto" else args.language,
+        "use_itn": True,
+        "batch_size_s": args.funasr_batch_size,
+    }
+    hotword_text = build_hotword_text(limit=100)
+    if hotword_text:
+        generate_args["hotword"] = hotword_text
+    output = model.generate(**generate_args)
     return normalize_funasr_output(output)
 
 
@@ -2147,7 +2152,7 @@ def main() -> int:
         help="Default: pyannote/speaker-diarization-3.1",
     )
     parser.add_argument("--hf-token", default="", help="Hugging Face token for pyannote.")
-    parser.add_argument("--funasr-model", default="", help="Override FunASR model. Default: iic/SenseVoiceSmall")
+    parser.add_argument("--funasr-model", default="", help="Override FunASR model. Default: balanced/high use paraformer-zh; fast uses iic/SenseVoiceSmall")
     parser.add_argument("--funasr-vad-model", default="", help="Override FunASR VAD model. Default: fsmn-vad")
     parser.add_argument("--funasr-punc-model", default="", help="Override FunASR punctuation model. Default: ct-punc")
     parser.add_argument("--funasr-batch-size", type=int, default=60, help="FunASR batch_size_s. Default: 60")

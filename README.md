@@ -3,13 +3,13 @@
 Windows real-time subtitle translator. It supports English-to-Chinese and Spanish-to-Chinese subtitles through two routes:
 
 - `Cloud`: lowest-latency streaming speech translation, shown with provider-neutral labels for testers.
-- `Local`: private offline ASR + translation with faster-whisper and local translators.
+- `Local`: private offline ASR + translation. English/Spanish fallback uses faster-whisper plus local translators; local Chinese realtime mode uses FunASR streaming.
 
 ## Current Low-Latency Defaults
 
 - Engine: `Cloud` for lowest latency, or local engines when privacy/offline mode matters
 - Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input. Use `Mic` when you want room or headset microphone audio.
-- Local ASR: `faster-whisper`
+- Local ASR: `faster-whisper` for English/Spanish fallback; `FunASR Paraformer streaming` for Chinese realtime subtitles
 - Local ASR preset: `Balanced`
 - Whisper model: `small.en`
 - Speed option: `base.en`
@@ -21,10 +21,10 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Local steady preset: `3s` max audio chunk, `1.5s` adaptive minimum, `0.45s` silence flush, `0.5s` overlap, queue max size `2`
 - VAD: skip low-RMS silence before ASR; `System` input uses a stricter default gate than `Mic` to avoid loopback silence/weak-noise hallucinations
 - Local translation engine: `argos`
-- Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
+- Local English/Spanish subtitles use an English context pane and a Chinese complete-translation pane; local Chinese FunASR mode uses one Chinese live caption window
 - Frontend: Cloud mode uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
-- Local draft subtitles use a one-line visual tape that wraps back to the left edge only after the visible line is full
-- Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
+- Local Chinese FunASR subtitles use a recent live caption window instead of a separate draft pane
+- Meeting notes: `End Meeting` closes the recording session; use the Notes tools to build one bilingual Word notes file with English minutes first and Chinese minutes second
 - Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
 - Diagnostics: monitor panel at `/static/diagnostics.html` opens separately so checking health does not stop the live translation page
@@ -58,6 +58,10 @@ Spanish mode notes:
 
 ```text
 real_time_translator/
+  asr/
+    funasr_streaming.py
+    audio_capture.py
+    subtitle_state.py
   backend/
     main.py
     audio_capture.py
@@ -81,7 +85,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.2.1-compact-diagnostics-draft-tape - Compact UI, diagnostics, and stable draft captions`.
+- Current closeout: `0.3.0-funasr-streaming-live-window - Local Chinese FunASR streaming subtitles`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
@@ -211,7 +215,7 @@ python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
 
 This writes `.transcript.md` and `.minutes.md`. Add `--diarize` when `pyannote.audio` and `HF_TOKEN` are ready:
 
-The UI generates notes when the meeting is ended. After `End Meeting`, the app processes the latest `recordings/session-*.wav` file and writes a readable bilingual Word document. The document keeps the English professional meeting minutes first, then adds the Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
+`End Meeting` only stops the live session and closes the current recording. To build notes, open the Notes tool, choose the recording, and click `Build Notes`. The app writes a readable bilingual Word document with English professional meeting minutes first, then a Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
 
 Quality presets for this T600 4GB GPU machine:
 
@@ -356,9 +360,9 @@ audio_capture_worker
   -> websocket_push_worker
 ```
 
-In the Low latency preset, the audio queue uses max size `2`. The English draft still updates quickly, but the local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
+In the Low latency preset, the audio queue uses max size `2`. The local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
 
-For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
+For English/Spanish local mode, the frontend receives fast ASR updates first. When an utterance is ready, stable source text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. For Chinese local mode, FunASR streaming feeds a recent live caption window directly and keeps the full transcript buffer internally. Azure mode keeps the original single bilingual scrolling monitor.
 
 Azure mode uses a shorter cloud-streaming route:
 

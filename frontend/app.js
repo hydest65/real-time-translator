@@ -1,4 +1,4 @@
-const startButton = document.querySelector("#startButton");
+﻿const startButton = document.querySelector("#startButton");
 const stopButton = document.querySelector("#stopButton");
 const endMeetingButton = document.querySelector("#endMeetingButton");
 const statusText = document.querySelector("#statusText");
@@ -9,6 +9,12 @@ const localSubtitleLayout = document.querySelector("#localSubtitleLayout");
 const englishContextStack = document.querySelector("#englishContextStack");
 const englishDraftStack = document.querySelector("#englishDraftStack");
 const chineseSubtitleStack = document.querySelector("#chineseSubtitleStack");
+const localSourcePanel = document.querySelector("#localSourcePanel");
+const localSourceTitle = document.querySelector("#localSourceTitle");
+const localSourceSubtitle = document.querySelector("#localSourceSubtitle");
+const localTargetPanel = document.querySelector("#localTargetPanel");
+const localTargetTitle = document.querySelector("#localTargetTitle");
+const localTargetSubtitle = document.querySelector("#localTargetSubtitle");
 const audioSource = document.querySelector("#audioSource");
 const sourceLanguage = document.querySelector("#sourceLanguage");
 const localAsrPreset = document.querySelector("#localAsrPreset");
@@ -58,6 +64,8 @@ const azureUsageSyncText = document.querySelector("#azureUsageSyncText");
 let socket = null;
 let finalSubtitleHistory = [];
 let englishContextHistory = [];
+let englishConfirmedTextById = new Map();
+let englishContextSequenceCounter = 0;
 let englishDraftById = new Map();
 let englishLiveBuffer = [];
 let englishDraftLineStartWord = 0;
@@ -74,6 +82,7 @@ let chineseTranslationHistory = [];
 let liveSubtitle = null;
 let autoFollowSubtitles = true;
 let autoFollowEnglishContext = true;
+let autoFollowChineseText = true;
 let sessionTranscript = [];
 let transcriptById = new Map();
 let currentTurnIndex = 0;
@@ -100,14 +109,18 @@ let notesProgressTimer = null;
 let availableRecordings = [];
 let selectedRecordingPaths = new Set();
 let lastSubtitleReceivedAt = 0;
+let funasrStreamingFinalIndex = 0;
+let funasrStreamingPartialItem = null;
 let azureUsageStartedAt = null;
 let azureUsageTimer = null;
 let azureUsageCloud = null;
 let azureUsageSyncTimer = null;
 const maxDisplayHistory = 80;
-const maxChineseFlowCharacters = 520;
+const maxChineseFlowCharacters = 760;
 const localDraftPromoteWordCount = 26;
 const localDraftTailWordCount = 16;
+const localChineseDraftPromoteChars = 52;
+const localChineseDraftTailChars = 34;
 const englishContextTypeChunk = 3;
 const englishContextTypeDelayMs = 28;
 const serverSubtitleWindow = 5;
@@ -267,7 +280,7 @@ function renderRecordingList() {
     title.textContent = recording.displayName || recordingFileName(recording.path || recording.name);
     const meta = document.createElement("div");
     meta.className = "recording-meta";
-    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} · ${formatBytes(recording.sizeBytes || 0)}`;
+    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} 路 ${formatBytes(recording.sizeBytes || 0)}`;
     meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} | ${formatBytes(recording.sizeBytes || 0)}`;
     content.append(title, meta);
     label.append(checkbox, content);
@@ -463,12 +476,24 @@ function updateDelayHintFromStatus(status, detail = "") {
   }
 
   if (normalized.includes("transcribing")) {
-    setDelayHint("ASR busy", "The app is converting speech to English text. Delay is usually local CPU/GPU work.");
+    const isChinese = sourceLanguage.value === "zho_Hans";
+    setDelayHint(
+      "ASR busy",
+      isChinese
+        ? "The app is converting Chinese speech to text. Delay is usually local CPU/GPU work."
+        : "The app is converting speech to English text. Delay is usually local CPU/GPU work.",
+    );
     return;
   }
 
   if (normalized.includes("translating")) {
-    setDelayHint("Translating", "The app is translating completed English text into Chinese.");
+    const isChinese = sourceLanguage.value === "zho_Hans";
+    setDelayHint(
+      isChinese ? "Writing Chinese" : "Translating",
+      isChinese
+        ? "The app is sending completed Chinese text to the Chinese monitor."
+        : "The app is translating completed English text into Chinese.",
+    );
     return;
   }
 
@@ -917,7 +942,7 @@ function renderSubtitle(item) {
 
     const translation = document.createElement("p");
     translation.className = "translation";
-    translation.textContent = entry.translatedText || "翻译中...";
+    translation.textContent = entry.translatedText || "缈昏瘧涓?..";
 
     const timestamp = document.createElement("div");
     timestamp.className = "timestamp";
@@ -937,20 +962,27 @@ function renderSubtitle(item) {
 }
 
 function renderLocalSubtitle(item) {
+  if (isChineseSource()) {
+    renderUnifiedChineseTranscript(item);
+    return;
+  }
+
   if (item.sourceText && item.sourceText.trim()) {
     const draftId = item.sequenceId || "local-current-draft";
-    updateEnglishDraftTape(item, draftId);
-    englishDraftActiveItem = item;
+    const cleanSourceText = stripSubtitleMarkup(item.sourceText);
+    const cleanItem = { ...item, sourceText: cleanSourceText };
+    updateEnglishDraftTape(cleanItem, draftId);
+    englishDraftActiveItem = cleanItem;
     if (item.isFinal === false) {
       if (englishDraftActiveId !== draftId) {
-        englishDraftActiveId = draftId;
+        resetEnglishDraftPaging(draftId);
       }
-      upsertEnglishLiveBuffer(item, draftId, false);
+      upsertEnglishLiveBuffer(cleanItem, draftId, false);
       englishDraftById.set(draftId, {
         ...(englishDraftById.get(draftId) || {}),
-        ...item,
-        sourceText: item.sourceText,
-        originalSourceText: item.sourceText,
+        ...cleanItem,
+        sourceText: cleanSourceText,
+        originalSourceText: cleanSourceText,
         translatedText: "",
         sequenceId: draftId,
         isFinal: false,
@@ -958,7 +990,7 @@ function renderLocalSubtitle(item) {
       renderEnglishDraft();
       renderEnglishContext();
     } else {
-      recordTranscriptEntry(item, "local");
+      recordTranscriptEntry(cleanItem, "local");
       removeProvisionalContext(draftId);
       const draftIds = Array.isArray(item.draftSequenceIds) && item.draftSequenceIds.length
         ? item.draftSequenceIds
@@ -967,15 +999,12 @@ function renderLocalSubtitle(item) {
         removeProvisionalContext(id);
         removeEnglishLiveBuffer(id);
       }
-      upsertHistory(englishContextHistory, {
-        ...item,
-        translatedText: "",
-        sequenceId: draftId,
-        isFinal: true,
-      });
-      englishContextHistory = englishContextHistory.slice(-24);
+      appendEnglishConfirmedContext(cleanItem, draftId);
       for (const id of draftIds) {
         englishDraftById.delete(id);
+      }
+      if (isChineseSource()) {
+        resetChineseDraftTape();
       }
       renderEnglishContext();
       renderEnglishDraft();
@@ -983,10 +1012,19 @@ function renderLocalSubtitle(item) {
   }
 
   if (item.isFinal !== false && item.translatedText && item.translatedText.trim()) {
-    recordTranscriptEntry(item, "local");
-    upsertHistory(chineseTranslationHistory, item);
+    const cleanItem = {
+      ...item,
+      sourceText: stripSubtitleMarkup(item.sourceText),
+      translatedText: stripSubtitleMarkup(item.translatedText),
+    };
+    recordTranscriptEntry(cleanItem, "local");
+    const wasFollowingChineseText = isAtBottom(chineseSubtitleStack);
+    upsertHistory(chineseTranslationHistory, cleanItem);
     chineseTranslationHistory = chineseTranslationHistory.slice(-maxDisplayHistory);
-    renderTextFlow(chineseSubtitleStack, chineseTranslationHistory, "translatedText", maxChineseFlowCharacters, "translation");
+    renderTextFlow(chineseSubtitleStack, chineseTranslationHistory, "translatedText", null, "translation");
+    if (autoFollowChineseText && wasFollowingChineseText) {
+      chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
+    }
   }
 
   if (item.perf) {
@@ -994,17 +1032,228 @@ function renderLocalSubtitle(item) {
   }
 }
 
+function renderUnifiedChineseTranscript(item) {
+  if (item.sourceText && item.sourceText.trim()) {
+    const sequenceId = item.sequenceId || "local-current-transcript";
+    const cleanSourceText = stripSubtitleMarkup(item.sourceText);
+    const wasFollowing = isAtBottom(englishContextStack);
+    upsertHistory(englishContextHistory, {
+      ...item,
+      sequenceId,
+      sourceText: cleanSourceText,
+      translatedText: "",
+      isFinal: true,
+    });
+    englishContextHistory = englishContextHistory.slice(-32);
+    renderEnglishContext();
+    if (autoFollowEnglishContext && wasFollowing) {
+      englishContextStack.scrollTop = englishContextStack.scrollHeight;
+    }
+    if (item.isFinal !== false) {
+      recordTranscriptEntry({ ...item, sourceText: cleanSourceText }, "local");
+    }
+  }
+
+  if (item.isFinal !== false && item.translatedText && item.translatedText.trim()) {
+    const cleanSourceText = stripSubtitleMarkup(item.sourceText);
+    const cleanTranslatedText = stripSubtitleMarkup(item.translatedText);
+    const cleanItem = { ...item, sourceText: cleanSourceText, translatedText: cleanTranslatedText };
+    recordTranscriptEntry(cleanItem, "local");
+    const wasFollowingChineseText = isAtBottom(chineseSubtitleStack);
+    upsertHistory(chineseTranslationHistory, cleanItem);
+    chineseTranslationHistory = chineseTranslationHistory.slice(-maxDisplayHistory);
+    renderTextFlow(chineseSubtitleStack, chineseTranslationHistory, "translatedText", null, "translation");
+    if (autoFollowChineseText && wasFollowingChineseText) {
+      chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
+    }
+  }
+
+  if (item.perf) {
+    perfText.textContent = `Perf: audio ${item.perf.audioSeconds}s | ASR ${item.perf.asrMs}ms | translate ${item.perf.translateMs}ms | total ${item.perf.totalLatencyMs}ms | ${item.perf.engine}`;
+  }
+}
+
+function renderFunasrStreamingSubtitle(payload) {
+  const text = stripSubtitleMarkup(payload.text || "");
+  if (!text) {
+    return;
+  }
+  const latency = Math.round(Number(payload.latency_ms) || 0);
+  perfText.textContent = `鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: ${latency} ms`;
+
+  if (payload.type === "partial") {
+    funasrStreamingPartialItem = {
+      sequenceId: "funasr-streaming-partial",
+      sourceText: text,
+      translatedText: text,
+      start: 0,
+      end: 0,
+      isFinal: false,
+    };
+    renderFunasrChineseText();
+    return;
+  }
+
+  funasrStreamingFinalIndex += 1;
+  funasrStreamingPartialItem = null;
+  const finalItem = {
+    sequenceId: `funasr-streaming-final-${funasrStreamingFinalIndex}`,
+    sourceText: text,
+    translatedText: text,
+    start: 0,
+    end: 0,
+    isFinal: true,
+    perf: {
+      audioSeconds: 0.6,
+      asrMs: Number(payload.inference_ms) || 0,
+      translateMs: 0,
+      totalLatencyMs: Number(payload.latency_ms) || 0,
+      engine: "funasr_streaming",
+    },
+  };
+  const wasFollowingChineseText = isAtBottom(chineseSubtitleStack);
+  upsertHistory(chineseTranslationHistory, finalItem);
+  chineseTranslationHistory = chineseTranslationHistory.slice(-maxDisplayHistory);
+  renderFunasrChineseText();
+  if (autoFollowChineseText && wasFollowingChineseText) {
+    chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
+  }
+  recordTranscriptEntry(finalItem, "local");
+}
+
+function renderFunasrChineseText() {
+  const visibleEntries = funasrStreamingPartialItem
+    ? [...chineseTranslationHistory, funasrStreamingPartialItem]
+    : chineseTranslationHistory;
+  const text = visibleEntries
+    .map((entry) => stripSubtitleMarkup(entry.translatedText || entry.sourceText || ""))
+    .filter(Boolean)
+    .join("");
+  chineseSubtitleStack.innerHTML = "";
+  const paragraph = document.createElement("p");
+  paragraph.className = `flow-text translation-flow-text ${funasrStreamingPartialItem ? "funasr-live-text" : ""}`.trim();
+  paragraph.textContent = formatFunasrLiveChineseText(text, Boolean(funasrStreamingPartialItem));
+  chineseSubtitleStack.append(paragraph);
+  if (autoFollowChineseText) {
+    chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
+  }
+}
+
+function renderFunasrStatusText(message) {
+  if (!useFunasrStreamingMode()) {
+    return;
+  }
+  chineseSubtitleStack.innerHTML = "";
+  const paragraph = document.createElement("p");
+  paragraph.className = "flow-text translation-flow-text funasr-status-line";
+  paragraph.textContent = message;
+  chineseSubtitleStack.append(paragraph);
+}
+
+function formatFunasrLiveChineseText(text, isLive = false) {
+  const compact = String(text || "")
+    .replace(/\s+/g, "")
+    .replace(/([\u3002\uff01\uff1f\uff1b\uff0c\u3001,.!?]){2,}/g, "$1")
+    .trim();
+  if (!compact) {
+    return "";
+  }
+  const windowText = isLive ? compact.slice(-84) : compact;
+  return splitChineseSubtitleLines(windowText, isLive ? 24 : 34).join("\n");
+}
+
+function splitChineseSubtitleLines(text, lineLength) {
+  const normalized = String(text || "").trim();
+  if (!normalized) {
+    return [];
+  }
+  const sentenceParts = normalized.match(/[^\u3002\uff01\uff1f!?]+[\u3002\uff01\uff1f!?]?/g) || [normalized];
+  const lines = [];
+  for (const part of sentenceParts) {
+    let remaining = part.trim();
+    while (remaining.length > lineLength) {
+      let splitAt = -1;
+      const softBreaks = ["\uff0c", "\u3001", "\uff1b", ",", ";"];
+      for (const mark of softBreaks) {
+        const index = remaining.lastIndexOf(mark, lineLength);
+        if (index >= Math.floor(lineLength * 0.45)) {
+          splitAt = index + 1;
+          break;
+        }
+      }
+      if (splitAt < 0) {
+        splitAt = lineLength;
+      }
+      lines.push(remaining.slice(0, splitAt).trim());
+      remaining = remaining.slice(splitAt).trim();
+    }
+    if (remaining) {
+      lines.push(remaining);
+    }
+  }
+  return lines.slice(-3);
+}
+
 function renderEnglishContext() {
   const wasFollowing = isAtBottom(englishContextStack);
-  renderTextFlow(englishContextStack, englishContextHistory, "sourceText", null, "context");
+  renderTextFlow(englishContextStack, buildEnglishContextEntries(), "sourceText", null, "context");
   if (autoFollowEnglishContext && wasFollowing) {
     englishContextStack.scrollTop = englishContextStack.scrollHeight;
   }
 }
 
+function buildEnglishContextEntries() {
+  if (isChineseSource()) {
+    return englishContextHistory;
+  }
+  return englishContextHistory.filter((entry) => !entry.isProvisional).slice(-160);
+}
+
+function appendEnglishConfirmedContext(item, sequenceId) {
+  const normalizedId = sequenceId || item.sequenceId || `english-${englishContextSequenceCounter + 1}`;
+  const nextText = String(item.sourceText || "").replace(/\s+/g, " ").trim();
+  if (!nextText) {
+    return;
+  }
+
+  const previousText = englishConfirmedTextById.get(normalizedId) || "";
+  if (previousText === nextText) {
+    return;
+  }
+
+  let deltaText = nextText;
+  if (previousText) {
+    if (nextText.startsWith(previousText)) {
+      deltaText = nextText.slice(previousText.length).trim();
+    } else {
+      const commonPrefix = commonTextPrefix(previousText, nextText);
+      deltaText = nextText.slice(commonPrefix.length).trim();
+      if (deltaText.length < 6 && nextText.length > previousText.length) {
+        deltaText = nextText.slice(previousText.length).trim();
+      }
+    }
+  }
+
+  englishConfirmedTextById.set(normalizedId, nextText);
+  if (!deltaText || deltaText.length < 2) {
+    return;
+  }
+
+  englishContextSequenceCounter += 1;
+  englishContextHistory.push({
+    ...item,
+    translatedText: "",
+    sequenceId: `${normalizedId}-confirmed-${englishContextSequenceCounter}`,
+    sourceText: deltaText,
+    isFinal: true,
+  });
+  englishContextHistory = englishContextHistory.slice(-160);
+}
+
 function renderEnglishDraft() {
-  const draftWindow = buildEnglishDraftWindow();
-  renderSubtitleList(englishDraftStack, draftWindow ? [draftWindow] : [], "draft");
+  if (englishDraftStack) {
+    englishDraftStack.innerHTML = "";
+  }
 }
 
 function resetEnglishDraftPaging(activeId = englishDraftActiveId) {
@@ -1022,18 +1271,92 @@ function updateEnglishDraftTape(item, draftId) {
     return;
   }
   const previous = englishDraftTapeTextsById.get(draftId) || "";
-  const previousWords = previous.split(/\s+/).filter(Boolean);
-  const nextWords = text.split(/\s+/).filter(Boolean);
-  const commonCount = commonWordPrefixCount(previousWords, nextWords);
-  const appendedWords = nextWords.slice(commonCount);
-  if (appendedWords.length) {
-    englishDraftTapeWords.push(...appendedWords);
+  const previousTokens = draftTextTokens(previous);
+  const nextTokens = draftTextTokens(text);
+  const commonCount = commonTokenPrefixCount(previousTokens, nextTokens);
+  let appendedTokens = nextTokens.slice(commonCount);
+  if (isChineseSource()) {
+    appendedTokens = filterRepeatedChineseDraftTokens(appendedTokens);
+  }
+  if (appendedTokens.length) {
+    englishDraftTapeWords.push(...appendedTokens);
   }
   englishDraftTapeTextsById.set(draftId, text);
   trimEnglishDraftTape();
 }
 
-function commonWordPrefixCount(leftWords, rightWords) {
+function filterRepeatedChineseDraftTokens(tokens) {
+  if (!tokens.length) {
+    return tokens;
+  }
+  const incoming = tokens.join("");
+  const recent = `${recentChineseContextText(420)}${englishDraftTapeWords.slice(-260).join("")}`;
+  if (!recent) {
+    return tokens;
+  }
+  if (recent.includes(incoming)) {
+    return [];
+  }
+  for (let length = Math.min(48, incoming.length); length >= 10; length -= 1) {
+    const prefix = incoming.slice(0, length);
+    const position = recent.lastIndexOf(prefix);
+    if (position >= 0) {
+      return Array.from(incoming.slice(length));
+    }
+  }
+  return collapseRepeatedChineseTail(tokens);
+}
+
+function recentChineseContextText(maxChars = 360) {
+  return englishContextHistory
+    .slice(-8)
+    .map((entry) => String(entry.sourceText || "").replace(/\s+/g, ""))
+    .join("")
+    .slice(-maxChars);
+}
+
+function resetChineseDraftTape() {
+  englishDraftById = new Map();
+  englishLiveBuffer = [];
+  englishDraftTapeWords = [];
+  englishDraftTapeTextsById = new Map();
+  englishDraftLineStartWord = 0;
+  englishDraftLineEndWord = 0;
+  englishDraftLastWordCount = 0;
+  englishDraftActiveId = "";
+  englishDraftActiveItem = null;
+  englishDraftPendingAdvance = false;
+}
+
+function collapseRepeatedChineseTail(tokens) {
+  let text = tokens.join("");
+  for (let size = Math.min(36, Math.floor(text.length / 2)); size >= 8; size -= 1) {
+    while (
+      text.length >= size * 2
+      && text.slice(-size) === text.slice(text.length - size * 2, text.length - size)
+    ) {
+      text = text.slice(0, -size);
+    }
+  }
+  return Array.from(text);
+}
+
+function draftTextTokens(text) {
+  const normalized = String(text || "").replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    return [];
+  }
+  if (isChineseSource()) {
+    return Array.from(normalized.replace(/\s+/g, ""));
+  }
+  return normalized.split(/\s+/).filter(Boolean);
+}
+
+function draftTokenSeparator() {
+  return isChineseSource() ? "" : " ";
+}
+
+function commonTokenPrefixCount(leftWords, rightWords) {
   const limit = Math.min(leftWords.length, rightWords.length);
   let index = 0;
   while (index < limit && leftWords[index].toLowerCase() === rightWords[index].toLowerCase()) {
@@ -1043,7 +1366,7 @@ function commonWordPrefixCount(leftWords, rightWords) {
 }
 
 function trimEnglishDraftTape() {
-  const maxWords = 180;
+  const maxWords = isChineseSource() ? 420 : 180;
   if (englishDraftTapeWords.length <= maxWords) {
     return;
   }
@@ -1055,13 +1378,15 @@ function trimEnglishDraftTape() {
 
 function promoteDraftLeadToContext(item, draftId) {
   const text = String(item.sourceText || "").trim();
-  const words = text.split(/\s+/).filter(Boolean);
-  if (words.length < localDraftPromoteWordCount) {
+  const words = draftTextTokens(text);
+  const promoteCount = isChineseSource() ? localChineseDraftPromoteChars : localDraftPromoteWordCount;
+  const tailCount = isChineseSource() ? localChineseDraftTailChars : localDraftTailWordCount;
+  if (words.length < promoteCount) {
     removeProvisionalContext(draftId);
     return;
   }
 
-  const leadText = words.slice(0, -localDraftTailWordCount).join(" ").trim();
+  const leadText = words.slice(0, -tailCount).join(draftTokenSeparator()).trim();
   if (!leadText) {
     removeProvisionalContext(draftId);
     return;
@@ -1088,11 +1413,13 @@ function removeProvisionalContext(draftId) {
 
 function draftDisplayText(text) {
   const normalized = String(text || "").replace(/\s+/g, " ").trim();
-  const words = normalized.split(/\s+/).filter(Boolean);
-  if (words.length <= localDraftPromoteWordCount) {
+  const words = draftTextTokens(normalized);
+  const promoteCount = isChineseSource() ? localChineseDraftPromoteChars : localDraftPromoteWordCount;
+  const tailCount = isChineseSource() ? localChineseDraftTailChars : localDraftTailWordCount;
+  if (words.length <= promoteCount) {
     return normalized;
   }
-  return words.slice(-localDraftTailWordCount).join(" ");
+  return words.slice(-tailCount).join(draftTokenSeparator());
 }
 
 function upsertEnglishLiveBuffer(item, sequenceId, isFinal) {
@@ -1125,43 +1452,19 @@ function removeEnglishLiveBuffer(sequenceId) {
 }
 
 function buildEnglishDraftWindow() {
-  const words = englishDraftTapeWords;
-  if (!words.length) {
-    englishDraftLineStartWord = 0;
-    englishDraftLineEndWord = 0;
-    englishDraftLastWordCount = 0;
+  const liveEntry = englishLiveBuffer[englishLiveBuffer.length - 1] || englishDraftActiveItem;
+  const liveText = String(liveEntry?.sourceText || "").replace(/\s+/g, " ").trim();
+  const fallbackText = englishDraftTapeWords.slice(-90).join(draftTokenSeparator()).trim();
+  const text = liveText || fallbackText;
+  if (!text) {
     return null;
   }
-  if (words.length < englishDraftLastWordCount || englishDraftLineStartWord >= words.length) {
-    englishDraftLineStartWord = 0;
-    englishDraftLineEndWord = 0;
-    englishDraftPendingAdvance = false;
-  }
-  if (
-    englishDraftPendingAdvance
-    && englishDraftLineEndWord > englishDraftLineStartWord
-    && englishDraftLineEndWord < words.length
-  ) {
-    const completedPage = {
-      startWord: englishDraftLineStartWord,
-      endWord: englishDraftLineEndWord,
-      text: words.slice(englishDraftLineStartWord, englishDraftLineEndWord).join(" "),
-    };
-    promoteDraftPageToContext(completedPage, englishDraftActiveItem, englishDraftActiveItem);
-    englishDraftLineStartWord = englishDraftLineEndWord;
-    englishDraftPendingAdvance = false;
-  }
-  const draftWindow = longestFittingDraftPage(words, englishDraftLineStartWord);
-  englishDraftLineStartWord = draftWindow.startWord;
-  englishDraftLineEndWord = draftWindow.endWord;
-  englishDraftPendingAdvance = draftWindow.text && draftWindow.endWord < words.length;
-  englishDraftLastWordCount = words.length;
   return {
     sequenceId: "local-live-window",
-    sourceText: draftWindow.text,
+    sourceText: text,
     translatedText: "",
-    start: englishDraftActiveItem?.start || 0,
-    end: englishDraftActiveItem?.end || 0,
+    start: liveEntry?.start || englishDraftActiveItem?.start || 0,
+    end: liveEntry?.end || englishDraftActiveItem?.end || 0,
     isFinal: false,
   };
 }
@@ -1191,7 +1494,7 @@ function longestFittingDraftPage(words, startWord = 0) {
   }
   const safeStart = Math.max(0, Math.min(startWord, words.length - 1));
   for (let endWord = words.length; endWord > safeStart; endWord -= 1) {
-    const text = words.slice(safeStart, endWord).join(" ");
+    const text = words.slice(safeStart, endWord).join(draftTokenSeparator());
     if (!draftTextWouldOverflow(text)) {
       return { startWord: safeStart, endWord, text };
     }
@@ -1206,9 +1509,10 @@ function draftTextWouldOverflow(text) {
   const probe = document.createElement("span");
   probe.className = "draft-measure-probe";
   probe.textContent = text;
+  probe.style.width = `${Math.max(40, englishDraftStack.clientWidth - 44)}px`;
   englishDraftStack.append(probe);
-  const availableWidth = Math.max(40, englishDraftStack.clientWidth - 44);
-  const wouldOverflow = probe.scrollWidth > availableWidth;
+  const lineHeight = Number.parseFloat(window.getComputedStyle(probe).lineHeight) || 18.5;
+  const wouldOverflow = probe.scrollHeight > Math.ceil(lineHeight * 2.2);
   probe.remove();
   return wouldOverflow;
 }
@@ -1235,11 +1539,11 @@ function renderSubtitleList(target, entries, mode) {
 
     const source = document.createElement("p");
     source.className = "source";
-    source.textContent = entry.sourceText;
+    source.textContent = stripSubtitleMarkup(entry.sourceText);
 
     const translation = document.createElement("p");
     translation.className = "translation";
-    translation.textContent = entry.translatedText || "";
+    translation.textContent = stripSubtitleMarkup(entry.translatedText || "");
 
     const timestamp = document.createElement("div");
     timestamp.className = "timestamp";
@@ -1252,15 +1556,21 @@ function renderSubtitleList(target, entries, mode) {
 }
 
 function renderTextFlow(target, entries, field, maxCharacters, mode) {
-  const joinedText = entries
-    .map((entry) => entry[field])
+  const separator = mode === "translation" && isChineseSource() ? "" : " ";
+  const shouldDedupeChinese = isChineseSource() && (mode === "context" || mode === "translation");
+  const visibleEntries = shouldDedupeChinese
+    ? dedupeChineseFlowEntries(entries, field)
+    : entries;
+  const joinedText = visibleEntries
+    .map((entry) => stripSubtitleMarkup(entry[field]))
     .filter(Boolean)
-    .join(" ");
+    .join(separator);
+  const cleanedJoinedText = shouldDedupeChinese ? collapseChineseRepeatedText(joinedText) : joinedText;
   const text = typeof maxCharacters === "number"
-    ? trimFlowText(joinedText, maxCharacters)
-    : joinedText.replace(/\s+/g, " ").trim();
+    ? trimFlowText(cleanedJoinedText, maxCharacters)
+    : cleanedJoinedText.replace(/\s+/g, " ").trim();
 
-  if (mode === "context") {
+  if (target === englishContextStack && mode === "context" && !isChineseSource()) {
     renderEnglishContextTypewriter(target, text);
     return;
   }
@@ -1270,6 +1580,172 @@ function renderTextFlow(target, entries, field, maxCharacters, mode) {
   paragraph.className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""} ${mode === "context" ? "english-flow-text" : ""}`.trim();
   paragraph.textContent = text;
   target.append(paragraph);
+}
+
+function stripSubtitleMarkup(text) {
+  return String(text || "")
+    .replace(/\{\\[^{}]*\}/g, " ")
+    .replace(/\{(?:\\[A-Za-z][A-Za-z0-9]*[^{}]*)+\}/g, " ")
+    .replace(/\\(?:fn|fs|shad|bord|blur|be|b|i|u|r|p|q|a|k|kf|ko|pos|move|org|clip|iclip|fad|fade|c|[1-4]c|[1-4]a|alpha|fscx|fscy|frz|frx|fry|an)[^\\\s{}]*/gi, " ")
+    .replace(/[{}]/g, " ")
+    .replace(/<\/?[^>\s]+(?:\s+[^>]*)?>/g, " ")
+    .replace(/\b\d{1,2}:\d{2}:\d{2}(?:[,.]\d{1,3})?\s*(?:-->|-)\s*\d{1,2}:\d{2}:\d{2}(?:[,.]\d{1,3})?/g, " ")
+    .replace(/\s{2,}/g, " ")
+    .trim();
+}
+
+function extractPostMeetingTranscriptText(markdown) {
+  const lines = String(markdown || "").split(/\r?\n/);
+  const body = [];
+  let inTranscript = false;
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (/^##\s+Full Transcript/i.test(line)) {
+      inTranscript = true;
+      continue;
+    }
+    if (!inTranscript) {
+      continue;
+    }
+    if (/^##\s+/.test(line)) {
+      break;
+    }
+    if (!line || /^###\s+/.test(line) || /^[-*]\s+Audio:/i.test(line)) {
+      continue;
+    }
+    body.push(line);
+  }
+  return polishFinalChineseText(body.join(""));
+}
+
+function polishFinalChineseText(text) {
+  return String(text || "")
+    .replace(/<\s*\|\s*[^>]+?\s*\|\s*>/g, " ")
+    .replace(/\s+/g, " ")
+    .replace(/([\u3400-\u9fff])\s+([\u3400-\u9fff])/g, "$1$2")
+    .replace(/([\u3400-\u9fff])\s+([\uff0c\u3002\uff01\uff1f\uff1b\uff1a])/g, "$1$2")
+    .replace(/([\uff0c\u3002\uff01\uff1f\uff1b\uff1a])\s+([\u3400-\u9fff])/g, "$1$2")
+    .replace(/([\u3002\uff01\uff1f\uff1b]){2,}/g, "$1")
+    .replace(/([\uff0c\u3001]){2,}/g, "$1")
+    .trim();
+}
+
+function renderQualityFinalTranscriptResult(payload) {
+  if (!isChineseSource()) {
+    return;
+  }
+  const text = extractPostMeetingTranscriptText(payload.transcriptText || "");
+  if (!text) {
+    return;
+  }
+  chineseTranslationHistory = [{
+    sequenceId: `quality-final-${Date.now()}`,
+    sourceText: text,
+    translatedText: text,
+    start: 0,
+    end: 0,
+    isFinal: true,
+    perf: { engine: payload.asrEngine || "funasr" },
+  }];
+  renderTextFlow(chineseSubtitleStack, chineseTranslationHistory, "translatedText", null, "translation");
+  chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
+  noticeText.textContent = "Quality final ready";
+  localTargetSubtitle.textContent = "High-quality post-meeting transcript";
+}
+
+function dedupeChineseFlowEntries(entries, field) {
+  const kept = [];
+  for (const entry of entries) {
+    const text = String(entry[field] || "").replace(/\s+/g, "").trim();
+    if (!text) {
+      continue;
+    }
+
+    let handled = false;
+    for (let index = 0; index < kept.length; index += 1) {
+      const previousText = String(kept[index][field] || "").replace(/\s+/g, "").trim();
+      if (!previousText) {
+        continue;
+      }
+      if (previousText === text || previousText.includes(text)) {
+        handled = true;
+        break;
+      }
+      if (text.includes(previousText)) {
+        kept[index] = entry;
+        handled = true;
+        break;
+      }
+      if (chineseTextLooksDuplicate(text, previousText)) {
+        if (text.length > previousText.length) {
+          kept[index] = entry;
+        }
+        handled = true;
+        break;
+      }
+    }
+    if (!handled) {
+      kept.push(entry);
+    }
+  }
+  return kept;
+}
+
+function chineseTextLooksDuplicate(current, previous) {
+  if (current === previous || previous.includes(current)) {
+    return true;
+  }
+  const shorter = Math.min(current.length, previous.length);
+  if (shorter < 12) {
+    return false;
+  }
+  const common = commonTextPrefix(current, previous).length;
+  return common >= Math.floor(shorter * 0.9) || chineseTextSimilarity(current, previous) >= 0.94;
+}
+
+function collapseChineseRepeatedText(text) {
+  const compact = String(text || "")
+    .replace(/\s+/g, "")
+    .replace(/([銆傦紒锛燂紱锛屻€?.!?]){2,}/g, "$1");
+  const parts = compact.match(/[^\u3002\uff01\uff1f!?]+[\u3002\uff01\uff1f!?]?/g) || [compact];
+  const kept = [];
+  for (const part of parts) {
+    const body = part.replace(/[\u3002\uff01\uff1f!?]+$/g, "").trim();
+    if (!body) {
+      continue;
+    }
+    const duplicate = kept.slice(-6).some((previous) => {
+      const previousBody = previous.replace(/[\u3002\uff01\uff1f!?]+$/g, "").trim();
+      return chineseTextLooksDuplicate(body, previousBody);
+    });
+    if (!duplicate) {
+      kept.push(part);
+    }
+  }
+  return kept.join("").trim();
+}
+
+function chineseTextSimilarity(left, right) {
+  const a = String(left || "").replace(/\s+/g, "");
+  const b = String(right || "").replace(/\s+/g, "");
+  const shorter = Math.min(a.length, b.length);
+  if (shorter < 12) {
+    return 0;
+  }
+  const gramsA = new Set();
+  for (let index = 0; index <= a.length - 3; index += 1) {
+    gramsA.add(a.slice(index, index + 3));
+  }
+  let overlap = 0;
+  const gramsB = new Set();
+  for (let index = 0; index <= b.length - 3; index += 1) {
+    const gram = b.slice(index, index + 3);
+    gramsB.add(gram);
+    if (gramsA.has(gram)) {
+      overlap += 1;
+    }
+  }
+  return overlap / Math.max(1, Math.min(gramsA.size, gramsB.size));
 }
 
 function renderEnglishContextTypewriter(target, nextText) {
@@ -1289,16 +1765,10 @@ function renderEnglishContextTypewriter(target, nextText) {
   }
 
   if (nextText.length < currentText.length || !nextText.startsWith(currentText)) {
-    const commonPrefix = commonTextPrefix(currentText, nextText);
-    if (commonPrefix.length >= Math.min(24, Math.floor(currentText.length * 0.6))) {
-      englishContextRenderedText = commonPrefix;
-      paragraph.textContent = commonPrefix;
-    } else {
-      englishContextRenderedText = nextText;
-      paragraph.textContent = nextText;
-      paragraph.classList.toggle("typing", Boolean(nextText));
-      return;
-    }
+    englishContextRenderedText = nextText;
+    paragraph.textContent = nextText;
+    paragraph.classList.remove("typing");
+    return;
   } else {
     englishContextRenderedText = currentText;
   }
@@ -1370,8 +1840,15 @@ function updateEngineControls() {
   cloudControls.forEach((item) => {
     item.classList.toggle("hidden", !isCloud);
   });
+  updateLocalMonitorLabels();
   perfText.textContent = isCloud
     ? "Cloud mode: streaming live subtitles."
+    : sourceLanguage.value === "zho_Hans"
+    ? isQualityFinalMode()
+      ? "Local Chinese Quality: recording only; build notes manually after End."
+      : isBalancedChineseMode()
+      ? "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
+      : "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
     : "Local mode: English live transcript above, Chinese sentence translation below.";
   azureSubtitleBox.classList.toggle("hidden", !isCloud);
   localSubtitleLayout.classList.toggle("hidden", isCloud);
@@ -1453,12 +1930,12 @@ function transcriptMarkdown() {
   ];
 
   for (const entry of sessionTranscript) {
-    lines.push(`### ${entry.turnLabel} · ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
+    lines.push(`### ${entry.turnLabel} 路 ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
     lines.push("");
     lines.push(`Source: ${entry.sourceText}`);
     if (entry.translatedText) {
       lines.push("");
-      lines.push(`中文: ${entry.translatedText}`);
+      lines.push(`涓枃: ${entry.translatedText}`);
     }
     lines.push("");
   }
@@ -1471,10 +1948,14 @@ function minutesMarkdown() {
   const highlights = usableEntries
     .filter((entry) => (entry.translatedText || entry.sourceText).length >= 16)
     .slice(0, 10);
-  const actionCandidates = usableEntries.filter((entry) =>
-    /\b(need|should|must|follow up|action|todo|next|confirm|decide|owner|deadline)\b/i.test(entry.sourceText)
-    || /需要|应该|必须|跟进|确认|决定|负责人|截止|下一步/.test(entry.translatedText),
-  );
+  const actionKeywords = ["need", "should", "must", "follow up", "action", "todo", "next", "confirm", "decide", "owner", "deadline"];
+  const chineseActionKeywords = ["\u9700\u8981", "\u5e94\u8be5", "\u5fc5\u987b", "\u8ddf\u8fdb", "\u786e\u8ba4", "\u51b3\u5b9a", "\u8d1f\u8d23\u4eba", "\u622a\u6b62", "\u4e0b\u4e00\u6b65"];
+  const actionCandidates = usableEntries.filter((entry) => {
+    const source = String(entry.sourceText || "").toLowerCase();
+    const translated = String(entry.translatedText || "");
+    return actionKeywords.some((keyword) => source.includes(keyword))
+      || chineseActionKeywords.some((keyword) => translated.includes(keyword));
+  });
 
   const lines = [
     "# Meeting Minutes",
@@ -1510,12 +1991,12 @@ function minutesMarkdown() {
 
   lines.push("", "## Full Transcript", "");
   for (const entry of sessionTranscript) {
-    lines.push(`### ${entry.turnLabel} · ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
+    lines.push(`### ${entry.turnLabel} 路 ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
     lines.push("");
     lines.push(`Source: ${entry.sourceText}`);
     if (entry.translatedText) {
       lines.push("");
-      lines.push(`中文: ${entry.translatedText}`);
+      lines.push(`涓枃: ${entry.translatedText}`);
     }
     lines.push("");
   }
@@ -1599,13 +2080,33 @@ function localAsrProfile() {
   };
 }
 
+function isChineseSource() {
+  return sourceLanguage?.value === "zho_Hans";
+}
+
+function isQualityFinalMode() {
+  return isChineseSource() && translationEngine.value !== "azure" && localLatencyPreset?.value === "quality";
+}
+
+function isBalancedChineseMode() {
+  return isChineseSource() && translationEngine.value !== "azure" && localLatencyPreset?.value === "steady";
+}
+
+function useFunasrStreamingMode() {
+  return isChineseSource() && translationEngine.value !== "azure" && !isQualityFinalMode();
+}
+
+function delay(ms) {
+  return new Promise((resolve) => window.setTimeout(resolve, ms));
+}
+
 function applyLocalAsrPreset() {
   if (!localAsrPreset || translationEngine.value === "azure") {
     return;
   }
   const profile = localAsrProfile();
   deviceType.value = profile.device;
-  localLatencyPreset.value = profile.device === "cuda" ? "steady" : "low";
+  localLatencyPreset.value = isChineseSource() ? "steady" : profile.device === "cuda" ? "steady" : "low";
   modelSize.value = profile.model;
   perfText.textContent = profile.label;
   applyLocalLatencyPreset();
@@ -1613,6 +2114,15 @@ function applyLocalAsrPreset() {
 
 function applyLocalLatencyPreset() {
   if (!localLatencyPreset) {
+    return;
+  }
+  if (isChineseSource() && translationEngine.value !== "azure") {
+    chunkSeconds.value = localLatencyPreset.value === "quality"
+      ? "5"
+      : localLatencyPreset.value === "low"
+      ? "1.5"
+      : "2";
+    updateLocalMonitorLabels();
     return;
   }
   if (localLatencyPreset.value === "low") {
@@ -1624,6 +2134,16 @@ function applyLocalLatencyPreset() {
 
 function effectiveLocalChunkSeconds(isLowLatencyLocal) {
   const selectedChunk = Number(chunkSeconds.value);
+  if (isChineseSource() && translationEngine.value !== "azure") {
+    if (isQualityFinalMode()) {
+      chunkSeconds.value = "5";
+      return 5;
+    }
+    const fallbackChunk = isLowLatencyLocal ? 1 : 1.5;
+    const cappedChunk = Math.min(Math.max(selectedChunk || fallbackChunk, 1), 2.5);
+    chunkSeconds.value = String(cappedChunk);
+    return cappedChunk;
+  }
   if (!isLowLatencyLocal) {
     return Math.min(Math.max(selectedChunk || 3, 2), 3);
   }
@@ -1635,6 +2155,38 @@ function effectiveLocalChunkSeconds(isLowLatencyLocal) {
 function localRealtimeTuning() {
   const isLowLatencyLocal = localLatencyPreset?.value === "low";
   const isSystemAudio = audioSource?.value === "system";
+  if (isChineseSource()) {
+    if (isQualityFinalMode()) {
+      return {
+        overlap_seconds: 0,
+        adaptive_chunking_enabled: false,
+        min_chunk_seconds: 5,
+        chunk_flush_silence_seconds: 0.8,
+        queue_max_size: 2,
+        segmenter_pause_seconds: 2,
+        segmenter_max_words: 60,
+        segmenter_max_seconds: 16,
+        context_buffer_enabled: false,
+        context_buffer_min_words: 18,
+        context_buffer_max_words: 80,
+        context_buffer_max_wait_seconds: 1.5,
+      };
+    }
+    return {
+      overlap_seconds: isSystemAudio ? 0.08 : 0.18,
+      adaptive_chunking_enabled: !isSystemAudio,
+      min_chunk_seconds: isSystemAudio ? 0.9 : 0.7,
+      chunk_flush_silence_seconds: isSystemAudio ? 0.08 : 0.18,
+      queue_max_size: 2,
+      segmenter_pause_seconds: isLowLatencyLocal ? 0.6 : 0.75,
+      segmenter_max_words: 48,
+      segmenter_max_seconds: isLowLatencyLocal ? 3.8 : 5,
+      context_buffer_enabled: false,
+      context_buffer_min_words: 18,
+      context_buffer_max_words: 56,
+      context_buffer_max_wait_seconds: 0.8,
+    };
+  }
   if (isLowLatencyLocal) {
     return {
       overlap_seconds: isSystemAudio ? 0.15 : 0.3,
@@ -1672,9 +2224,10 @@ function updateLanguageHints() {
   const isChinese = sourceLanguage.value === "zho_Hans";
   const isCloud = translationEngine.value === "azure";
   const subtitle = document.querySelector("#brandSubtitle");
+  updateLocalMonitorLabels();
   if (subtitle) {
     subtitle.textContent = isChinese
-      ? "Chinese meeting notes - English-Chinese output"
+      ? "Chinese meeting notes - Chinese transcript"
       : isSpanish
       ? "Spanish to Chinese - Local or Cloud"
       : "English to Chinese - Local or Cloud";
@@ -1690,8 +2243,50 @@ function updateLanguageHints() {
   perfText.textContent = isSpanish
     ? "Local Spanish: multilingual Whisper is selected automatically."
     : isChinese
-    ? "Local Chinese: multilingual Whisper is selected automatically."
+    ? isQualityFinalMode()
+      ? "Local Chinese Quality: recording only; build notes manually after End."
+      : isBalancedChineseMode()
+      ? "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
+      : "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
     : "Local English: optimized English ASR is available.";
+}
+
+function updateLocalMonitorLabels() {
+  if (!localSourceTitle || !localTargetTitle) {
+    return;
+  }
+  const isChinese = sourceLanguage.value === "zho_Hans";
+  const isQuality = isQualityFinalMode();
+  const isBalanced = isBalancedChineseMode();
+  const sourceTitle = isChinese
+    ? "Chinese transcript"
+    : sourceLanguage.value === "spa_Latn"
+    ? "Spanish"
+    : "English";
+  localSourceTitle.textContent = sourceTitle;
+  localTargetTitle.textContent = isChinese ? "Chinese text" : "Chinese";
+  localSourcePanel?.classList.toggle("unified-chinese-transcript", isChinese);
+  localSubtitleLayout?.classList.toggle("target-only", isChinese && translationEngine.value !== "azure");
+  englishDraftStack?.setAttribute("aria-hidden", isChinese ? "true" : "false");
+  localSourceSubtitle.textContent = isChinese
+    ? isQuality
+      ? "Recording only - notes manual"
+      : isBalanced
+      ? "FunASR Streaming partial"
+      : "FunASR Streaming partial"
+    : "Confirmed transcript";
+  localTargetSubtitle.textContent = isChinese
+    ? isQuality
+      ? "High-quality transcript built after meeting"
+      : isBalanced
+      ? "Final streaming subtitles"
+      : "Final streaming subtitles"
+    : "Complete sentence translation - slightly delayed";
+  localSourcePanel?.setAttribute("aria-label", `${sourceTitle} live transcript`);
+  localTargetPanel?.setAttribute(
+    "aria-label",
+    isChinese ? "Completed Chinese transcript text" : "Chinese translated subtitles",
+  );
 }
 
 function notesRecordingLanguage() {
@@ -1717,10 +2312,14 @@ function start() {
 
   subtitleStack.innerHTML = "";
   englishContextStack.innerHTML = "";
-  englishDraftStack.innerHTML = "";
+  if (englishDraftStack) {
+    englishDraftStack.innerHTML = "";
+  }
   chineseSubtitleStack.innerHTML = "";
   finalSubtitleHistory = [];
   englishContextHistory = [];
+  englishConfirmedTextById = new Map();
+  englishContextSequenceCounter = 0;
   englishDraftById = new Map();
   englishLiveBuffer = [];
   englishDraftLineStartWord = 0;
@@ -1739,6 +2338,8 @@ function start() {
   chineseTranslationHistory = [];
   sessionTranscript = [];
   transcriptById = new Map();
+  funasrStreamingFinalIndex = 0;
+  funasrStreamingPartialItem = null;
   currentTurnIndex = 0;
   meetingStartedAt = new Date();
   recordingStartedAt = null;
@@ -1747,6 +2348,7 @@ function start() {
   isRecordingActive = true;
   liveSubtitle = null;
   autoFollowSubtitles = true;
+  autoFollowChineseText = true;
   updateRecordingPanel("off");
   updateExportButtons();
   updateMeetingActionButtons();
@@ -1754,20 +2356,35 @@ function start() {
   setStatus("Connecting");
 
   const protocol = window.location.protocol === "https:" ? "wss" : "ws";
-  socket = new WebSocket(`${protocol}://${window.location.host}/ws/subtitles`);
+  const funasrStreamingMode = useFunasrStreamingMode();
+  const socketPath = funasrStreamingMode ? "/ws/asr/funasr" : "/ws/subtitles";
+  if (funasrStreamingMode) {
+    renderFunasrStatusText("\u6b63\u5728\u8fde\u63a5 FunASR\u2026");
+  }
+  socket = new WebSocket(`${protocol}://${window.location.host}${socketPath}`);
 
   socket.addEventListener("open", () => {
     startButton.disabled = false;
     stopButton.disabled = false;
     const isCloud = translationEngine.value === "azure";
     const isLowLatencyLocal = !isCloud && localLatencyPreset?.value === "low";
+    const qualityFinalMode = isQualityFinalMode();
     const effectiveChunk = effectiveLocalChunkSeconds(isLowLatencyLocal);
     const realtimeTuning = isCloud ? null : localRealtimeTuning();
     const asrProfile = isCloud ? null : localAsrProfile();
     setStatus(
-      isCloud ? "Connecting cloud" : "Loading models",
-      isCloud ? "Connecting to cloud speech translation." : "Preparing low-latency local pipeline.",
+      isCloud ? "Connecting cloud" : qualityFinalMode ? "Recording" : "Loading models",
+      isCloud
+        ? "Connecting to cloud speech translation."
+        : qualityFinalMode
+        ? "Recording only. End saves the recording; notes are manual."
+        : isBalancedChineseMode()
+        ? "Preparing FunASR Streaming. End saves the recording only."
+        : "Preparing low-latency local pipeline.",
     );
+    if (funasrStreamingMode) {
+      renderFunasrStatusText("\u6b63\u5728\u52a0\u8f7d\u672c\u5730\u6a21\u578b\uff0c\u9996\u6b21\u542f\u52a8\u53ef\u80fd\u9700\u8981\u51e0\u79d2\u2026");
+    }
     startAzureUsageSession();
     updateMeetingActionButtons();
     socket.send(JSON.stringify({
@@ -1799,7 +2416,7 @@ function start() {
         min_chunk_seconds: realtimeTuning?.min_chunk_seconds ?? 1,
         chunk_flush_silence_seconds: realtimeTuning?.chunk_flush_silence_seconds ?? 0.35,
         max_subtitles: serverSubtitleWindow,
-        queue_max_size: realtimeTuning?.queue_max_size ?? 2,
+        queue_max_size: funasrStreamingMode ? 3 : realtimeTuning?.queue_max_size ?? 2,
         segmenter_pause_seconds: realtimeTuning?.segmenter_pause_seconds,
         segmenter_max_words: realtimeTuning?.segmenter_max_words,
         segmenter_max_seconds: realtimeTuning?.segmenter_max_seconds,
@@ -1807,14 +2424,17 @@ function start() {
         context_buffer_min_words: realtimeTuning?.context_buffer_min_words,
         context_buffer_max_words: realtimeTuning?.context_buffer_max_words,
         context_buffer_max_wait_seconds: realtimeTuning?.context_buffer_max_wait_seconds,
+        quality_final_mode: qualityFinalMode,
+        funasr_streaming: funasrStreamingMode,
+        chunk_ms: 800,
+        chunk_size: [5, 10, 5],
+        enable_punctuation: false,
+        enable_vad: false,
       },
     }));
   });
 
   socket.addEventListener("message", (event) => {
-    if (!isLiveSessionActive) {
-      return;
-    }
     let payload;
     try {
       payload = JSON.parse(event.data);
@@ -1822,8 +2442,38 @@ function start() {
       setStatus("Error", "Received invalid server message");
       return;
     }
+    if (!isLiveSessionActive && !["partial", "final", "status", "error"].includes(payload.type)) {
+      return;
+    }
     if (payload.type === "status") {
-      setStatus(payload.status, providerNeutralText(payload.detail));
+      setStatus(payload.status || "Status", providerNeutralText(payload.detail || payload.text || ""));
+      if (funasrStreamingMode && !funasrStreamingPartialItem && chineseTranslationHistory.length === 0) {
+        renderFunasrStatusText(providerNeutralText(payload.detail || payload.text || "\u6b63\u5728\u51c6\u5907\u8bc6\u522b\u2026"));
+      }
+      if (payload.recordingPath) {
+        updateRecordingPanel("recording", payload.recordingPath);
+      }
+      if (payload.status === "Error") {
+        isLiveSessionActive = false;
+        isRecordingActive = false;
+        stopAzureUsageSession();
+        updateRecordingPanel("off");
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.close();
+        }
+        updateMeetingActionButtons();
+      }
+      return;
+    }
+    if (payload.type === "error") {
+      setStatus("Error", providerNeutralText(payload.text || payload.detail || "FunASR streaming failed."));
+      noticeText.textContent = "Error";
+      logText.textContent = providerNeutralText(payload.text || payload.detail || "FunASR streaming failed.");
+      return;
+    }
+    if (payload.type === "partial" || payload.type === "final") {
+      noticeText.textContent = payload.type === "partial" ? "Live" : "Final";
+      renderFunasrStreamingSubtitle(payload);
       return;
     }
     if (payload.type === "notice") {
@@ -1895,16 +2545,16 @@ async function endMeeting() {
       currentRecordingPath = endedRecording;
       selectedRecordingPaths.add(endedRecording);
     }
-    logText.textContent = "Recording session closed. Choose recordings and click Build Notes when ready.";
+    logText.textContent = "Recording session closed. Choose recordings and click Build Notes if needed.";
     updateRecordingPanel("ended");
-    setStatus("Stopped", "Meeting ended. Notes can be built later from selected recordings.");
+    setStatus("Stopped", "Meeting ended. Recording saved; notes are manual.");
     await refreshRecordings(endedRecording);
   } catch (error) {
     setStatus("Error", error.message || "Could not end meeting.");
   }
 }
 
-async function processMeetingRecording() {
+async function processMeetingRecording(options = {}) {
   if (isProcessingNotes) {
     await cancelMeetingNotes();
     return;
@@ -1921,7 +2571,8 @@ async function processMeetingRecording() {
   startNotesProgressPolling();
   updateMeetingActionButtons();
   noticeText.textContent = "Processing meeting notes";
-  const recordings = selectedRecordings();
+  const recordings = options.recordings || selectedRecordings();
+  const requestedNotesEngine = options.notesEngine || notesEngine?.value || "aliyun-tingwu";
   logText.textContent = `Building notes from ${recordings.length} selected recording(s). You can cancel this if it takes too long.`;
   updateDelayHintFromStatus("Creating notes", logText.textContent);
   try {
@@ -1931,7 +2582,7 @@ async function processMeetingRecording() {
       body: JSON.stringify({
         recordings,
         engine: translationEngine.value,
-        notesEngine: notesEngine?.value || "aliyun-tingwu",
+        notesEngine: requestedNotesEngine,
         tingwuUploadProvider: aliyunTingwuUploadProvider || "oss",
         notesLanguage: notesRecordingLanguage(),
       }),
@@ -1956,6 +2607,9 @@ async function processMeetingRecording() {
       "",
       minutesPreview || payload.log || "No preview text returned.",
     ].join("\n"));
+    if (options.renderQualityFinal) {
+      renderQualityFinalTranscriptResult(payload);
+    }
     setStatus("Stopped", "Meeting notes ready.");
   } catch (error) {
     if (error.name === "AbortError") {
@@ -2118,6 +2772,9 @@ subtitleStack.addEventListener("scroll", () => {
 });
 englishContextStack.addEventListener("scroll", () => {
   autoFollowEnglishContext = isAtBottom(englishContextStack);
+});
+chineseSubtitleStack.addEventListener("scroll", () => {
+  autoFollowChineseText = isAtBottom(chineseSubtitleStack);
 });
 applySavedUiTheme();
 applyDefaultInputMode();

@@ -43,12 +43,13 @@ Read these files early when continuing product, architecture, UI, meeting-notes,
    - Cloud mode is the primary low-latency path in tester-facing UI.
    - Tester-facing labels remain provider-neutral: use `Cloud`, `Cloud Usage`, and neutral status/error text.
    - Local ASR/translation remains a fallback path.
+   - Local Chinese realtime subtitles can use FunASR streaming through `/ws/asr/funasr`.
    - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
    - Fast/direct translation is the only active mode.
    - The browser UI is the main operating surface.
    - Diagnostics opens separately and must not replace or stop the active subtitle page.
    - Cloud usage shows current-session timing, browser-local estimates, and optional account-level sync.
-   - Local subtitles keep the split reading model: stable English context, one-line live English draft tape, and complete Chinese translation.
+   - English/Spanish local subtitles keep the split reading model: stable source context and complete Chinese translation.
    - Meeting notes are Word-first: English professional minutes first, Chinese reading version second, in one `.docx`.
    - Cloud meeting notes can use Aliyun Tingwu/Tencent Relay/OSS or Azure Batch when configured; local engines use local post-meeting processing.
    - Ollama `qwen3:14b` is a post-meeting refinement model only, not a realtime subtitle model.
@@ -87,9 +88,9 @@ Read these files early when continuing product, architecture, UI, meeting-notes,
 - Do not split long Cloud final subtitles purely by time.
 - Preserve the internal subtitle monitor scrollbar and scroll-review behavior.
 - Preserve the Cloud subtitle monitor scrollbar and scroll-review behavior.
-- Preserve the local split reading model: stable English context, live English draft, and complete Chinese translation.
-- Preserve the local draft visual tape behavior: one line fills first, then starts again from the left edge.
-- Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then `Open Bilingual Notes`.
+- Preserve the English/Spanish local split reading model: stable source context and complete Chinese translation.
+- Preserve local Chinese FunASR live-window behavior: visible realtime text should be recent and readable, while full transcript accumulation remains internal.
+- Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then manual notes building through the Notes tools.
 - Preserve Word-first bilingual notes: English minutes first, Chinese reading version second, in one `.docx` file.
 - Preserve provider-neutral UI wording for testers: use `Cloud` in visible labels, status messages, usage panel text, and common errors.
 - Keep private `.env`, `backend/glossary.csv`, recordings, generated notes, model caches, browser session exports, and temporary auth dumps out of Git.
