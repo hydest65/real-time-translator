@@ -49,6 +49,7 @@ from .audio_capture import AudioChunk, MicrophoneAudioCapture
 from .asr import FunASRParaformerASR, FunASRRealtimeASR, TranscriptionResult, WhisperASR
 from .cloud_speech import AzureSpeechTranslationSession, CloudSubtitle, stream_microphone_to_azure
 from .config import AppConfig, config
+from .notes_quality import MeetingNotesContext, normalize_meeting_notes_context, refine_meeting_minutes
 from .terminology import build_hotword_text
 from .translator import ArgosTranslator, MarianMTTranslator, NLLBTranslator, Translator
 
@@ -1577,6 +1578,7 @@ async def process_recording(request: Request) -> dict[str, Any]:
     script_path = ROOT / "scripts" / "process-recording.py"
     notes_language = normalize_post_meeting_language(payload.get("notesLanguage") or payload.get("language"))
     notes_engine = payload.get("notesEngine") or payload.get("engine")
+    meeting_context = normalize_meeting_notes_context(payload.get("meetingContext"))
     tingwu_upload_provider = normalize_tingwu_upload_provider(payload.get("tingwuUploadProvider"))
     asr_engine = choose_post_meeting_asr_engine(notes_engine, notes_language, tingwu_upload_provider)
     processed: list[dict[str, Any]] = []
@@ -1604,6 +1606,7 @@ async def process_recording(request: Request) -> dict[str, Any]:
                         logs,
                         index,
                         len(audio_paths),
+                        meeting_context,
                     )
                 )
             else:
@@ -1616,6 +1619,7 @@ async def process_recording(request: Request) -> dict[str, Any]:
                         logs,
                         index,
                         len(audio_paths),
+                        meeting_context,
                     )
                 )
 
@@ -1713,6 +1717,7 @@ async def process_one_tingwu_recording(
     logs: list[str],
     index: int,
     total: int,
+    meeting_context: MeetingNotesContext,
 ) -> dict[str, Any]:
     per_recording_span = 88 / max(1, total)
     base_percent = 4 + int((index - 1) * per_recording_span)
@@ -1734,7 +1739,19 @@ async def process_one_tingwu_recording(
         next_percent = base_percent
         next_stage = stage
         next_message = message
-        if stage == "uploading":
+        if stage == "compressing":
+            original_size = max(0, int(extra.get("original", total_bytes) or total_bytes))
+            compressed_size = max(0, int(extra.get("compressed", 0) or 0))
+            next_percent = base_percent + int(max(1, per_recording_span * 0.06))
+            next_stage = "compressing"
+            if compressed_size:
+                next_message = (
+                    f"Compressed {audio_path.name} to lossless FLAC "
+                    f"({format_file_size(compressed_size)} from {format_file_size(original_size)})."
+                )
+            else:
+                next_message = f"Compressing {audio_path.name} to lossless FLAC before upload."
+        elif stage == "uploading":
             uploaded = max(0, int(extra.get("uploaded", 0) or 0))
             total_upload = max(1, int(extra.get("total", total_bytes) or total_bytes))
             upload_fraction = min(1.0, uploaded / total_upload)
@@ -1794,6 +1811,17 @@ async def process_one_tingwu_recording(
     tingwu_polish_json_path = audio_path.with_suffix(".tingwu.polish.json")
     transcript_text = render_tingwu_transcript(audio_path, notes)
     minutes_text = render_tingwu_minutes(audio_path, notes, notes_language)
+    minutes_text = await refine_minutes_for_recording(
+        audio_path=audio_path,
+        minutes_text=minutes_text,
+        transcript_text=transcript_text,
+        context=meeting_context,
+        notes_language=notes_language,
+        logs=logs,
+        index=index,
+        total=total,
+        percent=min(96, max_percent + 1),
+    )
     transcript_path.write_text(transcript_text, encoding="utf-8")
     minutes_path.write_text(minutes_text, encoding="utf-8")
     tingwu_transcript_json_path.write_text(json.dumps(notes.transcript_json, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -1842,6 +1870,7 @@ async def process_one_recording(
     logs: list[str],
     index: int,
     total: int,
+    meeting_context: MeetingNotesContext,
 ) -> dict[str, Any]:
     global active_post_meeting_process
     per_recording_span = 88 / max(1, total)
@@ -1936,6 +1965,20 @@ async def process_one_recording(
     minutes_path = audio_path.with_suffix(".minutes.md")
     minutes_docx_path = audio_path.with_suffix(".minutes.docx")
     if minutes_path.exists():
+        transcript_text = transcript_path.read_text(encoding="utf-8", errors="replace") if transcript_path.exists() else ""
+        minutes_text = minutes_path.read_text(encoding="utf-8", errors="replace")
+        minutes_text = await refine_minutes_for_recording(
+            audio_path=audio_path,
+            minutes_text=minutes_text,
+            transcript_text=transcript_text,
+            context=meeting_context,
+            notes_language=notes_language,
+            logs=logs,
+            index=index,
+            total=total,
+            percent=min(96, max_running_percent + 1),
+        )
+        minutes_path.write_text(minutes_text, encoding="utf-8")
         set_post_meeting_progress(
             running=True,
             percent=min(96, max_running_percent + 2),
@@ -1965,6 +2008,49 @@ async def process_one_recording(
         "transcriptText": transcript_path.read_text(encoding="utf-8") if transcript_path.exists() else "",
         "minutesText": minutes_path.read_text(encoding="utf-8") if minutes_path.exists() else "",
     }
+
+
+async def refine_minutes_for_recording(
+    *,
+    audio_path: Path,
+    minutes_text: str,
+    transcript_text: str,
+    context: MeetingNotesContext,
+    notes_language: str,
+    logs: list[str],
+    index: int,
+    total: int,
+    percent: int,
+) -> str:
+    original_minutes = str(minutes_text or "").strip()
+    if not original_minutes:
+        return original_minutes
+
+    set_post_meeting_progress(
+        running=True,
+        percent=percent,
+        stage="refining",
+        message=f"Refining topic-level meeting notes for {audio_path.name}.",
+        recording=audio_path.name,
+        current=index,
+        total=total,
+    )
+    result = await asyncio.to_thread(
+        refine_meeting_minutes,
+        minutes_text=original_minutes,
+        transcript_text=transcript_text,
+        context=context,
+        notes_language=notes_language,
+    )
+    if result.changed:
+        raw_path = audio_path.with_suffix(".minutes.raw.md")
+        raw_path.write_text(original_minutes + "\n", encoding="utf-8")
+        logs.append(f"Meeting notes rewrite: rewritten ({result.detail}). Raw generated draft saved to {raw_path}.")
+        return result.text.strip() + "\n"
+
+    detail = f" ({result.detail})" if result.detail else ""
+    logs.append(f"Meeting notes rewrite: {result.status}{detail}.")
+    return original_minutes + "\n"
 
 
 async def collect_post_meeting_stream(

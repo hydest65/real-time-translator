@@ -174,6 +174,10 @@ The SAS URL should point to a private Blob container and allow create/write/read
 
 Post-meeting notes follow the selected live engine: Azure Cloud mode attempts Azure Batch meeting notes, while Argos, MarianMT, and NLLB modes use local post-meeting transcription without speaker separation.
 
+For Aliyun Tingwu notes, the local archive stays as the original WAV. Before upload, the backend can create a lossless FLAC file with `ffmpeg` and upload that smaller file instead. This is enabled by default with `ALIYUN_TINGWU_AUDIO_COMPRESSION=flac`; set it to `off` to upload the original WAV. The compressed upload file is cached as `recordings/*.upload.flac` when `ALIYUN_TINGWU_CACHE_COMPRESSED_AUDIO=1`, so rebuilding notes for the same WAV does not recompress audio. If `ffmpeg` is not found or the FLAC is not meaningfully smaller, the app automatically falls back to the original WAV.
+
+Meeting notes can run a second-pass topic rewrite after cloud or local transcription. With `POST_MEETING_NOTES_REWRITE_ENABLED=1`, the backend sends the generated minutes plus the full transcript to the configured Ollama notes model and asks it to expand each important topic with concrete discussion points, examples, numbers, risks, decisions, and next steps that are supported by the transcript. The original generated draft is saved beside the recording as `*.minutes.raw.md` whenever the rewrite is accepted.
+
 MiniMax polishing and Balanced/Quality modes have been removed. The app now keeps a single fast/direct live-subtitle path.
 
 Example region values look like `eastus`, `westus`, or the region shown in your Azure resource page.

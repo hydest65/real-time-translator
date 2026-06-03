@@ -1,5 +1,36 @@
 # Release Notes
 
+## 0.3.1-notes-quality-compressed-upload - Richer Meeting Notes and Lossless Upload Compression
+
+Date: 2026-06-04
+
+### Product
+
+- Improved post-meeting notes so important topics are expanded with concrete discussion points, examples, numbers, risks, decisions, open questions, and next steps supported by the transcript.
+- Preserved the original WAV as the local recording archive while allowing smaller lossless FLAC uploads for cloud meeting-notes processing.
+- Added optional meeting context fields in the Notes panel for title, people, keywords, and background so the notes model can resolve ambiguous references more reliably.
+
+### Technical
+
+- Added `backend/notes_quality.py` for a second-pass Ollama notes rewrite over generated minutes plus the full transcript.
+- Wired topic-level refinement into both Aliyun Tingwu cloud notes and local post-meeting notes before Markdown/DOCX output is written.
+- Saved accepted pre-rewrite drafts as `*.minutes.raw.md` for review and rollback.
+- Added Tingwu upload FLAC compression, cached `recordings/*.upload.flac` reuse, ffmpeg diagnostics, and fallback to original WAV when compression is unavailable or not beneficial.
+- Added `.env.example` controls for notes rewrite and Tingwu upload compression.
+
+### UI
+
+- Added compact Notes panel context inputs without changing the Start/End Meeting flow.
+- Added `compressing` and `refining` progress stages so long note builds show what the backend is doing.
+
+### Verification
+
+- Python syntax checks passed for `backend/notes_quality.py`, `backend/main.py`, and `backend/aliyun_tingwu.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Codex Node runtime.
+- Prompt smoke test passed for the topic-level rewrite instructions.
+- Tail-whitespace scan passed for the changed code and documentation files.
+- `git diff --check` passed with GitHub Desktop's bundled Git.
+
 ## 0.3.0-funasr-streaming-live-window - Local Chinese FunASR Streaming Subtitles
 
 Date: 2026-06-03

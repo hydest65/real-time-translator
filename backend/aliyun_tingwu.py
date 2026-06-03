@@ -3,6 +3,9 @@ from __future__ import annotations
 import json
 import http.client
 import os
+import shutil
+import subprocess
+import tempfile
 import time
 import urllib.parse
 import urllib.request
@@ -42,6 +45,7 @@ class TingwuUploadRef:
     file_url: str
     object_key: str = ""
     relay_token: str = ""
+    local_temp_path: str = ""
 
 
 ProgressCallback = Callable[[str, str, dict[str, Any] | None], None]
@@ -92,6 +96,10 @@ def tingwu_config(upload_provider: str = "") -> dict[str, str]:
         "timeout_seconds": os.getenv("ALIYUN_TINGWU_TIMEOUT_SECONDS", "7200").strip() or "7200",
         "signed_url_seconds": os.getenv("ALIYUN_OSS_SIGNED_URL_SECONDS", "21600").strip() or "21600",
         "delete_after_complete": os.getenv("ALIYUN_OSS_DELETE_AFTER_TINGWU", "1").strip() or "1",
+        "audio_compression": os.getenv("ALIYUN_TINGWU_AUDIO_COMPRESSION", "flac").strip().lower() or "flac",
+        "cache_compressed_audio": os.getenv("ALIYUN_TINGWU_CACHE_COMPRESSED_AUDIO", "1").strip() or "1",
+        "ffmpeg_path": os.getenv("FFMPEG_PATH", "").strip() or os.getenv("ALIYUN_TINGWU_FFMPEG_PATH", "").strip(),
+        "ffmpeg_timeout_seconds": os.getenv("ALIYUN_TINGWU_FFMPEG_TIMEOUT_SECONDS", "1800").strip() or "1800",
     }
     missing = [name for name in ("access_key_id", "access_key_secret", "app_key") if not values[name]]
     if selected_provider == "oss":
@@ -153,6 +161,18 @@ def diagnose_tingwu_setup(upload_provider: str = "") -> dict[str, Any]:
         True,
         "Aliyun Tingwu upload path is using Tencent Relay." if selected_provider == "tencent-relay" else "Aliyun Tingwu upload path is using OSS.",
     )
+    compression_mode = os.getenv("ALIYUN_TINGWU_AUDIO_COMPRESSION", "flac").strip().lower() or "flac"
+    if compression_mode in {"flac", "lossless", "1", "true", "yes", "on"}:
+        ffmpeg_path = os.getenv("FFMPEG_PATH", "").strip() or os.getenv("ALIYUN_TINGWU_FFMPEG_PATH", "").strip() or shutil.which("ffmpeg")
+        add_check(
+            "Audio Compression",
+            bool(ffmpeg_path),
+            f"Lossless FLAC compression is enabled with ffmpeg: {ffmpeg_path}."
+            if ffmpeg_path
+            else "Lossless FLAC compression is enabled, but ffmpeg was not found. WAV upload will still work.",
+        )
+    else:
+        add_check("Audio Compression", True, "Upload compression is disabled; original recordings will be uploaded.")
 
     access_key_id = os.getenv("ALIBABA_CLOUD_ACCESS_KEY_ID", "").strip()
     access_key_secret = os.getenv("ALIBABA_CLOUD_ACCESS_KEY_SECRET", "").strip()
@@ -259,17 +279,28 @@ def prepare_tingwu_audio_source(
     progress_callback: ProgressCallback | None = None,
 ) -> TingwuUploadRef:
     provider = normalize_tingwu_upload_provider(config.get("upload_provider", "oss"))
-    if provider == "tencent-relay":
-        return upload_audio_to_relay(audio, config, progress_callback)
-    object_key = upload_audio_to_oss(audio, config, progress_callback)
-    return TingwuUploadRef(
-        provider="oss",
-        file_url=signed_oss_url(object_key, config),
-        object_key=object_key,
-    )
+    upload_audio = prepare_tingwu_upload_file(audio, config, progress_callback)
+    try:
+        if provider == "tencent-relay":
+            upload_ref = upload_audio_to_relay(upload_audio, config, progress_callback)
+        else:
+            object_key = upload_audio_to_oss(upload_audio, config, progress_callback)
+            upload_ref = TingwuUploadRef(
+                provider="oss",
+                file_url=signed_oss_url(object_key, config),
+                object_key=object_key,
+            )
+        if upload_audio != audio:
+            upload_ref.local_temp_path = str(upload_audio)
+        return upload_ref
+    except Exception:
+        cleanup_local_upload_file(upload_audio, audio, config)
+        raise
 
 
 def cleanup_tingwu_audio_source(upload_ref: TingwuUploadRef, config: dict[str, str]) -> None:
+    if upload_ref.local_temp_path:
+        cleanup_local_upload_file(Path(upload_ref.local_temp_path), None, config)
     if upload_ref.provider == "tencent-relay":
         if should_delete_relay_object(config) and upload_ref.relay_token:
             try:
@@ -284,6 +315,164 @@ def cleanup_tingwu_audio_source(upload_ref: TingwuUploadRef, config: dict[str, s
             print("Aliyun Tingwu: cleaned up temporary OSS recording", flush=True)
         except Exception as exc:
             print(f"Aliyun Tingwu: could not delete temporary OSS recording: {exc}", flush=True)
+
+
+def prepare_tingwu_upload_file(
+    audio: Path,
+    config: dict[str, str],
+    progress_callback: ProgressCallback | None = None,
+) -> Path:
+    """Return the file to upload to Tingwu.
+
+    WAV is kept as the local recording archive. For upload, FLAC is preferred
+    because it is lossless and often much smaller than PCM WAV. If ffmpeg is
+    unavailable or compression is not beneficial, the original file is used.
+    """
+    mode = str(config.get("audio_compression", "flac") or "flac").strip().lower()
+    if mode in {"", "0", "false", "no", "off", "none", "original", "wav"}:
+        return audio
+    if mode in {"1", "true", "yes", "on", "lossless"}:
+        mode = "flac"
+    if mode != "flac" or audio.suffix.lower() != ".wav":
+        return audio
+    ffmpeg_path = resolve_ffmpeg_path(config)
+    if not ffmpeg_path:
+        print("Aliyun Tingwu: ffmpeg not found; uploading original WAV", flush=True)
+        return audio
+
+    original_size = audio.stat().st_size
+    cache_enabled = should_cache_compressed_audio(config)
+    cache_path = audio.with_name(f"{audio.stem}.upload.flac")
+    if cache_enabled and cached_flac_is_usable(audio, cache_path, original_size):
+        cached_size = cache_path.stat().st_size
+        if progress_callback:
+            progress_callback(
+                "compressing",
+                "Using cached lossless FLAC upload file.",
+                {"original": original_size, "compressed": cached_size, "mode": "flac"},
+            )
+        print(
+            f"Aliyun Tingwu: reusing cached FLAC upload {format_bytes(cached_size)} "
+            f"from {format_bytes(original_size)}",
+            flush=True,
+        )
+        return cache_path
+
+    temp_path = (
+        audio.with_name(f"{audio.stem}.upload.{uuid.uuid4().hex[:8]}.tmp.flac")
+        if cache_enabled
+        else Path(tempfile.gettempdir()) / f"subtitle-studio-tingwu-{audio.stem}-{uuid.uuid4().hex[:8]}.flac"
+    )
+    if progress_callback:
+        progress_callback(
+            "compressing",
+            "Compressing WAV to lossless FLAC before upload.",
+            {"original": original_size, "compressed": 0, "mode": "flac"},
+        )
+    command = [
+        ffmpeg_path,
+        "-y",
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(audio),
+        "-vn",
+        "-map_metadata",
+        "-1",
+        "-c:a",
+        "flac",
+        "-compression_level",
+        "8",
+        str(temp_path),
+    ]
+    try:
+        timeout = max(60, int(str(config.get("ffmpeg_timeout_seconds", "1800") or "1800")))
+        subprocess.run(command, check=True, capture_output=True, text=True, timeout=timeout)
+        compressed_size = temp_path.stat().st_size
+    except Exception as exc:
+        cleanup_local_upload_file(temp_path, audio, config)
+        print(f"Aliyun Tingwu: FLAC compression skipped after ffmpeg error: {exc}", flush=True)
+        return audio
+
+    if compressed_size >= int(original_size * 0.98):
+        cleanup_local_upload_file(temp_path, audio, config)
+        print("Aliyun Tingwu: FLAC was not smaller enough; uploading original WAV", flush=True)
+        return audio
+    upload_path = temp_path
+    if cache_enabled:
+        try:
+            temp_path.replace(cache_path)
+            upload_path = cache_path
+        except OSError as exc:
+            cleanup_local_upload_file(temp_path, audio, config)
+            print(f"Aliyun Tingwu: could not cache FLAC upload file: {exc}", flush=True)
+            return audio
+    if progress_callback:
+        progress_callback(
+            "compressing",
+            "Compressed recording to lossless FLAC before upload.",
+            {"original": original_size, "compressed": compressed_size, "mode": "flac"},
+        )
+    ratio = compressed_size / max(1, original_size)
+    print(
+        f"Aliyun Tingwu: using lossless FLAC upload {format_bytes(compressed_size)} "
+        f"from {format_bytes(original_size)} ({ratio:.0%})",
+        flush=True,
+    )
+    return upload_path
+
+
+def should_cache_compressed_audio(config: dict[str, str]) -> bool:
+    return str(config.get("cache_compressed_audio", "1")).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def cached_flac_is_usable(audio: Path, cache_path: Path, original_size: int) -> bool:
+    if not cache_path.exists():
+        return False
+    try:
+        cache_stat = cache_path.stat()
+        audio_stat = audio.stat()
+    except OSError:
+        return False
+    if cache_stat.st_mtime < audio_stat.st_mtime:
+        return False
+    return cache_stat.st_size < int(original_size * 0.98)
+
+
+def resolve_ffmpeg_path(config: dict[str, str]) -> str:
+    configured = str(config.get("ffmpeg_path", "") or "").strip()
+    if configured and Path(configured).exists():
+        return configured
+    return shutil.which("ffmpeg") or ""
+
+
+def cleanup_local_upload_file(upload_audio: Path, original_audio: Path | None, config: dict[str, str]) -> None:
+    if original_audio is not None and upload_audio == original_audio:
+        return
+    if not upload_audio.exists():
+        return
+    if should_cache_compressed_audio(config) and upload_audio.name.endswith(".upload.flac"):
+        print(f"Aliyun Tingwu: keeping cached compressed upload file {upload_audio}", flush=True)
+        return
+    keep = str(os.getenv("ALIYUN_TINGWU_KEEP_COMPRESSED_AUDIO", "0")).strip().lower() in {"1", "true", "yes", "on"}
+    if keep:
+        print(f"Aliyun Tingwu: keeping compressed upload file {upload_audio}", flush=True)
+        return
+    try:
+        upload_audio.unlink()
+        print("Aliyun Tingwu: removed temporary compressed upload file", flush=True)
+    except OSError as exc:
+        print(f"Aliyun Tingwu: could not remove temporary compressed upload file: {exc}", flush=True)
+
+
+def format_bytes(size: int) -> str:
+    value = float(max(0, size))
+    for unit in ("B", "KB", "MB", "GB"):
+        if value < 1024 or unit == "GB":
+            return f"{value:.1f} {unit}" if unit != "B" else f"{int(value)} B"
+        value /= 1024
+    return f"{value:.1f} GB"
 
 
 def upload_audio_to_oss(
@@ -326,7 +515,7 @@ def upload_audio_to_relay(
 ) -> TingwuUploadRef:
     boundary = f"subtitle-studio-{uuid.uuid4().hex}"
     filename = audio.name
-    content_type = "audio/wav" if audio.suffix.lower() == ".wav" else "application/octet-stream"
+    content_type = audio_content_type(audio)
     head = (
         f"--{boundary}\r\n"
         f'Content-Disposition: form-data; name="file"; filename="{filename}"\r\n'
@@ -383,6 +572,17 @@ def upload_audio_to_relay(
     if not url or not token:
         raise RuntimeError("Tencent Relay upload did not return a usable URL and token.")
     return TingwuUploadRef(provider="tencent-relay", file_url=url, relay_token=token)
+
+
+def audio_content_type(audio: Path) -> str:
+    return {
+        ".wav": "audio/wav",
+        ".flac": "audio/flac",
+        ".mp3": "audio/mpeg",
+        ".m4a": "audio/mp4",
+        ".ogg": "audio/ogg",
+        ".opus": "audio/ogg",
+    }.get(audio.suffix.lower(), "application/octet-stream")
 
 
 def explain_aliyun_error(prefix: str, exc: Exception) -> str:

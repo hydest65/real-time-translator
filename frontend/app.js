@@ -36,6 +36,10 @@ const settingsUtilityToggle = document.querySelector("#settingsUtilityToggle");
 const notesUtilityBody = document.querySelector("#notesUtilityBody");
 const settingsUtilityBody = document.querySelector("#settingsUtilityBody");
 const notesEngine = document.querySelector("#notesEngine");
+const notesMeetingTitle = document.querySelector("#notesMeetingTitle");
+const notesParticipants = document.querySelector("#notesParticipants");
+const notesKeywords = document.querySelector("#notesKeywords");
+const notesBackground = document.querySelector("#notesBackground");
 const recordingList = document.querySelector("#recordingList");
 const localControls = document.querySelectorAll(".local-control");
 const cloudControls = document.querySelectorAll(".cloud-control");
@@ -638,6 +642,7 @@ function readableNotesStage(stage = "") {
   const normalized = String(stage || "").toLowerCase();
   const labels = {
     queued: "Queued",
+    compressing: "Compressing",
     uploading: "Uploading",
     submitting: "Submitting",
     waiting: "Waiting",
@@ -2299,6 +2304,15 @@ function notesRecordingLanguage() {
   return "en";
 }
 
+function meetingNotesContext() {
+  return {
+    title: notesMeetingTitle?.value?.trim() || "",
+    participants: notesParticipants?.value?.trim() || "",
+    keywords: notesKeywords?.value?.trim() || "",
+    background: notesBackground?.value?.trim() || "",
+  };
+}
+
 function start() {
   if (socket && socket.readyState === WebSocket.OPEN) {
     return;
@@ -2585,6 +2599,7 @@ async function processMeetingRecording(options = {}) {
         notesEngine: requestedNotesEngine,
         tingwuUploadProvider: aliyunTingwuUploadProvider || "oss",
         notesLanguage: notesRecordingLanguage(),
+        meetingContext: meetingNotesContext(),
       }),
       signal: notesAbortController.signal,
     });

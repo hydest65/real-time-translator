@@ -65,6 +65,12 @@
                   </select>
                 </label>
                 <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
+                <div class="notes-context-grid" aria-label="Meeting notes context">
+                  <input class="notes-context-input" id="notesMeetingTitle" type="text" placeholder="Title" autocomplete="off" />
+                  <input class="notes-context-input" id="notesParticipants" type="text" placeholder="People" autocomplete="off" />
+                  <input class="notes-context-input" id="notesKeywords" type="text" placeholder="Keywords" autocomplete="off" />
+                  <textarea class="notes-context-input notes-context-textarea" id="notesBackground" placeholder="Context"></textarea>
+                </div>
                 <div class="recording-picker" aria-label="Recorded meeting files">
                   <div class="recording-list" id="recordingList"></div>
                   <div class="panel-action-row">
