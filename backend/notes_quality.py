@@ -154,6 +154,10 @@ def build_refinement_prompt(
     context_block = context.to_prompt_block() or "No extra meeting context was provided."
     minutes_excerpt = trim_for_prompt(minutes_text, int(os.getenv("POST_MEETING_NOTES_REWRITE_MINUTES_CHARS", "9000")))
     transcript_excerpt = trim_for_prompt(transcript_text, int(os.getenv("POST_MEETING_NOTES_REWRITE_TRANSCRIPT_CHARS", "9000")))
+    speaker_evidence = speaker_discussion_evidence(
+        transcript_text,
+        int(os.getenv("POST_MEETING_NOTES_REWRITE_SPEAKER_EVIDENCE_CHARS", "6000")),
+    )
     return "\n".join(
         [
             "You are improving meeting minutes from a speech transcript.",
@@ -162,10 +166,21 @@ def build_refinement_prompt(
             "Preserve useful technical terms, product names, abbreviations, numbers, and action items.",
             "Remove ASR noise, repeated words, filler phrases, and awkward machine wording.",
             "Use the transcript reference to enrich sparse generated minutes when it contains supporting detail.",
+            "Make the discussion speaker-aware. When the transcript identifies speakers, each major topic should show "
+            "who raised, answered, challenged, confirmed, or took ownership of the point.",
+            "Use names only if the transcript or meeting context provides real names. Otherwise use the transcript labels "
+            "such as Speaker 1 / Speaker 2, or 发言人 1 / 发言人 2 for Chinese output.",
+            "Do not paste long raw transcript excerpts. Paraphrase each speaker's contribution into professional notes, "
+            "but keep concrete facts, numbers, examples, and concerns.",
             "For every important topic, explain what was discussed, the concrete discussion points, details, or examples mentioned, "
             "why it matters, and any decisions, risks, open questions, or next steps that were actually stated.",
             "Do not collapse a major topic into one vague sentence. Prefer 3-6 specific bullets per major topic "
-            "when the transcript supports that much detail.",
+            "when the transcript supports that much detail. At least 2 bullets under a major topic should be speaker-attributed "
+            "when speaker evidence is available.",
+            "For Chinese output, the detailed discussion bullets should read naturally, for example: "
+            "发言人 1 提到...；发言人 2 补充...；会议确认...；仍待...确认。",
+            "For English output, use the same structure with Speaker 1 noted..., Speaker 2 added..., The team confirmed..., "
+            "Still open...",
             "If a topic is unclear, write the supported facts plainly instead of guessing missing context.",
             "Keep Markdown headings and bullet lists. Make the result ready for a Word document.",
             f"Output language: {output_language}.",
@@ -176,12 +191,93 @@ def build_refinement_prompt(
             "Current generated minutes:",
             minutes_excerpt,
             "",
+            "Speaker-attributed evidence from transcript:",
+            speaker_evidence or "No speaker-attributed transcript evidence was available.",
+            "",
             "Transcript reference:",
             transcript_excerpt,
             "",
             "Return only the improved Markdown minutes.",
         ]
     )
+
+
+def speaker_discussion_evidence(transcript_text: str, limit: int) -> str:
+    """Extract compact speaker-tagged evidence so the rewrite can keep who said what."""
+    cleaned_lines: list[str] = []
+    seen: set[str] = set()
+    for raw_line in str(transcript_text or "").splitlines():
+        line = clean_transcript_evidence_line(raw_line)
+        if not line:
+            continue
+        key = re.sub(r"\s+", "", line).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        cleaned_lines.append(line)
+
+    if not cleaned_lines:
+        return ""
+
+    result: list[str] = []
+    total = 0
+    for line in cleaned_lines:
+        next_total = total + len(line) + 1
+        if result and next_total > limit:
+            break
+        result.append(line)
+        total = next_total
+    return "\n".join(result)
+
+
+def clean_transcript_evidence_line(line: str) -> str:
+    cleaned = str(line or "").strip()
+    if not cleaned or cleaned.startswith("#"):
+        return ""
+    if "`Speaker " not in cleaned and "发言人" not in cleaned and "Speaker " not in cleaned:
+        return ""
+    cleaned = re.sub(r"^\s*-\s*", "", cleaned)
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    cleaned = cleaned.replace("`", "")
+    spoken = re.sub(r"^\d{1,2}:\d{2}(?::\d{2})?-\d{1,2}:\d{2}(?::\d{2})?\s+", "", cleaned)
+    spoken = re.sub(r"^(Speaker\s+\S+|发言人\s*\S+)\s*", "", spoken, flags=re.IGNORECASE).strip(" .。")
+    if not is_substantive_transcript_snippet(spoken):
+        return ""
+    return cleaned[:420]
+
+
+def is_substantive_transcript_snippet(text: str) -> bool:
+    cleaned = re.sub(r"\s+", " ", str(text or "")).strip()
+    if not cleaned:
+        return False
+    filler = {
+        "good morning",
+        "hi good morning",
+        "hello",
+        "okay",
+        "ok",
+        "thank you",
+        "thanks",
+        "good",
+        "ola",
+    }
+    if cleaned.lower().strip(" .!?") in filler:
+        return False
+    low_info_patterns = [
+        r"\bwait a couple of minutes\b",
+        r"\bwe can start\b",
+        r"\bis going to join\b",
+    ]
+    if any(re.search(pattern, cleaned, flags=re.IGNORECASE) for pattern in low_info_patterns):
+        return False
+    if contains_cjk(cleaned):
+        return len(cleaned) >= 12
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'/-]*", cleaned)
+    return len(words) >= 6
+
+
+def contains_cjk(text: str) -> bool:
+    return any("\u4e00" <= ch <= "\u9fff" for ch in str(text or ""))
 
 
 def trim_for_prompt(text: str, limit: int) -> str:

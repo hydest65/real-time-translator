@@ -85,7 +85,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.3.0-funasr-streaming-live-window - Local Chinese FunASR streaming subtitles`.
+- Current closeout: `0.3.2-speaker-aware-notes-ui-trim - Speaker-aware meeting notes and subtitle workspace cleanup`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.

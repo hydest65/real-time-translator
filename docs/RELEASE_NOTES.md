@@ -1,5 +1,36 @@
 # Release Notes
 
+## 0.3.2-speaker-aware-notes-ui-trim - Speaker-Aware Meeting Notes and Subtitle Workspace Cleanup
+
+Date: 2026-06-04
+
+### Product
+
+- Improved post-meeting notes so detailed discussion sections can preserve who raised, answered, challenged, confirmed, or owned an important point when speaker-separated transcript evidence is available.
+- Kept speaker names conservative: use real names only when supplied by the transcript or meeting context; otherwise preserve anonymous labels such as `Speaker 1` / `Speaker 2` or Chinese `发言人 1` / `发言人 2`.
+- Removed the visible Notes context input block (`Title`, `People`, `Keywords`, `Context`) from the main UI so the subtitle workspace stays focused and less crowded.
+
+### UI
+
+- Removed the left vertical panel's large background capsule and narrowed the panel from 160px to 136px, giving more horizontal space back to the subtitle monitors.
+- Kept the individual left-side status cards for meeting state, recording state, Cloud usage, and notes status.
+- Versioned frontend assets with `speaker-aware-notes-ui-trim-20260604` so browser refreshes load the UI cleanup.
+
+### Technical
+
+- Added speaker-attributed transcript evidence extraction in `backend/notes_quality.py` for the second-pass notes rewrite.
+- Filtered short greetings, acknowledgements, and other low-information transcript snippets before sending speaker evidence to the local notes model.
+- Strengthened the notes rewrite prompt so major topics prefer speaker-attributed bullets when diarized transcript evidence exists.
+- Removed unused Notes context CSS after the UI inputs were removed; backend context payload handling remains compatible and simply receives empty context from the current UI.
+
+### Verification
+
+- Python syntax check passed for `backend/notes_quality.py`.
+- Speaker-evidence smoke test on `recordings/rec-0603-220033.transcript.md` extracted substantive `Speaker 1` / `Speaker 2` discussion lines while filtering short greetings.
+- `git diff --check` passed with GitHub Desktop's bundled Git.
+- Backend health check passed for `GET /api/health` on the running local server.
+- Known local limitation: regenerating the full speaker-aware notes preview with Ollama `qwen3:14b` failed when Ollama reported insufficient available memory (`6.3 GiB` required, `4.3 GiB` available). The prompt/code path is in place, but a full rewrite needs memory to be freed or a smaller notes model.
+
 ## 0.3.1-notes-quality-compressed-upload - Richer Meeting Notes and Lossless Upload Compression
 
 Date: 2026-06-04

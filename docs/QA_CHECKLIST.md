@@ -88,6 +88,15 @@ Current closeout result on 2026-05-30:
 - Manual visual checks performed during development: compact UI, diagnostics entry, diagnostics page, and local draft visual tape behavior were inspected in the browser.
 - Known local model limitation: `qwen3:14b` is installed, but a polish test can fail on this machine when Ollama reports insufficient available memory. This does not block the live subtitle path.
 
+Current closeout result on 2026-06-04:
+
+- Python syntax check passed for `backend/notes_quality.py`.
+- Speaker-evidence smoke test passed on `recordings/rec-0603-220033.transcript.md`: the extractor kept substantive speaker-attributed discussion and filtered short greetings/acknowledgements.
+- `git diff --check` passed with GitHub Desktop's bundled Git.
+- Runtime health check passed for `GET /api/health` on port `8000`.
+- UI cleanup is limited to `frontend/index.html` and `frontend/style.css`: the Notes context input block is removed, the left side-panel shell is transparent, and the subtitle workspace gets more width.
+- Full local notes regeneration with Ollama `qwen3:14b` could not be completed in this closeout because Ollama reported insufficient available memory (`6.3 GiB` required, `4.3 GiB` available). Retry after freeing memory or switching to a smaller notes rewrite model.
+
 Current closeout result on 2026-06-03:
 
 - Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Codex Node runtime.

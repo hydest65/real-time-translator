@@ -20,6 +20,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - Cloud usage
   - meeting notes status
   - delay hint
+  - no large background capsule behind the whole vertical rail; keep only the individual status cards so the subtitle monitors receive more horizontal space
 - Cloud main subtitle monitor:
   - largest visual area on the screen
   - soft raised outer shell
@@ -68,6 +69,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
 - Compact controls prefer familiar icon buttons over long labels when the meaning is clear. Any remaining text buttons should share the same soft capsule style as the rest of the UI.
 - Diagnostics uses a small monitor-style icon in the main toolbar and opens as a separate page, not an in-place panel, so it does not compete with the subtitle workspace.
+- The Notes utility should stay operationally compact. The old visible `Title`, `People`, `Keywords`, and `Context` input block is intentionally removed from the main UI unless a future workflow clearly needs it.
 
 ## Visual UI Editor
 
