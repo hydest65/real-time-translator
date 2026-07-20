@@ -59,6 +59,9 @@ FRONTEND_DIR = ROOT / "frontend"
 RECORDINGS_DIR = ROOT / "recordings"
 RECORDING_RESUME_SECONDS = 5 * 60
 DOCX_MEDIA_TYPE = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+CLOUD_MONTHLY_SECONDS_LIMIT_DEFAULT = 5 * 60 * 60
+CLOUD_QUOTA_GUARD_INTERVAL_SECONDS = 5
+CLOUD_USAGE_LEDGER_PATH = ROOT / "sync-meta" / "cloud-usage-quota.json"
 active_recording_path: Path | None = None
 last_recording_stop_at = 0.0
 RECORDING_PATTERNS = ("rec-*.wav", "session-*.wav")
@@ -91,6 +94,7 @@ azure_usage_cache: dict[str, Any] = {
     "payload": None,
     "lastGoodPayload": None,
 }
+active_cloud_sessions: dict[str, float] = {}
 
 app = FastAPI(title="Low Latency Real Time Translator")
 app.add_middleware(
@@ -1372,7 +1376,7 @@ def azure_monitor_config() -> dict[str, str]:
         "client_id": os.getenv("AZURE_CLIENT_ID", "").strip(),
         "client_secret": os.getenv("AZURE_CLIENT_SECRET", "").strip(),
         "resource_id": os.getenv("AZURE_SPEECH_RESOURCE_ID", "").strip(),
-        "monthly_seconds_limit": os.getenv("AZURE_SPEECH_MONTHLY_SECONDS_LIMIT", "").strip(),
+        "monthly_seconds_limit": str(cloud_monthly_seconds_limit()),
     }
 
 
@@ -1392,6 +1396,127 @@ def utc_iso(value: datetime) -> str:
 
 def month_start_utc(now: datetime) -> datetime:
     return datetime(now.year, now.month, 1, tzinfo=timezone.utc)
+
+
+def next_month_start_utc(now: datetime) -> datetime:
+    if now.month == 12:
+        return datetime(now.year + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(now.year, now.month + 1, 1, tzinfo=timezone.utc)
+
+
+def cloud_quota_month_key(now: datetime | None = None) -> str:
+    current = now or datetime.now(timezone.utc)
+    return current.astimezone(timezone.utc).strftime("%Y-%m")
+
+
+def cloud_monthly_seconds_limit() -> float:
+    raw = os.getenv("AZURE_SPEECH_MONTHLY_SECONDS_LIMIT", "").strip()
+    if not raw:
+        return float(CLOUD_MONTHLY_SECONDS_LIMIT_DEFAULT)
+    try:
+        parsed = float(raw)
+    except ValueError:
+        return float(CLOUD_MONTHLY_SECONDS_LIMIT_DEFAULT)
+    return max(1.0, parsed)
+
+
+def read_cloud_usage_ledger(now: datetime | None = None) -> dict[str, Any]:
+    month_key = cloud_quota_month_key(now)
+    if not CLOUD_USAGE_LEDGER_PATH.exists():
+        return {"monthKey": month_key, "seconds": 0.0}
+    try:
+        payload = json.loads(CLOUD_USAGE_LEDGER_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"monthKey": month_key, "seconds": 0.0}
+    if payload.get("monthKey") != month_key:
+        return {"monthKey": month_key, "seconds": 0.0}
+    return {
+        "monthKey": month_key,
+        "seconds": max(0.0, float(payload.get("seconds") or 0)),
+        "updatedAt": payload.get("updatedAt") or "",
+    }
+
+
+def write_cloud_usage_ledger(payload: dict[str, Any]) -> None:
+    CLOUD_USAGE_LEDGER_PATH.parent.mkdir(parents=True, exist_ok=True)
+    CLOUD_USAGE_LEDGER_PATH.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def add_cloud_usage_seconds(seconds: float, now: datetime | None = None) -> None:
+    if seconds <= 0:
+        return
+    current = now or datetime.now(timezone.utc)
+    payload = read_cloud_usage_ledger(current)
+    payload["seconds"] = round(float(payload.get("seconds") or 0) + seconds, 2)
+    payload["updatedAt"] = utc_iso(current)
+    write_cloud_usage_ledger(payload)
+
+
+def active_cloud_session_seconds(now: float | None = None) -> float:
+    current = now or time.time()
+    return sum(max(0.0, current - started_at) for started_at in active_cloud_sessions.values())
+
+
+def register_cloud_session() -> str:
+    session_id = f"cloud-{time.time_ns()}"
+    active_cloud_sessions[session_id] = time.time()
+    return session_id
+
+
+def finish_cloud_session(session_id: str) -> float:
+    started_at = active_cloud_sessions.pop(session_id, None)
+    if started_at is None:
+        return 0.0
+    elapsed = max(0.0, time.time() - started_at)
+    add_cloud_usage_seconds(elapsed)
+    return elapsed
+
+
+def apply_cloud_quota_fields(payload: dict[str, Any], now: datetime | None = None) -> dict[str, Any]:
+    current = now or datetime.now(timezone.utc)
+    monthly_limit = cloud_monthly_seconds_limit()
+    remote_month_seconds = max(0.0, float(payload.get("azureMonthSeconds", payload.get("monthSeconds")) or 0))
+    ledger = read_cloud_usage_ledger(current)
+    local_tracked_seconds = max(0.0, float(ledger.get("seconds") or 0))
+    active_seconds = active_cloud_session_seconds()
+    tracked_month_seconds = max(remote_month_seconds, local_tracked_seconds)
+    remaining_seconds = max(0.0, monthly_limit - tracked_month_seconds - active_seconds)
+    payload["monthSeconds"] = round(tracked_month_seconds, 2)
+    payload["azureMonthSeconds"] = round(remote_month_seconds, 2)
+    payload["localTrackedSeconds"] = round(local_tracked_seconds, 2)
+    payload["activeSessionSeconds"] = round(active_seconds, 2)
+    payload["monthlyLimitSeconds"] = round(monthly_limit, 2)
+    payload["remainingSeconds"] = round(remaining_seconds, 2)
+    payload["quotaExceeded"] = remaining_seconds <= 0
+    payload["quotaResetAt"] = utc_iso(next_month_start_utc(current))
+    return payload
+
+
+def local_cloud_quota_payload(message: str = "") -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "ok": True,
+        "configured": False,
+        "source": "local_quota",
+        "usageMode": "seconds",
+        "metric": "local_audio_seconds",
+        "daySeconds": 0,
+        "monthSeconds": 0,
+        "message": message,
+        "syncedAt": utc_iso(datetime.now(timezone.utc)),
+    }
+    return apply_cloud_quota_fields(payload)
+
+
+def cloud_quota_denial_message(payload: dict[str, Any]) -> str:
+    if not payload.get("quotaExceeded"):
+        return ""
+    reset_at = payload.get("quotaResetAt") or utc_iso(next_month_start_utc(datetime.now(timezone.utc)))
+    used = float(payload.get("monthSeconds") or 0) + float(payload.get("activeSessionSeconds") or 0)
+    limit = float(payload.get("monthlyLimitSeconds") or cloud_monthly_seconds_limit())
+    return (
+        f"Cloud monthly quota reached: {used / 3600:.2f}h used of {limit / 3600:.2f}h. "
+        f"Quota resets at {reset_at}."
+    )
 
 
 def http_json(url: str, method: str = "GET", data: dict[str, str] | None = None, token: str = "") -> dict[str, Any]:
@@ -1462,11 +1587,13 @@ def azure_audio_seconds(token: str, resource_id: str, start: datetime, end: date
 def fetch_azure_usage_payload() -> dict[str, Any]:
     settings = azure_monitor_config()
     if not azure_monitor_configured():
-        return {
+        return local_cloud_quota_payload(
+            "Cloud usage sync needs tenant, client, secret, and speech resource id. Enforcing the local monthly quota ledger."
+        ) | {
             "ok": True,
             "configured": False,
             "source": "not_configured",
-            "message": "Cloud usage sync needs tenant, client, secret, and speech resource id.",
+            "message": "Cloud usage sync needs tenant, client, secret, and speech resource id. Enforcing the local monthly quota ledger.",
         }
     now = datetime.now(timezone.utc)
     token = azure_monitor_token(settings)
@@ -1476,7 +1603,7 @@ def fetch_azure_usage_payload() -> dict[str, Any]:
     except RuntimeError:
         day_calls = azure_metric_total(token, settings["resource_id"], "TotalCalls", now - timedelta(hours=24), now)
         month_calls = azure_metric_total(token, settings["resource_id"], "TotalCalls", month_start_utc(now), now)
-        return {
+        return apply_cloud_quota_fields({
             "ok": True,
             "configured": True,
             "source": "cloud_usage",
@@ -1490,10 +1617,8 @@ def fetch_azure_usage_payload() -> dict[str, Any]:
             "remainingSeconds": None,
             "message": "Cloud usage service does not expose audio-second usage for this speech resource. Showing call activity instead.",
             "syncedAt": utc_iso(now),
-        }
-    monthly_limit = float(settings["monthly_seconds_limit"] or 0)
-    remaining_seconds = max(0.0, monthly_limit - month_seconds) if monthly_limit > 0 else None
-    return {
+        }, now)
+    return apply_cloud_quota_fields({
         "ok": True,
         "configured": True,
         "source": "cloud_usage",
@@ -1501,10 +1626,8 @@ def fetch_azure_usage_payload() -> dict[str, Any]:
         "metric": "audio_seconds",
         "daySeconds": round(day_seconds, 2),
         "monthSeconds": round(month_seconds, 2),
-        "monthlyLimitSeconds": monthly_limit or None,
-        "remainingSeconds": round(remaining_seconds, 2) if remaining_seconds is not None else None,
         "syncedAt": utc_iso(now),
-    }
+    }, now)
 
 
 @app.get("/")
@@ -1530,11 +1653,10 @@ async def aliyun_tingwu_diagnostics(uploadProvider: str = "") -> dict[str, Any]:
     return diagnose_tingwu_setup(uploadProvider)
 
 
-@app.get("/api/cloud-usage")
-async def cloud_usage() -> dict[str, Any]:
+async def current_cloud_usage_payload(use_cache: bool = True) -> dict[str, Any]:
     cached_payload = azure_usage_cache.get("payload")
-    if cached_payload is not None and time.time() - float(azure_usage_cache.get("fetchedAt") or 0) < 60:
-        return dict(cached_payload)
+    if use_cache and cached_payload is not None and time.time() - float(azure_usage_cache.get("fetchedAt") or 0) < 60:
+        return apply_cloud_quota_fields(dict(cached_payload))
     try:
         payload = await asyncio.to_thread(fetch_azure_usage_payload)
     except RuntimeError as exc:
@@ -1544,17 +1666,19 @@ async def cloud_usage() -> dict[str, Any]:
             payload["stale"] = True
             payload["message"] = "Cloud sync temporarily unavailable. Showing last successful cloud usage."
         else:
-            payload = {
-                "ok": False,
-                "configured": azure_monitor_configured(),
-                "source": "cloud_usage",
-                "message": str(exc),
-            }
+            payload = local_cloud_quota_payload(
+                f"Cloud sync temporarily unavailable. Enforcing the local monthly quota ledger. {exc}"
+            )
     azure_usage_cache["payload"] = payload
     azure_usage_cache["fetchedAt"] = time.time()
     if payload.get("ok") and payload.get("configured"):
         azure_usage_cache["lastGoodPayload"] = dict(payload)
     return dict(payload)
+
+
+@app.get("/api/cloud-usage")
+async def cloud_usage() -> dict[str, Any]:
+    return await current_cloud_usage_payload()
 
 
 @app.get("/api/azure-usage")
@@ -1670,11 +1794,13 @@ async def process_recording(request: Request) -> dict[str, Any]:
             "asrEngine": asr_engine,
             "notesMode": notes_mode_message,
         }
-    except Exception:
+    except Exception as exc:
+        detail = str(getattr(exc, "detail", "") or exc)
+        message = detail if detail else "Meeting notes generation failed."
         set_post_meeting_progress(
             running=False,
             stage="failed",
-            message="Meeting notes generation failed.",
+            message=message,
             updated_at=time.time(),
         )
         raise
@@ -1791,7 +1917,18 @@ async def process_one_tingwu_recording(
             on_tingwu_progress,
         )
     except Exception as exc:
-        raise HTTPException(status_code=500, detail=f"Aliyun Tingwu meeting notes failed: {exc}") from exc
+        detail = f"Aliyun Tingwu meeting notes failed: {exc}"
+        set_post_meeting_progress(
+            running=False,
+            percent=int(post_meeting_progress.get("percent") or 0),
+            stage="failed",
+            message=detail,
+            recording=audio_path.name,
+            current=index,
+            total=total,
+            updated_at=time.time(),
+        )
+        raise HTTPException(status_code=500, detail=detail) from exc
 
     set_post_meeting_progress(
         running=True,
@@ -2329,6 +2466,8 @@ def post_meeting_mode_message(ui_engine: object, effective_engine: str, notes_la
         language_label = "Chinese voice"
     elif normalized_language.startswith("es"):
         language_label = "Spanish voice"
+    elif normalized_language.startswith("ja"):
+        language_label = "Japanese voice"
     else:
         language_label = "English voice"
     if selected_engine == "azure":
@@ -2356,12 +2495,16 @@ def normalize_post_meeting_language(value: object = "") -> str:
         return "zh-CN"
     if language in {"es", "es-es", "spanish"}:
         return "es-ES"
+    if language in {"ja", "ja-jp", "japanese", "jp"}:
+        return "ja-JP"
     if language in {"auto", ""}:
         return "en"
     if language.startswith("zh"):
         return "zh-CN"
     if language.startswith("es"):
         return "es-ES"
+    if language.startswith("ja"):
+        return "ja-JP"
     return "en"
 
 
@@ -2773,7 +2916,7 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
         if key in merged and value not in (None, ""):
             merged[key] = value
 
-    if merged["source_language"] not in ("eng_Latn", "spa_Latn", "zho_Hans"):
+    if merged["source_language"] not in ("eng_Latn", "spa_Latn", "jpn_Jpan", "zho_Hans"):
         merged["source_language"] = "eng_Latn"
     merged["target_language"] = "zho_Hans"
     merged["azure_source_language"] = azure_language_code(merged["source_language"])
@@ -2824,13 +2967,15 @@ def build_config(payload: dict[str, Any]) -> AppConfig:
 def whisper_language(source_language: str) -> str:
     if source_language == "spa_Latn":
         return "es"
+    if source_language == "jpn_Jpan":
+        return "ja"
     if source_language == "zho_Hans":
         return "zh"
     return "en"
 
 
 def effective_asr_model(model_size: str, source_language: str) -> str:
-    if source_language in ("spa_Latn", "zho_Hans"):
+    if source_language in ("spa_Latn", "jpn_Jpan", "zho_Hans"):
         if model_size.endswith(".en"):
             return model_size.removesuffix(".en")
     return model_size
@@ -2932,6 +3077,8 @@ def user_facing_model_error(exc: Exception, active_config: AppConfig, effective_
 def azure_language_code(source_language: str) -> str:
     if source_language == "spa_Latn":
         return "es-ES"
+    if source_language == "jpn_Jpan":
+        return "ja-JP"
     if source_language == "zho_Hans":
         return "zh-CN"
     return "en-US"
@@ -2995,6 +3142,94 @@ async def watch_control_messages(websocket: WebSocket, stop_event: asyncio.Event
                 stop_event.set()
     except WebSocketDisconnect:
         stop_event.set()
+
+
+async def cloud_quota_guard_worker(status_queue: asyncio.Queue, stop_event: asyncio.Event) -> None:
+    while not stop_event.is_set():
+        await asyncio.sleep(CLOUD_QUOTA_GUARD_INTERVAL_SECONDS)
+        quota_payload = await current_cloud_usage_payload(use_cache=True)
+        denial = cloud_quota_denial_message(quota_payload)
+        if denial:
+            put_latest(
+                status_queue,
+                {
+                    "type": "notice",
+                    "label": "Quota reached",
+                    "detail": denial,
+                },
+            )
+            stop_event.set()
+            return
+
+
+async def browser_audio_to_azure_worker(
+    websocket: WebSocket,
+    session: AzureSpeechTranslationSession,
+    recording_path: Path,
+    status_queue: asyncio.Queue,
+    stop_event: asyncio.Event,
+    sample_rate: int = 16_000,
+) -> None:
+    global active_recording_path
+    active_recording_path = recording_path
+    wav_file: wave.Wave_write | None = None
+    last_audio_notice_at = 0.0
+    try:
+        RECORDINGS_DIR.mkdir(parents=True, exist_ok=True)
+        wav_file = wave.open(str(recording_path), "wb")
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(sample_rate)
+        put_latest(
+            status_queue,
+            {
+                "type": "notice",
+                "label": "Recording",
+                "detail": str(recording_path),
+            },
+        )
+        while not stop_event.is_set():
+            message = await websocket.receive()
+            if message.get("type") == "websocket.disconnect":
+                stop_event.set()
+                break
+            if message.get("text"):
+                try:
+                    payload = json.loads(message["text"])
+                except json.JSONDecodeError:
+                    continue
+                if payload.get("action") == "stop":
+                    stop_event.set()
+                    break
+                continue
+            data = message.get("bytes") or b""
+            if not data:
+                continue
+            if len(data) % 2:
+                data = data[:-1]
+            if not data:
+                continue
+            pcm16 = np.frombuffer(data, dtype=np.int16)
+            samples = (pcm16.astype(np.float32) / 32768.0).clip(-1.0, 1.0)
+            wav_file.writeframes(data)
+            session.write_audio(samples)
+            now = time.perf_counter()
+            if now - last_audio_notice_at >= 1.0:
+                rms = float(np.sqrt(np.mean(np.square(samples)))) if len(samples) else 0.0
+                put_latest(
+                    status_queue,
+                    {
+                        "type": "notice",
+                        "label": "Browser audio" if rms >= 0.003 else "No browser audio",
+                        "detail": f"rms={rms:.4f}",
+                    },
+                )
+                last_audio_notice_at = now
+    except WebSocketDisconnect:
+        stop_event.set()
+    finally:
+        if wav_file is not None:
+            wav_file.close()
 
 
 async def audio_capture_worker(
@@ -3610,6 +3845,7 @@ async def subtitles(websocket: WebSocket) -> None:
     tasks: list[asyncio.Task] = []
     active_config: AppConfig | None = None
     effective_model = ""
+    cloud_session_id = ""
 
     try:
         start_message = await websocket.receive_json()
@@ -3633,8 +3869,22 @@ async def subtitles(websocket: WebSocket) -> None:
             if should_use_realtime_funasr(active_config)
             else effective_model
         )
+        use_browser_audio = (
+            active_config.translation_engine == "azure"
+            and str((start_message.get("config") or {}).get("audio_transport") or "").lower() == "browser"
+        )
         if active_config.translation_engine == "azure":
-            await send_status(websocket, "Connecting cloud", "Cloud speech translation")
+            quota_payload = await current_cloud_usage_payload(use_cache=False)
+            quota_denial = cloud_quota_denial_message(quota_payload)
+            if quota_denial:
+                await send_status(websocket, "Error", quota_denial)
+                return
+            remaining = float(quota_payload.get("remainingSeconds") or 0)
+            await send_status(
+                websocket,
+                "Connecting cloud",
+                f"Cloud speech translation. Monthly quota remaining: {remaining / 3600:.2f}h.",
+            )
         else:
             await send_status(
                 websocket,
@@ -3653,34 +3903,74 @@ async def subtitles(websocket: WebSocket) -> None:
         subtitle_queue = asyncio.Queue()
         status_queue = create_queue(max(3, active_config.queue_max_size))
 
-        capture = MicrophoneAudioCapture(
-            sample_rate=active_config.audio_sample_rate,
-            channels=active_config.audio_channels,
-            chunk_seconds=active_config.chunk_seconds,
-            overlap_seconds=active_config.overlap_seconds,
-            adaptive_chunking_enabled=active_config.adaptive_chunking_enabled,
-            min_chunk_seconds=active_config.min_chunk_seconds,
-            chunk_flush_silence_seconds=active_config.chunk_flush_silence_seconds,
-            chunk_flush_rms_threshold=effective_vad_rms_threshold(active_config),
-            audio_source=active_config.audio_source,
-            recording_path=session_recording_path(),
-        )
-        capture.start()
-        put_latest(status_queue, capture.source_notice())
-        recording_notice = capture.recording_notice()
-        if recording_notice is not None:
-            put_latest(status_queue, recording_notice)
+        if not use_browser_audio:
+            capture = MicrophoneAudioCapture(
+                sample_rate=active_config.audio_sample_rate,
+                channels=active_config.audio_channels,
+                chunk_seconds=active_config.chunk_seconds,
+                overlap_seconds=active_config.overlap_seconds,
+                adaptive_chunking_enabled=active_config.adaptive_chunking_enabled,
+                min_chunk_seconds=active_config.min_chunk_seconds,
+                chunk_flush_silence_seconds=active_config.chunk_flush_silence_seconds,
+                chunk_flush_rms_threshold=effective_vad_rms_threshold(active_config),
+                audio_source=active_config.audio_source,
+                recording_path=session_recording_path(),
+            )
+            capture.start()
+            put_latest(status_queue, capture.source_notice())
+            recording_notice = capture.recording_notice()
+            if recording_notice is not None:
+                put_latest(status_queue, recording_notice)
+            print(
+                f"[audio] requested={active_config.audio_source} "
+                f"selected={capture.selected_source_label}: {capture.selected_source_detail}",
+                flush=True,
+            )
 
         if active_config.translation_engine == "azure":
+            cloud_session_id = register_cloud_session()
             azure_session = AzureSpeechTranslationSession(
                 active_config,
                 asyncio.get_running_loop(),
                 subtitle_queue,
                 status_queue,
             )
+            if use_browser_audio:
+                await azure_session.start()
+                recording_path = session_recording_path()
+                tasks = [
+                    asyncio.create_task(cloud_quota_guard_worker(status_queue, stop_event)),
+                    asyncio.create_task(
+                        browser_audio_to_azure_worker(
+                            websocket,
+                            azure_session,
+                            recording_path,
+                            status_queue,
+                            stop_event,
+                            active_config.audio_sample_rate,
+                        )
+                    ),
+                    asyncio.create_task(
+                        websocket_push_worker(
+                            websocket,
+                            subtitle_queue,
+                            status_queue,
+                            stop_event,
+                            active_config,
+                        )
+                    ),
+                ]
+                await send_status(
+                    websocket,
+                    "Listening",
+                    "Cloud speech translation from browser audio.",
+                )
+                await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+                return
             await azure_session.start()
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
+                asyncio.create_task(cloud_quota_guard_worker(status_queue, stop_event)),
                 asyncio.create_task(stream_microphone_to_azure(capture, azure_session, stop_event)),
                 asyncio.create_task(
                     websocket_push_worker(
@@ -3692,7 +3982,11 @@ async def subtitles(websocket: WebSocket) -> None:
                     )
                 ),
             ]
-            await send_status(websocket, "Listening", "Cloud speech translation")
+            await send_status(
+                websocket,
+                "Listening",
+                f"Cloud speech translation from {capture.selected_source_label}: {capture.selected_source_detail}",
+            )
         elif recording_only_quality:
             tasks = [
                 asyncio.create_task(watch_control_messages(websocket, stop_event)),
@@ -3748,6 +4042,11 @@ async def subtitles(websocket: WebSocket) -> None:
         global last_recording_stop_at
         last_recording_stop_at = time.time()
         stop_event.set()
+        if cloud_session_id:
+            elapsed = finish_cloud_session(cloud_session_id)
+            azure_usage_cache["fetchedAt"] = 0.0
+            azure_usage_cache["payload"] = None
+            print(f"[quota] recorded cloud session {elapsed:.1f}s", flush=True)
         if azure_session is not None:
             await azure_session.stop()
         if capture is not None:

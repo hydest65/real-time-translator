@@ -1,5 +1,47 @@
 # Release Notes
 
+## 0.3.3-remote-quota-lightweight - Remote Tester Mode, Cloud Quota Guard, and Lightweight Handoff
+
+Date: 2026-07-20
+
+### Product
+
+- Added a remote tester operating path: testers open a hosted Subtitle Studio page, while the speech key stays only on the center backend.
+- Added Japanese source speech support for Cloud live translation into Simplified Chinese.
+- Added a centrally enforced Cloud live-translation quota, defaulting to 5 hours per month and resetting at the first day of each UTC month.
+- Changed the default install to a lightweight cloud-first dependency set so new testers do not download local Whisper, FunASR, Argos, MarianMT, NLLB, Torch, or Hugging Face model stacks unless they explicitly need offline/local mode.
+
+### UI
+
+- Removed the visible mode/settings panel and the Diag toolbar button from the main workspace.
+- Kept a single compact Notes shortcut in the top-right utility area.
+- Kept diagnostics available at `/static/diagnostics.html` for direct health checks without occupying the live subtitle surface.
+- Preserved provider-neutral tester wording such as `Cloud`, `Cloud Usage`, and neutral cloud status labels.
+
+### Technical
+
+- Added browser-audio Cloud streaming for remote testers: the browser captures mic/system share audio, converts it to 16 kHz mono PCM, and sends it over the existing subtitle WebSocket to the center backend.
+- Reused `AzureSpeechTranslationSession.write_audio(...)` so remote browser audio feeds the cloud stream without exposing credentials to the browser.
+- Added backend monthly quota enforcement that combines Azure Monitor usage when configured, a local backend ledger at `sync-meta/cloud-usage-quota.json`, and active sessions.
+- Added active-session quota guarding so Cloud sessions are rejected or stopped once the configured monthly limit is reached.
+- Split dependencies into `backend/requirements.txt` for lightweight cloud-first use and `backend/requirements-local.txt` for optional offline/local models.
+- Added `scripts/start-remote-server.ps1` for center-hosted testing and `scripts/cleanup-local-artifacts.ps1` for removing model/runtime caches before handoff.
+
+### Verification
+
+- Python syntax checks passed for the changed backend modules and recording-processing script.
+- Frontend JavaScript syntax check passed for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js` with the bundled Codex Node runtime.
+- PowerShell parse checks passed for `scripts/start-server.ps1`, `scripts/start-remote-server.ps1`, `scripts/launch-app.ps1`, and `scripts/cleanup-local-artifacts.ps1`.
+- Cloud quota smoke tests passed for limit reached, remaining seconds, active-session accounting, and ledger update after session finish.
+- Runtime smoke test passed for `GET /api/health` and the main page on a temporary local port.
+- Secret scan found placeholders/documented environment-variable names only; `.env`, recordings, generated notes, sync metadata, and model caches remain ignored.
+
+### Known Limitations
+
+- Remote browser microphone capture requires HTTPS unless the tester is on `localhost`.
+- Remote browser system-audio sharing depends on browser and OS support; Mic is the safest remote-test input.
+- The hosted center backend should sit behind tunnel access policy, VPN, or reverse-proxy authentication before wider external testing, because anyone who can reach it can spend the shared quota.
+
 ## 0.3.2-speaker-aware-notes-ui-trim - Speaker-Aware Meeting Notes and Subtitle Workspace Cleanup
 
 Date: 2026-06-04

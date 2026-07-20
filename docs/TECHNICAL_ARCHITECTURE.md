@@ -5,14 +5,15 @@
 ### Cloud Route
 
 ```text
-Audio capture
+Browser audio capture or server-machine audio capture
   -> cloud speech translation streaming session
   -> websocket_push_worker
   -> browser subtitle monitor
 ```
 
 This is the preferred low-latency route. The UI presents this route with provider-neutral `Cloud` wording for testers while preserving the existing backend configuration contract.
-The source language selector maps English to `en-US` and Spanish to `es-ES`; the target is fixed to `zh-Hans`.
+For remote tester mode, the tester's browser captures audio, downsamples it to 16 kHz mono PCM16, sends it over the subtitle WebSocket, and the center backend pushes that audio into the cloud speech stream. This keeps the cloud key on the center backend instead of distributing it to testers. For local single-machine operation, the backend can still capture local `System` or `Mic` audio directly.
+The source language selector maps English to `en-US`, Spanish to `es-ES`, Japanese to `ja-JP`, and Chinese to `zh-CN`; the target is fixed to `zh-Hans`.
 Chinese meeting speech maps to `zh-CN` for transcription and still produces bilingual meeting notes for review.
 
 ### Local Fallback Route
@@ -49,7 +50,7 @@ The current CPU-safe tuning uses 800 ms chunks, FunASR chunk size `[5, 10, 5]`, 
 
 ## Key Backend Modules
 
-- `backend/main.py`: FastAPI app, WebSocket orchestration, queues, local utterance aggregation, workers, direct fast translation flow, cloud usage sync endpoint, meeting-notes processing, and paragraph turn detection.
+- `backend/main.py`: FastAPI app, WebSocket orchestration, queues, local utterance aggregation, browser-audio remote tester input, monthly cloud quota guard, direct fast translation flow, cloud usage sync endpoint, meeting-notes processing, and paragraph turn detection.
 - `backend/audio_capture.py`: microphone capture plus Windows system-audio capture that prefers current-default-device loopback through `soundcard`, then falls back to Stereo Mix / speaker-monitor matching through `sounddevice`.
 - `backend/cloud_speech.py`: cloud streaming translation integration.
 - `backend/asr.py`: faster-whisper wrapper.
@@ -64,7 +65,7 @@ The current CPU-safe tuning uses 800 ms chunks, FunASR chunk size `[5, 10, 5]`, 
 
 - `frontend/index.html`: main Subtitle Studio operating surface.
 - `frontend/style.css`: shared visual tokens, soft UI layout, subtitle monitor, controls, and saved-theme CSS variable hooks.
-- `frontend/app.js`: WebSocket client, subtitle rendering, status lamp state, scroll-follow behavior, cloud usage panel state, provider-neutral status text rendering, diagnostics entry, and saved UI theme loading.
+- `frontend/app.js`: WebSocket client, browser audio capture for remote Cloud mode, subtitle rendering, status lamp state, scroll-follow behavior, cloud usage panel state, provider-neutral status text rendering, and saved UI theme loading.
 - Frontend rendering uses two UI modes: cloud events render into the original single bilingual subtitle stream, while English/Spanish local events split into continuous source context and complete Chinese translation panes. Local Chinese FunASR events render into a recent Chinese live caption window.
 - `frontend/ui-editor.html`: visual editor page for tuning the main UI.
 - `frontend/ui-editor.css`: editor layout and control styling.
@@ -73,7 +74,7 @@ The current CPU-safe tuning uses 800 ms chunks, FunASR chunk size `[5, 10, 5]`, 
 - `frontend/diagnostics.css`: monitoring page visual style.
 - `frontend/diagnostics.js`: polling and quick-test logic for diagnostics. The live WebSocket test opens and closes a connection without starting a caption session.
 
-The main UI opens diagnostics in a separate tab/window so checking health does not replace the active subtitle page or stop its WebSocket/audio state.
+Diagnostics remains available at `/static/diagnostics.html`, but the main operating toolbar no longer exposes a diagnostics button. This keeps the live surface focused on Start, End, language/input selection, and the compact Notes tool.
 
 Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCompact20260502`. This is a local browser preference, not a server-side user setting.
 
@@ -82,6 +83,8 @@ Saved UI editor choices are stored in the browser under `subtitleStudioUiThemeCo
 The left runtime panel includes a provider-neutral Cloud Usage block. Without account-level sync credentials, it records the current session and local day/month estimate in browser `localStorage` under `subtitleStudioAzureUsageEstimate20260525`; this does not synchronize across machines or browsers.
 
 When account-level sync credentials are configured, the frontend polls `GET /api/cloud-usage` once per minute. The backend uses the existing service-principal configuration to query translated-audio seconds and returns provider-neutral `cloud_usage` / `audio_seconds` fields. Results are cached for 60 seconds so the UI does not repeatedly hit the usage API. The previous `/api/azure-usage` endpoint remains as a compatibility alias.
+
+The center backend now enforces a monthly Cloud quota, defaulting to `18000` seconds, or 5 hours. The quota resets at 00:00 UTC on the first day of each month. Enforcement combines the cloud-provider month total, the local backend ledger at `sync-meta/cloud-usage-quota.json`, and currently active sessions. New Cloud subtitle sessions are rejected after the quota is reached, and active Cloud sessions are stopped by a quota guard worker at the boundary.
 
 ## Post-Meeting Notes
 
@@ -136,7 +139,7 @@ $env:AZURE_TENANT_ID="..."
 $env:AZURE_CLIENT_ID="..."
 $env:AZURE_CLIENT_SECRET="..."
 $env:AZURE_SPEECH_RESOURCE_ID="/subscriptions/.../resourceGroups/.../providers/Microsoft.CognitiveServices/accounts/..."
-$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="360000"
+$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="18000"
 ```
 
 Terminology hotwords are loaded by `backend/terminology.py` from built-in engineering defaults, `AZURE_PHRASE_LIST`, `ASR_PROMPT_TERMS`, and `backend/glossary.csv`. Azure uses the final list as a `PhraseListGrammar`. Local faster-whisper can use terminology for `initial_prompt` and `hotwords`, but this is disabled by default for live `System` mode because an overly specific prompt can bias general meeting or video audio. Post-meeting faster-whisper processing reuses the same module.

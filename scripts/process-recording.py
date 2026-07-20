@@ -550,7 +550,7 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise SystemExit(
-            "faster-whisper is not installed. Run: python -m pip install -r backend\\requirements.txt"
+            "faster-whisper is not installed. Run: python -m pip install -r backend\\requirements-local.txt"
         ) from exc
 
     meeting_prompt = build_meeting_prompt(limit=100)

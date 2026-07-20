@@ -41,7 +41,10 @@ Read these files early when continuing product, architecture, UI, meeting-notes,
 
 2. Confirm the active architecture:
    - Cloud mode is the primary low-latency path in tester-facing UI.
+   - Remote tester Cloud mode captures audio in the tester browser and streams 16 kHz PCM over WebSocket to the center backend; the backend keeps the speech key private.
+   - The center backend enforces the configured monthly Cloud quota, currently 5 hours by default.
    - Tester-facing labels remain provider-neutral: use `Cloud`, `Cloud Usage`, and neutral status/error text.
+   - The main toolbar no longer exposes mode/settings/diagnostics controls; keep it focused on input, language, Start, End, and Notes.
    - Local ASR/translation remains a fallback path.
    - Local Chinese realtime subtitles can use FunASR streaming through `/ws/asr/funasr`.
    - MiniMax polishing is removed unless the user explicitly asks to reintroduce it.
@@ -93,5 +96,7 @@ Read these files early when continuing product, architecture, UI, meeting-notes,
 - Preserve the guided meeting flow: `Start Meeting`, `End Meeting`, then manual notes building through the Notes tools.
 - Preserve Word-first bilingual notes: English minutes first, Chinese reading version second, in one `.docx` file.
 - Preserve provider-neutral UI wording for testers: use `Cloud` in visible labels, status messages, usage panel text, and common errors.
+- Preserve remote tester key hygiene: never distribute `.env` or speech keys; use a hosted center backend plus HTTPS access.
+- Preserve lightweight default installs: keep local model packages in `backend/requirements-local.txt`, not in the default `backend/requirements.txt`.
 - Keep private `.env`, `backend/glossary.csv`, recordings, generated notes, model caches, browser session exports, and temporary auth dumps out of Git.
 - Keep true speaker diarization as a future feature unless explicitly implemented.

@@ -128,7 +128,13 @@ def build_azure_phrase_list(
     limit: int = 500,
     include_defaults: bool = True,
 ) -> list[str]:
-    language = "es" if source_language.lower().startswith("es") else "en"
+    lowered = source_language.lower()
+    if lowered.startswith("es"):
+        language = "es"
+    elif lowered.startswith("ja"):
+        language = "ja"
+    else:
+        language = "en"
     return build_hotword_terms(extra_terms=extra_terms, language=language, limit=limit, include_defaults=include_defaults)
 
 

@@ -2,7 +2,8 @@ param(
     [int]$Port = 8000,
     [string]$HostAddress = "127.0.0.1",
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
-    [switch]$NoInstall
+    [switch]$NoInstall,
+    [switch]$InstallLocalModels
 )
 
 $ErrorActionPreference = "Stop"
@@ -73,6 +74,12 @@ if (-not $NoInstall) {
         Stop-IfFailed "Could not install project dependencies."
     } else {
         Write-Host "Dependencies look ready."
+    }
+
+    if ($InstallLocalModels) {
+        Write-Step "Installing optional local model dependencies"
+        & $python -m pip install -r "backend\requirements-local.txt"
+        Stop-IfFailed "Could not install optional local model dependencies."
     }
 }
 

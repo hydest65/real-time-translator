@@ -106,11 +106,16 @@ def refine_meeting_minutes(
     if not model:
         return NotesRefinementResult(text=base, changed=False, status="skipped", detail="No rewrite model.")
 
+    speaker_evidence = speaker_discussion_evidence(
+        transcript_text,
+        int(os.getenv("POST_MEETING_NOTES_REWRITE_SPEAKER_EVIDENCE_CHARS", "6000")),
+    )
     prompt = build_refinement_prompt(
         minutes_text=base,
         transcript_text=transcript_text,
         context=context,
         notes_language=notes_language,
+        speaker_evidence=speaker_evidence,
     )
     payload = {
         "model": model,
@@ -139,6 +144,13 @@ def refine_meeting_minutes(
         return NotesRefinementResult(text=base, changed=False, status="failed", detail="Empty model response.")
     if not refined_minutes_is_safe(base, refined):
         return NotesRefinementResult(text=base, changed=False, status="rejected", detail="Rewrite failed safety checks.")
+    if speaker_evidence and contains_ambiguous_speaker_pronoun(refined):
+        return NotesRefinementResult(
+            text=base,
+            changed=False,
+            status="rejected",
+            detail="Rewrite used ambiguous speaker pronouns.",
+        )
     return NotesRefinementResult(text=refined, changed=True, status="rewritten", detail=f"Ollama model: {model}")
 
 
@@ -148,16 +160,13 @@ def build_refinement_prompt(
     transcript_text: str,
     context: MeetingNotesContext,
     notes_language: str,
+    speaker_evidence: str = "",
 ) -> str:
     wants_chinese = str(notes_language or "").lower().startswith(("zh", "cn"))
     output_language = "Chinese" if wants_chinese else "English first, then a concise Chinese reading section"
     context_block = context.to_prompt_block() or "No extra meeting context was provided."
     minutes_excerpt = trim_for_prompt(minutes_text, int(os.getenv("POST_MEETING_NOTES_REWRITE_MINUTES_CHARS", "9000")))
     transcript_excerpt = trim_for_prompt(transcript_text, int(os.getenv("POST_MEETING_NOTES_REWRITE_TRANSCRIPT_CHARS", "9000")))
-    speaker_evidence = speaker_discussion_evidence(
-        transcript_text,
-        int(os.getenv("POST_MEETING_NOTES_REWRITE_SPEAKER_EVIDENCE_CHARS", "6000")),
-    )
     return "\n".join(
         [
             "You are improving meeting minutes from a speech transcript.",
@@ -168,6 +177,8 @@ def build_refinement_prompt(
             "Use the transcript reference to enrich sparse generated minutes when it contains supporting detail.",
             "Make the discussion speaker-aware. When the transcript identifies speakers, each major topic should show "
             "who raised, answered, challenged, confirmed, or took ownership of the point.",
+            "Hard rule: inside topic discussion bullets, never refer to an identified speaker as 他, 她, 其, 对方, he, "
+            "she, or they. Repeat the speaker label or real name instead, for example 发言人 1 提到..., Speaker 2 added....",
             "Use names only if the transcript or meeting context provides real names. Otherwise use the transcript labels "
             "such as Speaker 1 / Speaker 2, or 发言人 1 / 发言人 2 for Chinese output.",
             "Do not paste long raw transcript excerpts. Paraphrase each speaker's contribution into professional notes, "
@@ -309,3 +320,44 @@ def refined_minutes_is_safe(original: str, refined: str) -> bool:
     if "i cannot" in lower or "as an ai" in lower or "无法生成" in refined:
         return False
     return True
+
+
+def contains_ambiguous_speaker_pronoun(text: str) -> bool:
+    """Reject speaker-aware rewrites that hide identified speakers behind pronouns."""
+    cleaned = str(text or "")
+    explicit_chinese_phrases = (
+        "\u4ed6\u8868\u793a",
+        "\u4ed6\u63d0\u5230",
+        "\u4ed6\u6307\u51fa",
+        "\u4ed6\u8ba4\u4e3a",
+        "\u4ed6\u8865\u5145",
+        "\u4ed6\u786e\u8ba4",
+        "\u4ed6\u5f3a\u8c03",
+        "\u4ed6\u8bf4\u660e",
+        "\u4ed6\u89e3\u91ca",
+        "\u4ed6\u5efa\u8bae",
+        "\u4ed6\u8be2\u95ee",
+        "\u4ed6\u56de\u7b54",
+        "\u4ed6\u8d28\u7591",
+        "\u4ed6\u8d1f\u8d23",
+        "\u5bf9\u65b9\u8868\u793a",
+        "\u5bf9\u65b9\u63d0\u5230",
+        "\u5bf9\u65b9\u8ba4\u4e3a",
+        "\u5176\u8868\u793a",
+        "\u5176\u63d0\u5230",
+        "\u5176\u8ba4\u4e3a",
+    )
+    if any(phrase in cleaned for phrase in explicit_chinese_phrases):
+        return True
+    chinese_patterns = [
+        r"(?<!其)他(?:表示|提到|指出|认为|补充|确认|强调|说明|解释|建议|询问|回答|质疑|负责|要求|希望|担心)",
+        r"(?:由|需由|需要由)他(?:来|去)?(?:确认|负责|补充|跟进|处理)",
+        r"(?:其|对方)(?:表示|提到|指出|认为|补充|确认|强调|说明|解释|建议|询问|回答|质疑|负责)",
+    ]
+    if any(re.search(pattern, cleaned) for pattern in chinese_patterns):
+        return True
+    english_patterns = [
+        r"\b(?:he|she|they)\s+(?:said|noted|added|confirmed|asked|answered|challenged|owned|suggested|explained)\b",
+        r"\b(?:his|her|their)\s+(?:point|concern|question|answer|action|owner)\b",
+    ]
+    return any(re.search(pattern, cleaned, flags=re.IGNORECASE) for pattern in english_patterns)

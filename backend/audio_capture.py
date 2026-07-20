@@ -189,14 +189,18 @@ class MicrophoneAudioCapture:
             self.selected_source_label = "Default microphone"
             self.selected_source_detail = f"Windows default input ({self._input_sample_rate} Hz)"
 
-        self._stream = sd.InputStream(
-            samplerate=self._input_sample_rate,
-            channels=max(1, input_channels),
-            device=self._device,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self._input_sample_rate,
+                channels=max(1, input_channels),
+                device=self._device,
+                dtype="float32",
+                callback=self._callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            source = "Microphone" if self.audio_source != "system" else "System audio fallback"
+            raise RuntimeError(f"{source} input failed: {exc}") from exc
 
     def _start_system_loopback(self) -> bool:
         if sc is None:

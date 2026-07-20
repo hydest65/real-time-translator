@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import http.client
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -48,6 +49,25 @@ class TingwuUploadRef:
     local_temp_path: str = ""
 
 
+class TingwuTaskFailedError(RuntimeError):
+    """Raised when Tingwu accepts a task but the cloud task later fails."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        task_id: str,
+        status: str,
+        diagnostic: dict[str, Any],
+        diagnostic_path: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.task_id = task_id
+        self.status = status
+        self.diagnostic = diagnostic
+        self.diagnostic_path = diagnostic_path
+
+
 ProgressCallback = Callable[[str, str, dict[str, Any] | None], None]
 _MINUTES_TRANSLATOR: Any | None = None
 _MINUTES_TRANSLATOR_FAILED = False
@@ -65,7 +85,25 @@ def process_tingwu_recording(
         client = tingwu_client(config)
         task_key = f"subtitle-studio-{audio.stem}-{uuid.uuid4().hex[:8]}"
         task_id = create_tingwu_task(client, config, task_key, upload_ref.file_url, source_language, progress_callback)
-        notes = wait_for_tingwu_task(client, task_id, config, progress_callback)
+        try:
+            notes = wait_for_tingwu_task(client, task_id, config, progress_callback)
+        except TingwuTaskFailedError as exc:
+            diagnostic_path = write_tingwu_failure_diagnostic(
+                audio=audio,
+                task_id=task_id,
+                task_key=task_key,
+                upload_ref=upload_ref,
+                config=config,
+                failure=exc.diagnostic,
+            )
+            exc.diagnostic_path = str(diagnostic_path)
+            raise TingwuTaskFailedError(
+                f"{exc} Diagnostic: {diagnostic_path}",
+                task_id=exc.task_id,
+                status=exc.status,
+                diagnostic=exc.diagnostic,
+                diagnostic_path=str(diagnostic_path),
+            ) from exc
         notes.task_key = task_key
         notes.segments = extract_tingwu_segments(notes.transcript_json)
         return notes
@@ -706,6 +744,7 @@ def create_tingwu_task(
     task_id = str(getattr(data, "task_id", "") or "")
     if not task_id:
         raise RuntimeError("Aliyun Tingwu CreateTask did not return a TaskId.")
+    print(f"Aliyun Tingwu task id: {task_id}", flush=True)
     return task_id
 
 
@@ -735,11 +774,118 @@ def wait_for_tingwu_task(
         if status == "COMPLETED":
             return build_tingwu_notes(task_id, data, progress_callback)
         if status in {"FAILED", "INVALID"}:
-            error_code = getattr(data, "error_code", "") or ""
-            error_message = getattr(data, "error_message", "") or ""
-            raise RuntimeError(f"Aliyun Tingwu task failed: {status} {error_code} {error_message}")
+            failure = tingwu_failure_payload(task_id, status, body, data)
+            detail = failure.get("detail") or ""
+            raise TingwuTaskFailedError(
+                f"Aliyun Tingwu task failed: {status}" + (f" - {detail}" if detail else ""),
+                task_id=task_id,
+                status=status,
+                diagnostic=failure,
+            )
         time.sleep(poll_seconds)
     raise RuntimeError("Aliyun Tingwu task timed out.")
+
+
+def tingwu_failure_payload(task_id: str, status: str, body: Any, data: Any) -> dict[str, Any]:
+    body_plain = sdk_to_plain(body)
+    data_plain = sdk_to_plain(data)
+    detail_fields = collect_failure_fields(data_plain) + collect_failure_fields(body_plain)
+    seen: set[str] = set()
+    details: list[str] = []
+    for item in detail_fields:
+        if item and item not in seen:
+            seen.add(item)
+            details.append(item)
+    return {
+        "taskId": task_id,
+        "status": status,
+        "detail": "; ".join(details[:8]),
+        "data": data_plain,
+        "body": body_plain,
+    }
+
+
+def collect_failure_fields(value: Any, prefix: str = "") -> list[str]:
+    """Find useful failure text even when the SDK uses unexpected field names."""
+    matches: list[str] = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            key_text = str(key)
+            path = f"{prefix}.{key_text}" if prefix else key_text
+            lowered = key_text.lower()
+            if any(token in lowered for token in ("error", "fail", "message", "reason", "status", "code")):
+                if isinstance(item, (str, int, float, bool)) and str(item).strip():
+                    matches.append(f"{path}={item}")
+            matches.extend(collect_failure_fields(item, path))
+    elif isinstance(value, list):
+        for index, item in enumerate(value[:20]):
+            matches.extend(collect_failure_fields(item, f"{prefix}[{index}]"))
+    return matches
+
+
+def sdk_to_plain(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, dict):
+        return {str(key): sdk_to_plain(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set)):
+        return [sdk_to_plain(item) for item in value]
+    to_map = getattr(value, "to_map", None)
+    if callable(to_map):
+        try:
+            return sdk_to_plain(to_map())
+        except Exception:
+            pass
+    fields = getattr(value, "__dict__", None)
+    if isinstance(fields, dict):
+        return {
+            str(key): sdk_to_plain(item)
+            for key, item in fields.items()
+            if not str(key).startswith("_")
+        }
+    return str(value)
+
+
+def write_tingwu_failure_diagnostic(
+    *,
+    audio: Path,
+    task_id: str,
+    task_key: str,
+    upload_ref: TingwuUploadRef,
+    config: dict[str, str],
+    failure: dict[str, Any],
+) -> Path:
+    upload_path = Path(upload_ref.local_temp_path) if upload_ref.local_temp_path else audio
+    payload = {
+        "createdAt": time.strftime("%Y-%m-%dT%H:%M:%S%z"),
+        "taskId": task_id,
+        "taskKey": task_key,
+        "audio": {
+            "path": str(audio),
+            "name": audio.name,
+            "sizeBytes": audio.stat().st_size if audio.exists() else 0,
+        },
+        "upload": {
+            "provider": upload_ref.provider,
+            "objectKey": upload_ref.object_key,
+            "localPath": str(upload_path),
+            "name": upload_path.name,
+            "sizeBytes": upload_path.stat().st_size if upload_path.exists() else 0,
+            "contentType": audio_content_type(upload_path),
+        },
+        "config": {
+            "region": config.get("region", ""),
+            "endpoint": config.get("endpoint", ""),
+            "uploadProvider": config.get("upload_provider", ""),
+            "audioCompression": config.get("audio_compression", ""),
+            "cacheCompressedAudio": config.get("cache_compressed_audio", ""),
+        },
+        "failure": failure,
+    }
+    path = audio.with_suffix(".tingwu.failed.json")
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    print(f"Aliyun Tingwu: wrote failure diagnostic {path}", flush=True)
+    return path
 
 
 def build_tingwu_notes(
@@ -871,7 +1017,11 @@ def render_tingwu_minutes(audio: Path, notes: TingwuNotes, notes_language: str =
     meeting_duration = format_audio_duration(notes)
     agenda_topics = build_agenda_topics(actions, key_sentences, summary_points)
     topic_sections = build_topic_sections(actions, key_sentences, summary_points)
+    topic_sections = add_speaker_evidence_to_topic_sections(topic_sections, notes.segments)
     conclusion_points = build_conclusion_points(summary_points, actions)
+    meeting_speaker = dominant_speaker_for_meeting(notes.segments)
+    summary_points = [replace_ambiguous_topic_pronouns(item, meeting_speaker) for item in summary_points]
+    conclusion_points = [replace_ambiguous_topic_pronouns(item, meeting_speaker) for item in conclusion_points]
     title_line = build_minutes_title(audio, summary_title)
     minutes_data = {
         "title_line": title_line,
@@ -1507,6 +1657,258 @@ def build_topic_sections(
     if remainder:
         grouped.append(("Additional Discussion and Follow-up", remainder[:4]))
     return grouped[:5]
+
+
+def add_speaker_evidence_to_topic_sections(
+    topic_sections: list[tuple[str, list[str]]],
+    segments: list[TingwuSegment],
+) -> list[tuple[str, list[str]]]:
+    if not topic_sections or not segments:
+        return topic_sections
+
+    enriched: list[tuple[str, list[str]]] = []
+    used_segment_keys: set[str] = set()
+    for heading, items in topic_sections:
+        evidence = speaker_evidence_for_topic(heading, items, segments, used_segment_keys)
+        fallback_speaker = speaker_label_from_evidence(evidence) or dominant_speaker_for_topic(heading, items, segments)
+        cleaned_items = [replace_ambiguous_topic_pronouns(item, fallback_speaker) for item in items]
+        speaker_has_been_added = bool(fallback_speaker) and any(fallback_speaker in item for item in cleaned_items)
+        merged = dedupe_texts(cleaned_items if speaker_has_been_added else cleaned_items + evidence)
+        enriched.append((heading, merged[:6]))
+    return enriched
+
+
+def speaker_evidence_for_topic(
+    heading: str,
+    items: list[str],
+    segments: list[TingwuSegment],
+    used_segment_keys: set[str],
+    limit: int = 2,
+) -> list[str]:
+    keywords = topic_keywords_for_heading(heading)
+    keywords.update(extract_topic_terms(" ".join([heading, *items])))
+    if not keywords:
+        return []
+
+    matches: list[tuple[int, TingwuSegment]] = []
+    for segment in segments:
+        text = clean_result_line(segment.text)
+        if not is_substantive_transcript_snippet(text):
+            continue
+        key = re.sub(r"\s+", "", f"{segment.speaker}:{text}").lower()
+        if key in used_segment_keys:
+            continue
+        score = topic_match_score(text, keywords)
+        if score > 0:
+            matches.append((score, segment))
+
+    matches.sort(key=lambda item: (-item[0], item[1].start))
+    evidence: list[str] = []
+    for _, segment in matches:
+        text = clean_result_line(segment.text)
+        key = re.sub(r"\s+", "", f"{segment.speaker}:{text}").lower()
+        if key in used_segment_keys:
+            continue
+        used_segment_keys.add(key)
+        evidence.append(format_speaker_topic_note(segment.speaker, text))
+        if len(evidence) >= limit:
+            break
+    return evidence
+
+
+def speaker_label_from_evidence(evidence: list[str]) -> str:
+    for item in evidence:
+        match = re.match(r"\s*(Speaker\s+\S+)\s+noted:", item, flags=re.IGNORECASE)
+        if match:
+            return match.group(1)
+    return ""
+
+
+def dominant_speaker_for_topic(heading: str, items: list[str], segments: list[TingwuSegment]) -> str:
+    keywords = topic_keywords_for_heading(heading)
+    keywords.update(extract_topic_terms(" ".join([heading, *items])))
+    speaker_scores: dict[str, int] = {}
+    for segment in segments:
+        text = clean_result_line(segment.text)
+        score = topic_match_score(text, keywords)
+        if score <= 0:
+            continue
+        speaker = clean_result_line(segment.speaker)
+        if not speaker:
+            continue
+        speaker_scores[speaker] = speaker_scores.get(speaker, 0) + score
+    if not speaker_scores:
+        return ""
+    return sorted(speaker_scores.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def dominant_speaker_for_meeting(segments: list[TingwuSegment]) -> str:
+    speaker_scores: dict[str, float] = {}
+    for segment in segments:
+        speaker = clean_result_line(segment.speaker)
+        text = clean_result_line(segment.text)
+        if not speaker or not is_substantive_transcript_snippet(text):
+            continue
+        speaker_scores[speaker] = speaker_scores.get(speaker, 0.0) + max(1.0, segment.end - segment.start)
+    if not speaker_scores:
+        return ""
+    return sorted(speaker_scores.items(), key=lambda item: (-item[1], item[0]))[0][0]
+
+
+def replace_ambiguous_topic_pronouns(text: str, speaker: str) -> str:
+    cleaned = clean_result_line(text)
+    if not cleaned:
+        return ""
+    label = clean_result_line(speaker)
+    if label:
+        speaker_verbs = (
+            "\u63d0\u51fa|\u63d0\u8bae|\u63d0\u5230|\u8868\u793a|\u8ba4\u4e3a|\u6307\u51fa|"
+            "\u5f3a\u8c03|\u4e3b\u5f20|\u5efa\u8bae|\u786e\u8ba4|\u8bf4\u660e|\u8865\u5145|"
+            "\u8d28\u7591|\u8868\u8fbe|\u8fd8|\u4e5f"
+        )
+        cleaned = re.sub(r"^\u4ed6(?=[\u4e00-\u9fff])", label, cleaned)
+        cleaned = re.sub(r"([。！？；;.!?]\s*)\u4ed6(?=[\u4e00-\u9fff])", rf"\1{label}", cleaned)
+        cleaned = re.sub(rf"\u4ed6(?=(?:{speaker_verbs}))", label, cleaned)
+        cleaned = re.sub(r"\u4ed6\u7684", f"{label}\u7684", cleaned)
+        cleaned = cleaned.replace("\u5bf9\u65b9\u8868\u793a", f"{label}\u8868\u793a")
+        cleaned = cleaned.replace("\u5176\u8868\u793a", f"{label}\u8868\u793a")
+    else:
+        cleaned = re.sub(r"^\u4ed6(?:\u63d0\u51fa|\u63d0\u5230|\u8868\u793a|\u8ba4\u4e3a|\u6307\u51fa)", "\u4f1a\u8bae\u8ba8\u8bba", cleaned)
+        cleaned = re.sub(r"\u4ed6(?:\u5f3a\u8c03|\u4e3b\u5f20|\u5efa\u8bae)", "\u56e2\u961f\u786e\u8ba4", cleaned)
+        cleaned = cleaned.replace("\u5bf9\u65b9\u8868\u793a", "\u76f8\u5173\u65b9\u8868\u793a")
+        cleaned = cleaned.replace("\u5176\u8868\u793a", "\u76f8\u5173\u65b9\u8868\u793a")
+    return cleaned
+
+
+def topic_keywords_for_heading(heading: str) -> set[str]:
+    lowered = clean_result_line(heading).lower()
+    rules = {
+        "Piping Design Review and Capacity Changes": {
+            "piping",
+            "pipe",
+            "common base tank",
+            "booster pump",
+            "6 inches",
+            "4 inches",
+            "transfer size",
+        },
+        "Tank Condition and Replacement Evaluation": {
+            "tank",
+            "sorbitol",
+            "caustic",
+            "inspection",
+            "repair",
+            "replacement",
+        },
+        "Distribution Line and Flow Plate Configuration": {
+            "flow plate",
+            "distribution",
+            "distro",
+            "head tank",
+            "jumper",
+            "transfer line",
+        },
+        "CIP, Pigging, and Operational Constraints": {
+            "cip",
+            "pigging",
+            "cleaning",
+            "changeover",
+            "flexibility",
+            "radius",
+        },
+        "Model Updates and Engineering Follow-up": {
+            "3d model",
+            "color-coded",
+            "connection matrix",
+            "automation",
+            "robot",
+            "documentation",
+        },
+    }
+    for name, keywords in rules.items():
+        if name.lower() == lowered:
+            return set(keywords)
+    return set()
+
+
+def extract_topic_terms(text: str) -> set[str]:
+    stop_words = {
+        "about",
+        "additional",
+        "after",
+        "also",
+        "and",
+        "are",
+        "discussion",
+        "follow",
+        "from",
+        "into",
+        "meeting",
+        "need",
+        "needs",
+        "next",
+        "that",
+        "the",
+        "this",
+        "topic",
+        "with",
+    }
+    terms = {
+        word.lower()
+        for word in re.findall(r"[A-Za-z][A-Za-z0-9&/-]{3,}", text)
+        if word.lower() not in stop_words
+    }
+    terms.update(term for term in re.findall(r"[\u4e00-\u9fff]{2,}", text) if len(term) >= 2)
+    return terms
+
+
+def topic_match_score(text: str, keywords: set[str]) -> int:
+    lowered = clean_result_line(text).lower()
+    score = 0
+    for keyword in keywords:
+        if keyword and keyword.lower() in lowered:
+            score += 2 if " " in keyword else 1
+    return score
+
+
+def format_speaker_topic_note(speaker: str, text: str) -> str:
+    label = clean_result_line(speaker) or "Speaker ?"
+    cleaned = clean_result_line(text).strip(" .")
+    cleaned = replace_pronouns_inside_speaker_quote(cleaned, label)
+    if len(cleaned) > 260:
+        cleaned = cleaned[:257].rstrip() + "..."
+    return f"{label} noted: {cleaned}."
+
+
+def replace_pronouns_inside_speaker_quote(text: str, speaker: str) -> str:
+    cleaned = clean_result_line(text)
+    cleaned = cleaned.replace("\u4ed6\u4eec", "\u76f8\u5173\u56e2\u961f")
+    cleaned = re.sub(r"\u4ed6(?!\u4eec)", "\u76f8\u5173\u4eba\u5458", cleaned)
+    cleaned = cleaned.replace("\u5bf9\u65b9", "\u76f8\u5173\u65b9")
+    cleaned = cleaned.replace("\u5176", "\u76f8\u5173\u5185\u5bb9")
+    return cleaned
+
+
+def is_substantive_transcript_snippet(text: str) -> bool:
+    cleaned = clean_result_line(text)
+    if not cleaned:
+        return False
+    filler = {
+        "good morning",
+        "hi good morning",
+        "hello",
+        "okay",
+        "ok",
+        "thank you",
+        "thanks",
+        "good",
+    }
+    if cleaned.lower().strip(" .!?") in filler:
+        return False
+    if contains_cjk(cleaned):
+        return len(cleaned) >= 12
+    words = re.findall(r"[A-Za-z0-9][A-Za-z0-9'/-]*", cleaned)
+    return len(words) >= 6
 
 
 def build_conclusion_points(summary_points: list[str], actions: list[str]) -> list[str]:

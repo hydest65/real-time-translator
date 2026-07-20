@@ -1,6 +1,6 @@
 # Real Time Translator MVP
 
-Windows real-time subtitle translator. It supports English-to-Chinese and Spanish-to-Chinese subtitles through two routes:
+Windows real-time subtitle translator. It supports English, Spanish, Japanese, and Chinese meeting speech with Simplified Chinese subtitles through two routes:
 
 - `Cloud`: lowest-latency streaming speech translation, shown with provider-neutral labels for testers.
 - `Local`: private offline ASR + translation. English/Spanish fallback uses faster-whisper plus local translators; local Chinese realtime mode uses FunASR streaming.
@@ -27,10 +27,10 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Meeting notes: `End Meeting` closes the recording session; use the Notes tools to build one bilingual Word notes file with English minutes first and Chinese minutes second
 - Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
-- Diagnostics: monitor panel at `/static/diagnostics.html` opens separately so checking health does not stop the live translation page
-- Cloud usage panel: shows current-session cloud time, local browser day/month estimates, and optional account-level sync
+- Diagnostics: monitor panel remains available at `/static/diagnostics.html`, but the main toolbar no longer shows a diagnostics shortcut
+- Cloud usage panel: shows current-session cloud time, account-level sync when configured, and the centrally enforced monthly quota
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
-- Source language: English or Spanish, both translated into Simplified Chinese
+- Source language: English, Spanish, Japanese, or Chinese meeting speech, translated or transcribed into Simplified Chinese
 - Cloud subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
 - Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
@@ -44,7 +44,7 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
-First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
+Argos, MarianMT, NLLB, faster-whisper, and FunASR are optional local-model features. They are not installed by the default lightweight dependency set. If you install the optional local stack, first use of Argos may download and install the required language package, and first use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
 
 Spanish mode notes:
 
@@ -70,6 +70,7 @@ real_time_translator/
     translator.py
     config.py
     requirements.txt
+    requirements-local.txt
   frontend/
     index.html
     style.css
@@ -85,7 +86,7 @@ real_time_translator/
 
 ## Version Closeout Docs
 
-- Current closeout: `0.3.2-speaker-aware-notes-ui-trim - Speaker-aware meeting notes and subtitle workspace cleanup`.
+- Current closeout: `0.3.3-remote-quota-lightweight - Remote tester mode, cloud quota guard, and lightweight handoff`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
@@ -95,6 +96,8 @@ real_time_translator/
 - `docs/VERSION_CLOSEOUT_SKILL.md`: project-local version closeout workflow.
 
 ## Install
+
+The default install is cloud-first and lightweight. It supports the browser UI, Azure live translation, Aliyun Tingwu meeting notes, audio capture, and local recording. It does not install local realtime/offline model packages such as Whisper, FunASR, Argos, MarianMT, NLLB, Torch, or Hugging Face Transformers.
 
 Use Python 3.11 on Windows.
 
@@ -106,14 +109,19 @@ python -m pip install --upgrade pip
 python -m pip install -r backend\requirements.txt
 ```
 
-If your pip source says it cannot find `argostranslate`, install it from PyPI directly:
+Only install the optional local-model stack when you specifically need offline/local ASR or offline/local translation:
 
 ```powershell
-python -m pip install argostranslate==1.9.6 -i https://pypi.org/simple
-python -m pip install sacremoses==0.0.53 -i https://pypi.org/simple
+python -m pip install -r backend\requirements-local.txt
 ```
 
-If Windows cannot install the local `faster-whisper` stack immediately, you can still start and use the Azure Cloud route first. The backend now delays loading `faster-whisper` until a local engine is actually selected.
+If your pip source says it cannot find `argostranslate`, install the optional stack from PyPI directly:
+
+```powershell
+python -m pip install -r backend\requirements-local.txt -i https://pypi.org/simple
+```
+
+If Windows cannot install the local `faster-whisper` or FunASR stack immediately, you can still start and use the Azure Cloud route first. The backend delays loading local model libraries until a local engine is actually selected.
 
 If you already have the virtual environment, just run:
 
@@ -140,10 +148,28 @@ $env:AZURE_TENANT_ID="your_tenant_id"
 $env:AZURE_CLIENT_ID="your_app_registration_client_id"
 $env:AZURE_CLIENT_SECRET="your_client_secret"
 $env:AZURE_SPEECH_RESOURCE_ID="/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<speech-resource-name>"
-$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="360000"
+$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="18000"
 ```
 
-The Speech key is enough for live translation, but it cannot read account-level usage. The usage panel calls `/api/azure-usage`, which uses Azure Monitor `AudioSecondsTranslated` through a service principal with `Monitoring Reader` access on the Speech resource. If these Azure Monitor variables are missing, the UI safely falls back to browser-local estimates and labels them as local-only.
+The Speech key is enough for live translation, but it cannot read account-level usage. The usage panel calls `/api/cloud-usage`, which uses Azure Monitor `AudioSecondsTranslated` through a service principal with `Monitoring Reader` access on the Speech resource. If these Azure Monitor variables are missing, the app still enforces the local backend quota ledger, but the panel labels the cloud sync as unavailable.
+
+Cloud live translation has a default monthly quota of `18000` seconds, or 5 hours. The quota window resets at 00:00 UTC on the first day of each month, which is 08:00 in China Standard Time. When the combined Azure Monitor usage, local backend quota ledger, and currently active cloud sessions reach the limit, the backend rejects new cloud subtitle sessions and stops active cloud sessions at the quota boundary.
+
+## Remote Testing Mode
+
+For small external tests, keep the Azure Speech key only on your own center backend. Testers should open your hosted Subtitle Studio page instead of receiving `.env` or Azure keys.
+
+Start the center backend on all network interfaces:
+
+```powershell
+.\scripts\start-remote-server.ps1
+```
+
+For browser microphone capture, testers must access the app through HTTPS unless they are on `localhost`. A Cloudflare Tunnel, ngrok tunnel, VPN-hosted HTTPS reverse proxy, or normal HTTPS deployment works. Plain `http://public-ip:8000` may open the page, but Chrome/Edge can block microphone capture.
+
+In remote cloud mode, the browser captures the tester's audio, sends 16 kHz PCM audio over WebSocket to the center backend, and the center backend streams it to Azure. The Azure key never leaves the backend. The 5-hour monthly quota is enforced centrally across all testers.
+
+Do not expose the center backend publicly without a tunnel access policy, VPN, or reverse-proxy authentication. Anyone who can reach the page can spend the shared cloud quota.
 
 Optional phrase list for better names and technical terms:
 
@@ -257,6 +283,8 @@ Double-click: Subtitle Studio.bat
 
 This starts the local backend and opens Subtitle Studio automatically. The first run creates `.venv` if needed and installs missing dependencies, so it can take a while. When you are done, close the app/browser window and the launcher will stop the local server it started.
 
+By default the launcher installs only the lightweight cloud-first dependency set. To include optional offline/local models on your own machine, start from PowerShell with `-InstallLocalModels`.
+
 Backup manual controls:
 
 ```text
@@ -271,7 +299,35 @@ cd path\to\real-time-translator
 .\scripts\start-server.ps1
 ```
 
+Optional local-model start:
+
+```powershell
+.\scripts\start-server.ps1 -InstallLocalModels
+```
+
 You can also double-click `start-server.bat` in the project folder. These options use the project's `.venv` automatically, so you do not need to activate the virtual environment every time.
+
+## Keep the Project Lightweight
+
+Model downloads, Python environments, recordings, generated previews, runtime caches, and logs should not be shared with other users or pushed to GitHub. The repo already ignores these paths, and the helper below can clean local artifacts before packaging or handing off the project.
+
+Preview what would be removed:
+
+```powershell
+.\scripts\cleanup-local-artifacts.ps1 -WhatIf
+```
+
+Remove model/runtime caches and logs, while keeping `.venv` and `recordings`:
+
+```powershell
+.\scripts\cleanup-local-artifacts.ps1
+```
+
+Full cleanup for a transfer package, including `.venv`, recordings, and design previews:
+
+```powershell
+.\scripts\cleanup-local-artifacts.ps1 -All
+```
 
 Manual developer start:
 
@@ -301,7 +357,7 @@ Diagnostics panel:
 http://127.0.0.1:8000/static/diagnostics.html
 ```
 
-The diagnostics page shows backend health, cloud/local notes readiness, meeting-notes progress, recent recordings, and quick connection checks. Open it from the small monitor icon in the main UI; it uses a separate tab so the active subtitle session keeps running.
+The diagnostics page shows backend health, cloud/local notes readiness, meeting-notes progress, recent recordings, and quick connection checks. Open it directly by URL when needed; the main toolbar no longer includes a diagnostics shortcut so the live subtitle surface stays uncluttered.
 
 Recommended first test:
 
@@ -312,6 +368,14 @@ Device: cuda
 Chunk: 2s
 Engine: Azure Cloud
 Input: System, if available for Teams audio
+```
+
+Recommended Japanese test:
+
+```text
+Source: Japanese
+Input: Mic or System
+Engine: Azure Cloud
 ```
 
 Recommended Spanish test:

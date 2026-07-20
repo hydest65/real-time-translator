@@ -203,7 +203,9 @@ These files can contain meeting content and should be treated as private.
 - Copy `.env.example` as a reference.
 - Recreate `.env` on the target machine with the target machine's real secrets.
 - If you must transfer the old `.env`, use a private secure channel, not GitHub or chat.
-- Install dependencies with `python -m pip install -r backend\requirements.txt`.
+- Install the lightweight cloud-first dependencies with `python -m pip install -r backend\requirements.txt`.
+- Install optional offline/local model dependencies only if needed with `python -m pip install -r backend\requirements-local.txt`.
+- Before packaging the project, run `.\scripts\cleanup-local-artifacts.ps1 -WhatIf` to preview cache/model cleanup.
 - Confirm `Cloud Check` passes before running a full meeting-notes job.
 
 ## Common Failure Meanings

@@ -12,7 +12,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - input selector
   - speech selector
   - compact `Start` and `End` meeting buttons
-  - icon-only shortcuts for notes, settings, and diagnostics
+  - one compact icon-only shortcut for Notes
 - Left side panel:
   - current step
   - caption readiness
@@ -68,7 +68,7 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - The top-level topbar shell is transparent; the brand block and toolbar keep their own soft raised cards.
 - The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
 - Compact controls prefer familiar icon buttons over long labels when the meaning is clear. Any remaining text buttons should share the same soft capsule style as the rest of the UI.
-- Diagnostics uses a small monitor-style icon in the main toolbar and opens as a separate page, not an in-place panel, so it does not compete with the subtitle workspace.
+- Diagnostics remains available at `/static/diagnostics.html`, but it is not shown as a main-toolbar shortcut. Open it directly by URL when backend health checks are needed.
 - The Notes utility should stay operationally compact. The old visible `Title`, `People`, `Keywords`, and `Context` input block is intentionally removed from the main UI unless a future workflow clearly needs it.
 
 ## Visual UI Editor

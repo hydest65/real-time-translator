@@ -32,9 +32,7 @@ const refreshRecordingsButton = document.querySelector("#refreshRecordingsButton
 const openRecordingsFolderButton = document.querySelector("#openRecordingsFolderButton");
 const openNotesFolderButton = document.querySelector("#openNotesFolderButton");
 const notesUtilityToggle = document.querySelector("#notesUtilityToggle");
-const settingsUtilityToggle = document.querySelector("#settingsUtilityToggle");
 const notesUtilityBody = document.querySelector("#notesUtilityBody");
-const settingsUtilityBody = document.querySelector("#settingsUtilityBody");
 const notesEngine = document.querySelector("#notesEngine");
 const notesMeetingTitle = document.querySelector("#notesMeetingTitle");
 const notesParticipants = document.querySelector("#notesParticipants");
@@ -83,6 +81,7 @@ let englishDraftTapeTextsById = new Map();
 let englishContextRenderedText = "";
 let englishContextTypeTimer = null;
 let chineseTranslationHistory = [];
+let stableFlowParagraphs = new WeakMap();
 let liveSubtitle = null;
 let autoFollowSubtitles = true;
 let autoFollowEnglishContext = true;
@@ -119,9 +118,27 @@ let azureUsageStartedAt = null;
 let azureUsageTimer = null;
 let azureUsageCloud = null;
 let azureUsageSyncTimer = null;
+let browserAudioStream = null;
+let browserAudioContext = null;
+let browserAudioSourceNode = null;
+let browserAudioProcessor = null;
+let browserAudioMuteNode = null;
 const maxDisplayHistory = 80;
 const maxChineseFlowCharacters = 760;
 const localDraftPromoteWordCount = 26;
+
+function cloudQuotaExceeded() {
+  return translationEngine.value === "azure" && Boolean(azureUsageCloud?.quotaExceeded);
+}
+
+function cloudQuotaMessage() {
+  const resetAt = azureUsageCloud?.quotaResetAt ? new Date(azureUsageCloud.quotaResetAt) : null;
+  const resetText = resetAt && !Number.isNaN(resetAt.getTime())
+    ? resetAt.toLocaleString([], { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" })
+    : "next monthly reset";
+  const limit = formatUsageMinutes(Number(azureUsageCloud?.monthlyLimitSeconds) || 5 * 60 * 60);
+  return `Monthly cloud quota reached (${limit}). Resets ${resetText}.`;
+}
 const localDraftTailWordCount = 16;
 const localChineseDraftPromoteChars = 52;
 const localChineseDraftTailChars = 34;
@@ -131,6 +148,7 @@ const serverSubtitleWindow = 5;
 const scrollBottomTolerance = 40;
 const uiThemeStorageKey = "subtitleStudioUiThemeCompact20260502";
 const azureUsageStorageKey = "subtitleStudioAzureUsageEstimate20260525";
+const audioSourceStorageKey = "subtitleStudioAudioSource20260711";
 
 function providerNeutralText(value = "") {
   return String(value || "")
@@ -162,7 +180,10 @@ function cloudCheckStatusText(item) {
 }
 
 function applyDefaultInputMode() {
-  audioSource.value = "system";
+  const savedAudioSource = window.localStorage.getItem(audioSourceStorageKey);
+  audioSource.value = savedAudioSource === "microphone" || savedAudioSource === "system"
+    ? savedAudioSource
+    : "system";
   translationEngine.value = "azure";
 }
 
@@ -222,9 +243,7 @@ function setUtilityPanel(toggle, body, open) {
 
 function toggleUtilityPanel(target) {
   const openingNotes = target === "notes" && notesUtilityBody?.classList.contains("hidden");
-  const openingSettings = target === "settings" && settingsUtilityBody?.classList.contains("hidden");
   setUtilityPanel(notesUtilityToggle, notesUtilityBody, openingNotes);
-  setUtilityPanel(settingsUtilityToggle, settingsUtilityBody, openingSettings);
 }
 
 async function refreshRecordings(preferredPath = "") {
@@ -301,33 +320,35 @@ function selectedRecordings() {
 function updateMeetingActionButtons() {
   const isMeetingLive = Boolean(socket && socket.readyState === WebSocket.OPEN);
   const hasSelectedRecordings = selectedRecordings().length > 0;
+  const quotaBlocked = cloudQuotaExceeded();
   startButton.innerHTML = '<span class="button-glyph start-glyph"></span><span>Start</span>';
   startButton.classList.remove("is-danger", "is-ready");
-  startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive;
+  startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive || quotaBlocked;
+  startButton.title = quotaBlocked ? cloudQuotaMessage() : "";
   endMeetingButton.disabled = isProcessingNotes || (!isMeetingLive && !isRecordingActive);
   openMinutesButton.classList.toggle("hidden", !latestMinutesPath && !isProcessingNotes);
 
   if (isProcessingNotes) {
     processMeetingButton.textContent = "Cancel";
-    openMinutesButton.textContent = "Creating Notes...";
+    openMinutesButton.textContent = "Creating";
     openMinutesButton.disabled = true;
     notesStatusText.textContent = "Creating";
     notesStatusText.classList.remove("muted");
     notesHintText.textContent = "Please wait. Selected recordings are being transcribed and summarized.";
   } else if (isMeetingLive || isRecordingActive) {
-    processMeetingButton.textContent = "Build Notes";
+    processMeetingButton.textContent = "Build";
     notesStatusText.textContent = "After meeting";
     notesStatusText.classList.add("muted");
     notesHintText.textContent = "End the meeting first, then choose recordings and build notes.";
   } else if (latestMinutesPath) {
-    processMeetingButton.textContent = "Build Notes";
-    openMinutesButton.textContent = "Open Notes";
+    processMeetingButton.textContent = "Build";
+    openMinutesButton.textContent = "Open";
     notesStatusText.textContent = "Ready";
     notesStatusText.classList.remove("muted");
     notesHintText.textContent = recordingFileName(latestMinutesPath);
   } else {
-    processMeetingButton.textContent = "Build Notes";
-    openMinutesButton.textContent = "Open Notes";
+    processMeetingButton.textContent = "Build";
+    openMinutesButton.textContent = "Open";
     notesStatusText.textContent = hasSelectedRecordings ? "Ready to build" : "Select recordings";
     notesStatusText.classList.add("muted");
     notesHintText.textContent = hasSelectedRecordings
@@ -450,6 +471,7 @@ function setDelayHint(label, detail, isWarning = false) {
 function updateDelayHintFromStatus(status, detail = "") {
   const normalized = String(status || "").toLowerCase();
   const isCloud = translationEngine.value === "azure";
+  const inputLabel = audioSource.value === "microphone" ? "microphone" : "system audio";
 
   if (isProcessingNotes) {
     setDelayHint(
@@ -502,7 +524,7 @@ function updateDelayHintFromStatus(status, detail = "") {
   }
 
   if (normalized.includes("listening")) {
-    setDelayHint("Listening", "Audio capture is active. If text is slow, check input volume or system audio source.");
+    setDelayHint("Listening", `Audio capture is active from ${inputLabel}. If text is slow, check that input volume.`);
     return;
   }
 
@@ -749,6 +771,9 @@ function renderAzureUsage() {
   if (azureUsageStartedAt) {
     azureUsageStatusText.textContent = "Tracking";
     azureUsageStatusText.classList.remove("muted");
+  } else if (cloudQuotaExceeded()) {
+    azureUsageStatusText.textContent = "Limit reached";
+    azureUsageStatusText.classList.remove("muted");
   } else if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
     azureUsageStatusText.textContent = "Cloud Sync";
     azureUsageStatusText.classList.remove("muted");
@@ -759,7 +784,9 @@ function renderAzureUsage() {
     azureUsageStatusText.textContent = "Estimate";
     azureUsageStatusText.classList.add("muted");
   }
-  if (azureUsageCloud?.configured && azureUsageCloud?.ok) {
+  if (azureUsageCloud?.ok && azureUsageCloud?.quotaExceeded) {
+    azureUsageSyncText.textContent = cloudQuotaMessage();
+  } else if (azureUsageCloud?.ok && azureUsageCloud?.monthlyLimitSeconds) {
     const syncedAt = formatSyncTime(azureUsageCloud.syncedAt);
     const remaining = azureUsageCloud.remainingSeconds == null
       ? ""
@@ -820,6 +847,7 @@ async function refreshAzureUsageCloud() {
     };
   }
   renderAzureUsage();
+  updateMeetingActionButtons();
 }
 
 function startAzureUsageCloudPolling() {
@@ -1134,11 +1162,12 @@ function renderFunasrChineseText() {
     .map((entry) => stripSubtitleMarkup(entry.translatedText || entry.sourceText || ""))
     .filter(Boolean)
     .join("");
-  chineseSubtitleStack.innerHTML = "";
-  const paragraph = document.createElement("p");
-  paragraph.className = `flow-text translation-flow-text ${funasrStreamingPartialItem ? "funasr-live-text" : ""}`.trim();
-  paragraph.textContent = formatFunasrLiveChineseText(text, Boolean(funasrStreamingPartialItem));
-  chineseSubtitleStack.append(paragraph);
+  renderStableFlowText(
+    chineseSubtitleStack,
+    `flow-text translation-flow-text ${funasrStreamingPartialItem ? "funasr-live-text" : ""}`.trim(),
+    formatFunasrLiveChineseText(text, Boolean(funasrStreamingPartialItem)),
+    "funasr-chinese",
+  );
   if (autoFollowChineseText) {
     chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
   }
@@ -1149,6 +1178,7 @@ function renderFunasrStatusText(message) {
     return;
   }
   chineseSubtitleStack.innerHTML = "";
+  stableFlowParagraphs.delete(chineseSubtitleStack);
   const paragraph = document.createElement("p");
   paragraph.className = "flow-text translation-flow-text funasr-status-line";
   paragraph.textContent = message;
@@ -1156,47 +1186,147 @@ function renderFunasrStatusText(message) {
 }
 
 function formatFunasrLiveChineseText(text, isLive = false) {
-  const compact = String(text || "")
-    .replace(/\s+/g, "")
-    .replace(/([\u3002\uff01\uff1f\uff1b\uff0c\u3001,.!?]){2,}/g, "$1")
-    .trim();
-  if (!compact) {
-    return "";
-  }
-  const windowText = isLive ? compact.slice(-84) : compact;
-  return splitChineseSubtitleLines(windowText, isLive ? 24 : 34).join("\n");
+  return formatChineseFlowText(text, {
+    compactSpacing: true,
+    isLive,
+  });
 }
 
-function splitChineseSubtitleLines(text, lineLength) {
-  const normalized = String(text || "").trim();
+function formatChineseFlowText(text, options = {}) {
+  const { compactSpacing = false, isLive = false } = options;
+  const normalized = normalizeChineseFlowText(text, compactSpacing);
   if (!normalized) {
-    return [];
+    return "";
   }
-  const sentenceParts = normalized.match(/[^\u3002\uff01\uff1f!?]+[\u3002\uff01\uff1f!?]?/g) || [normalized];
-  const lines = [];
-  for (const part of sentenceParts) {
-    let remaining = part.trim();
-    while (remaining.length > lineLength) {
-      let splitAt = -1;
-      const softBreaks = ["\uff0c", "\u3001", "\uff1b", ",", ";"];
-      for (const mark of softBreaks) {
-        const index = remaining.lastIndexOf(mark, lineLength);
-        if (index >= Math.floor(lineLength * 0.45)) {
-          splitAt = index + 1;
-          break;
-        }
+  return naturalizeChineseSentences(normalized, isLive);
+}
+
+function normalizeChineseFlowText(text, compactSpacing) {
+  let normalized = String(text || "")
+    .replace(/([\u3002\uff01\uff1f\uff1b\uff0c\u3001,.!?]){2,}/g, "$1")
+    .trim();
+  normalized = compactSpacing ? normalized.replace(/\s+/g, "") : normalized.replace(/\s+/g, " ");
+  return normalized
+    .replace(/([\u4e00-\u9fff])\s+(?=[\u4e00-\u9fff])/g, "$1")
+    .replace(/\s*([\u3002\uff01\uff1f\uff1b\uff0c\u3001,.!?])\s*/g, "$1")
+    .trim();
+}
+
+function naturalizeChineseSentences(text, isLive) {
+  const parts = String(text || "").match(/[^\u3002\uff01\uff1f!?]+[\u3002\uff01\uff1f!?]?/g) || [text];
+  return parts
+    .map((part) => splitLongChineseClause(part, isLive))
+    .join("")
+    .replace(/[\uff0c\u3001\uff1b,;]+(?=[\u3002\uff01\uff1f!?])/g, "")
+    .trim();
+}
+
+function splitLongChineseClause(part, isLive) {
+  const source = String(part || "").trim();
+  if (!source) {
+    return "";
+  }
+  const originalEnding = getChineseSentenceEnding(source);
+  let remaining = originalEnding ? source.slice(0, -1) : source;
+  const chunks = [];
+  const maxLength = 42;
+  const minLength = 18;
+
+  while (remaining.length > maxLength) {
+    const splitAt = findChineseSoftBreak(remaining, minLength, maxLength);
+    chunks.push(remaining.slice(0, splitAt).replace(/[\uff0c\u3001\uff1b,;]+$/g, "").trim());
+    remaining = remaining.slice(splitAt).replace(/^[\uff0c\u3001\uff1b,;]+/g, "").trim();
+  }
+  if (remaining) {
+    chunks.push(remaining.replace(/[\uff0c\u3001\uff1b,;]+$/g, "").trim());
+  }
+
+  return chunks
+    .filter(Boolean)
+    .map((chunk, index) => {
+      const isLast = index === chunks.length - 1;
+      if (!isLast) {
+        return `${chunk}\uff0c`;
       }
-      if (splitAt < 0) {
-        splitAt = lineLength;
+      if (originalEnding) {
+        return `${chunk}${originalEnding}`;
       }
-      lines.push(remaining.slice(0, splitAt).trim());
-      remaining = remaining.slice(splitAt).trim();
-    }
-    if (remaining) {
-      lines.push(remaining);
+      return isLive || chunk.length < 12 ? chunk : `${chunk}\u3002`;
+    })
+    .join("");
+}
+
+function normalizeChineseSentenceEnding(mark) {
+  if (mark === "!") {
+    return "\uff01";
+  }
+  if (mark === "?") {
+    return "\uff1f";
+  }
+  if (mark === ".") {
+    return "\u3002";
+  }
+  return mark;
+}
+
+function getChineseSentenceEnding(text) {
+  const mark = text.slice(-1);
+  if (/[\u3002\uff01\uff1f!?]/.test(mark)) {
+    return normalizeChineseSentenceEnding(mark);
+  }
+  if (mark === "." && !/[A-Za-z0-9]/.test(text.slice(-2, -1))) {
+    return "\u3002";
+  }
+  return "";
+}
+
+function findChineseSoftBreak(text, minLength, maxLength) {
+  const punctuationMarks = ["\uff0c", "\u3001", "\uff1b", ",", ";"];
+  for (const mark of punctuationMarks) {
+    const index = text.lastIndexOf(mark, maxLength);
+    if (index >= minLength) {
+      return index + 1;
     }
   }
-  return lines.slice(-3);
+
+  const clauseMarkers = [
+    "\u6240\u4ee5",
+    "\u4f46\u662f",
+    "\u4e0d\u8fc7",
+    "\u7136\u540e",
+    "\u56e0\u4e3a",
+    "\u5982\u679c",
+    "\u800c\u4e14",
+    "\u53e6\u5916",
+    "\u5176\u5b9e",
+    "\u73b0\u5728",
+    "\u540c\u65f6",
+    "\u6bd4\u5982",
+    "\u81f3\u4e8e",
+    "\u5bf9\u4e8e",
+    "\u6211\u4eec",
+    "\u8fd9\u4e2a",
+    "\u90a3\u4e2a",
+    "\u5c31\u662f",
+    "\u53ef\u80fd",
+    "\u5e94\u8be5",
+    "\u9700\u8981",
+    "\u53ef\u4ee5",
+    "\u8fd8\u662f",
+    "\u6216\u8005",
+    "\u4ee5\u53ca",
+  ];
+  let bestIndex = -1;
+  for (const marker of clauseMarkers) {
+    const index = text.lastIndexOf(marker, maxLength);
+    if (index >= minLength && index > bestIndex) {
+      bestIndex = index;
+    }
+  }
+  if (bestIndex >= minLength) {
+    return bestIndex;
+  }
+  return maxLength;
 }
 
 function renderEnglishContext() {
@@ -1580,11 +1710,31 @@ function renderTextFlow(target, entries, field, maxCharacters, mode) {
     return;
   }
 
+  const className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""} ${mode === "context" ? "english-flow-text" : ""}`.trim();
+  if (target === chineseSubtitleStack && mode === "translation") {
+    renderStableFlowText(target, className, formatChineseFlowText(text), "chinese-translation");
+    return;
+  }
+
   target.innerHTML = "";
+  stableFlowParagraphs.delete(target);
   const paragraph = document.createElement("p");
-  paragraph.className = `flow-text ${mode === "translation" ? "translation-flow-text" : ""} ${mode === "context" ? "english-flow-text" : ""}`.trim();
+  paragraph.className = className;
   paragraph.textContent = text;
   target.append(paragraph);
+}
+
+function renderStableFlowText(target, className, text, key) {
+  const cached = stableFlowParagraphs.get(target);
+  let paragraph = cached?.key === key ? cached.paragraph : null;
+  if (!paragraph || paragraph.parentElement !== target) {
+    target.innerHTML = "";
+    paragraph = document.createElement("p");
+    target.append(paragraph);
+    stableFlowParagraphs.set(target, { key, paragraph });
+  }
+  paragraph.className = className;
+  paragraph.textContent = text;
 }
 
 function stripSubtitleMarkup(text) {
@@ -1905,7 +2055,13 @@ function updateExportButtons() {
 }
 
 function meetingMetadata() {
-  const sourceLabel = sourceLanguage.value === "spa_Latn" ? "Spanish" : sourceLanguage.value === "zho_Hans" ? "Chinese" : "English";
+  const sourceLabel = sourceLanguage.value === "spa_Latn"
+    ? "Spanish"
+    : sourceLanguage.value === "jpn_Jpan"
+    ? "Japanese"
+    : sourceLanguage.value === "zho_Hans"
+    ? "Chinese"
+    : "English";
   const engineLabel = translationEngine.options[translationEngine.selectedIndex]?.textContent || translationEngine.value;
   const inputLabel = audioSource.options[audioSource.selectedIndex]?.textContent || audioSource.value;
   return {
@@ -2226,6 +2382,7 @@ function localRealtimeTuning() {
 
 function updateLanguageHints() {
   const isSpanish = sourceLanguage.value === "spa_Latn";
+  const isJapanese = sourceLanguage.value === "jpn_Jpan";
   const isChinese = sourceLanguage.value === "zho_Hans";
   const isCloud = translationEngine.value === "azure";
   const subtitle = document.querySelector("#brandSubtitle");
@@ -2233,6 +2390,8 @@ function updateLanguageHints() {
   if (subtitle) {
     subtitle.textContent = isChinese
       ? "Chinese meeting notes - Chinese transcript"
+      : isJapanese
+      ? "Japanese to Chinese - Cloud"
       : isSpanish
       ? "Spanish to Chinese - Local or Cloud"
       : "English to Chinese - Local or Cloud";
@@ -2240,6 +2399,8 @@ function updateLanguageHints() {
   if (isCloud) {
     perfText.textContent = isChinese
       ? "Cloud Chinese: zh-CN transcription for bilingual notes."
+      : isJapanese
+      ? "Cloud Japanese: ja-JP -> zh-Hans live translation."
       : isSpanish
       ? "Cloud Spanish: es-ES -> zh-Hans live translation."
       : "Cloud English: en-US -> zh-Hans live translation.";
@@ -2247,6 +2408,8 @@ function updateLanguageHints() {
   }
   perfText.textContent = isSpanish
     ? "Local Spanish: multilingual Whisper is selected automatically."
+    : isJapanese
+    ? "Local Japanese is not optimized here. Use Cloud for Japanese -> Chinese."
     : isChinese
     ? isQualityFinalMode()
       ? "Local Chinese Quality: recording only; build notes manually after End."
@@ -2261,10 +2424,13 @@ function updateLocalMonitorLabels() {
     return;
   }
   const isChinese = sourceLanguage.value === "zho_Hans";
+  const isJapanese = sourceLanguage.value === "jpn_Jpan";
   const isQuality = isQualityFinalMode();
   const isBalanced = isBalancedChineseMode();
   const sourceTitle = isChinese
     ? "Chinese transcript"
+    : isJapanese
+    ? "Japanese"
     : sourceLanguage.value === "spa_Latn"
     ? "Spanish"
     : "English";
@@ -2298,6 +2464,9 @@ function notesRecordingLanguage() {
   if (sourceLanguage.value === "spa_Latn") {
     return "es-ES";
   }
+  if (sourceLanguage.value === "jpn_Jpan") {
+    return "ja-JP";
+  }
   if (sourceLanguage.value === "zho_Hans") {
     return "zh-CN";
   }
@@ -2313,8 +2482,119 @@ function meetingNotesContext() {
   };
 }
 
+function downsampleAudioBuffer(input, sourceRate, targetRate = 16000) {
+  if (sourceRate === targetRate) {
+    return input;
+  }
+  const ratio = sourceRate / targetRate;
+  const outputLength = Math.max(1, Math.round(input.length / ratio));
+  const output = new Float32Array(outputLength);
+  for (let i = 0; i < outputLength; i += 1) {
+    const start = Math.floor(i * ratio);
+    const end = Math.min(input.length, Math.floor((i + 1) * ratio));
+    let sum = 0;
+    let count = 0;
+    for (let j = start; j < end; j += 1) {
+      sum += input[j];
+      count += 1;
+    }
+    output[i] = count ? sum / count : 0;
+  }
+  return output;
+}
+
+function floatToPcm16Bytes(samples) {
+  const buffer = new ArrayBuffer(samples.length * 2);
+  const view = new DataView(buffer);
+  for (let i = 0; i < samples.length; i += 1) {
+    const value = Math.max(-1, Math.min(1, samples[i]));
+    view.setInt16(i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
+  }
+  return buffer;
+}
+
+async function startBrowserAudioStreaming(selectedAudioSource) {
+  stopBrowserAudioStreaming();
+  if (!navigator.mediaDevices?.getUserMedia) {
+    throw new Error("This browser cannot capture audio. Use Chrome or Edge over http://localhost or HTTPS.");
+  }
+
+  if (selectedAudioSource === "system" && navigator.mediaDevices.getDisplayMedia) {
+    browserAudioStream = await navigator.mediaDevices.getDisplayMedia({
+      audio: true,
+      video: true,
+    });
+    browserAudioStream.getVideoTracks().forEach((track) => track.stop());
+  } else {
+    browserAudioStream = await navigator.mediaDevices.getUserMedia({
+      audio: {
+        echoCancellation: true,
+        noiseSuppression: true,
+        autoGainControl: true,
+        channelCount: 1,
+      },
+    });
+  }
+
+  if (!browserAudioStream.getAudioTracks().length) {
+    stopBrowserAudioStreaming();
+    throw new Error("No browser audio track was granted.");
+  }
+
+  const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+  browserAudioContext = new AudioContextClass();
+  browserAudioSourceNode = browserAudioContext.createMediaStreamSource(browserAudioStream);
+  browserAudioProcessor = browserAudioContext.createScriptProcessor(4096, 1, 1);
+  browserAudioMuteNode = browserAudioContext.createGain();
+  browserAudioMuteNode.gain.value = 0;
+
+  browserAudioProcessor.onaudioprocess = (event) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) {
+      return;
+    }
+    const input = event.inputBuffer.getChannelData(0);
+    const downsampled = downsampleAudioBuffer(input, browserAudioContext.sampleRate, 16000);
+    socket.send(floatToPcm16Bytes(downsampled));
+  };
+
+  browserAudioSourceNode.connect(browserAudioProcessor);
+  browserAudioProcessor.connect(browserAudioMuteNode);
+  browserAudioMuteNode.connect(browserAudioContext.destination);
+  noticeText.textContent = "Browser audio";
+}
+
+function stopBrowserAudioStreaming() {
+  if (browserAudioProcessor) {
+    browserAudioProcessor.disconnect();
+    browserAudioProcessor.onaudioprocess = null;
+    browserAudioProcessor = null;
+  }
+  if (browserAudioSourceNode) {
+    browserAudioSourceNode.disconnect();
+    browserAudioSourceNode = null;
+  }
+  if (browserAudioMuteNode) {
+    browserAudioMuteNode.disconnect();
+    browserAudioMuteNode = null;
+  }
+  if (browserAudioContext) {
+    browserAudioContext.close().catch(() => {});
+    browserAudioContext = null;
+  }
+  if (browserAudioStream) {
+    browserAudioStream.getTracks().forEach((track) => track.stop());
+    browserAudioStream = null;
+  }
+}
+
 function start() {
   if (socket && socket.readyState === WebSocket.OPEN) {
+    return;
+  }
+  if (cloudQuotaExceeded()) {
+    setStatus("Error", cloudQuotaMessage());
+    noticeText.textContent = "Quota reached";
+    logText.textContent = cloudQuotaMessage();
     return;
   }
   isLiveSessionActive = true;
@@ -2330,6 +2610,7 @@ function start() {
     englishDraftStack.innerHTML = "";
   }
   chineseSubtitleStack.innerHTML = "";
+  stableFlowParagraphs = new WeakMap();
   finalSubtitleHistory = [];
   englishContextHistory = [];
   englishConfirmedTextById = new Map();
@@ -2381,6 +2662,8 @@ function start() {
     startButton.disabled = false;
     stopButton.disabled = false;
     const isCloud = translationEngine.value === "azure";
+    const selectedAudioSource = audioSource.value === "microphone" ? "microphone" : "system";
+    const selectedAudioLabel = selectedAudioSource === "microphone" ? "Mic" : "System";
     const isLowLatencyLocal = !isCloud && localLatencyPreset?.value === "low";
     const qualityFinalMode = isQualityFinalMode();
     const effectiveChunk = effectiveLocalChunkSeconds(isLowLatencyLocal);
@@ -2389,7 +2672,7 @@ function start() {
     setStatus(
       isCloud ? "Connecting cloud" : qualityFinalMode ? "Recording" : "Loading models",
       isCloud
-        ? "Connecting to cloud speech translation."
+        ? `Connecting to cloud speech translation using ${selectedAudioLabel}.`
         : qualityFinalMode
         ? "Recording only. End saves the recording; notes are manual."
         : isBalancedChineseMode()
@@ -2401,6 +2684,7 @@ function start() {
     }
     startAzureUsageSession();
     updateMeetingActionButtons();
+    logText.textContent = `Starting ${isCloud ? "cloud" : "local"} captions from ${selectedAudioLabel}.`;
     socket.send(JSON.stringify({
       action: "start",
       config: {
@@ -2419,7 +2703,8 @@ function start() {
         asr_no_repeat_ngram_size: asrProfile?.noRepeatNgramSize ?? 3,
         asr_hotwords_enabled: false,
         asr_use_default_hotwords: false,
-        audio_source: audioSource.value,
+        audio_source: selectedAudioSource,
+        audio_transport: isCloud ? "browser" : "server",
         source_language: sourceLanguage.value,
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
@@ -2446,6 +2731,18 @@ function start() {
         enable_vad: false,
       },
     }));
+    if (isCloud) {
+      startBrowserAudioStreaming(selectedAudioSource).catch((error) => {
+        const message = error?.message || "Browser audio permission failed.";
+        setStatus("Error", message);
+        noticeText.textContent = "Audio blocked";
+        logText.textContent = message;
+        if (socket && socket.readyState === WebSocket.OPEN) {
+          socket.send(JSON.stringify({ action: "stop" }));
+          socket.close();
+        }
+      });
+    }
   });
 
   socket.addEventListener("message", (event) => {
@@ -2512,6 +2809,7 @@ function start() {
   });
 
   socket.addEventListener("close", () => {
+    stopBrowserAudioStreaming();
     stopAzureUsageSession();
     stopButton.disabled = true;
     isLiveSessionActive = false;
@@ -2531,6 +2829,7 @@ function start() {
 
 function stop() {
   isLiveSessionActive = false;
+  stopBrowserAudioStreaming();
   if (!socket) {
     return;
   }
@@ -2709,7 +3008,7 @@ async function checkCloudNotesSetup() {
   } finally {
     if (checkCloudNotesButton) {
       checkCloudNotesButton.disabled = false;
-      checkCloudNotesButton.textContent = "Cloud Check";
+      checkCloudNotesButton.textContent = "Check";
     }
     updateMeetingActionButtons();
   }
@@ -2768,7 +3067,6 @@ refreshRecordingsButton?.addEventListener("click", () => refreshRecordings(curre
 openRecordingsFolderButton?.addEventListener("click", () => openProjectFolder("recordings"));
 openNotesFolderButton?.addEventListener("click", () => openProjectFolder("notes"));
 notesUtilityToggle?.addEventListener("click", () => toggleUtilityPanel("notes"));
-settingsUtilityToggle?.addEventListener("click", () => toggleUtilityPanel("settings"));
 downloadTranscriptButton.addEventListener("click", () => {
   downloadMarkdown("meeting-transcript", transcriptMarkdown());
 });
@@ -2778,6 +3076,10 @@ downloadMinutesButton.addEventListener("click", () => {
 translationEngine.addEventListener("change", updateEngineControls);
 translationEngine.addEventListener("change", updateLanguageHints);
 translationEngine.addEventListener("change", renderAzureUsage);
+audioSource.addEventListener("change", () => {
+  window.localStorage.setItem(audioSourceStorageKey, audioSource.value);
+  updateDelayHintFromStatus(statusText.textContent || "Ready");
+});
 notesEngine?.addEventListener("change", updateMeetingActionButtons);
 localAsrPreset.addEventListener("change", applyLocalAsrPreset);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);

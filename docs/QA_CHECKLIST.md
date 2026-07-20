@@ -20,6 +20,18 @@ node --check frontend\app.js
 node --check frontend\ui-editor.js
 ```
 
+Current closeout result on 2026-07-20:
+
+- Python syntax checks passed for changed backend modules and `scripts/process-recording.py`.
+- Frontend JavaScript syntax checks passed for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js` with the bundled Codex Node runtime.
+- PowerShell parse checks passed for `scripts/start-server.ps1`, `scripts/start-remote-server.ps1`, `scripts/launch-app.ps1`, and `scripts/cleanup-local-artifacts.ps1`.
+- `git diff --check` passed with GitHub Desktop's bundled Git.
+- Secret scan found placeholders and documented environment-variable names only, not live Azure, Aliyun, Tencent Relay, SAS, or app secrets.
+- Cloud quota smoke tests passed for quota exhaustion, remaining time display payloads, active-session accounting, and backend ledger updates.
+- Runtime smoke test passed for `GET /api/health` and the main page on a temporary local port.
+- Remote tester mode is code-ready, but real external testing still requires an HTTPS tunnel, VPN, or authenticated reverse proxy so browser audio capture is allowed and the center backend is not exposed openly.
+- Default dependencies are cloud-first/lightweight; install `backend\requirements-local.txt` only when local/offline models are needed.
+
 Current closeout result on 2026-05-17:
 
 - This closeout is local-only for the T600 4GB GPU machine and should not be treated as the GitHub/5070Ti baseline.
@@ -136,7 +148,9 @@ Test matrix:
 
 - Source: English, Input: System, Engine: Azure Cloud.
 - Source: Spanish, Input: System, Engine: Azure Cloud.
+- Source: Japanese, Input: Mic or System, Engine: Azure Cloud.
 - Input: Mic, Engine: Azure Cloud, when room or headset microphone audio is needed.
+- Remote tester Cloud path: open the hosted HTTPS page, start with `Input: Mic`, verify browser permission prompt, live subtitles, quota timer, and local recording creation on the center backend.
 - Source: English, ASR: small.en, Engine: Argos, Latency: Low, Chunk: 2s.
 - Source: Spanish, Engine: Argos or NLLB, if offline/local fallback is needed.
 
