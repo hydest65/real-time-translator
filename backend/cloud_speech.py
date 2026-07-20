@@ -43,15 +43,13 @@ class AzureSpeechTranslationSession:
         try:
             import azure.cognitiveservices.speech as speechsdk
         except ImportError as exc:
-            raise RuntimeError(
-                "Azure Speech SDK is not installed. Run: python -m pip install azure-cognitiveservices-speech"
-            ) from exc
+            raise RuntimeError("Cloud speech SDK is not installed.") from exc
 
         load_dotenv_file()
         key = active_config.azure_speech_key or os.getenv("AZURE_SPEECH_KEY", "")
         region = active_config.azure_speech_region or os.getenv("AZURE_SPEECH_REGION", "")
         if not key or not region:
-            raise RuntimeError("Set AZURE_SPEECH_KEY and AZURE_SPEECH_REGION before using Azure Cloud.")
+            raise RuntimeError("Cloud speech key and region are not configured.")
 
         self.speechsdk = speechsdk
         self.loop = loop
@@ -84,7 +82,7 @@ class AzureSpeechTranslationSession:
         for phrase in phrases:
             phrase_list.addPhrase(phrase)
         if phrases:
-            print(f"[terms] Azure phrase list loaded: {len(phrases)} terms", flush=True)
+            print(f"[terms] Cloud phrase list loaded: {len(phrases)} terms", flush=True)
 
         self.target_language = active_config.azure_target_language
         self.recognizer.recognizing.connect(self._on_recognizing)
@@ -119,7 +117,7 @@ class AzureSpeechTranslationSession:
         self.loop.call_soon_threadsafe(
             put_latest_threadsafe,
             self.status_queue,
-            {"type": "status", "status": "Error", "detail": f"Azure canceled: {detail}"},
+            {"type": "status", "status": "Error", "detail": f"Cloud speech canceled: {detail}"},
         )
 
     def _enqueue_result(self, result, is_final: bool) -> None:
@@ -176,13 +174,14 @@ async def stream_microphone_to_azure(
     stop_event: asyncio.Event,
 ) -> None:
     last_audio_notice_at = 0.0
+    quiet_label = "No microphone audio" if capture.audio_source != "system" else "No system audio"
     async for frame in capture.frames():
         if stop_event.is_set():
             break
         now = time.perf_counter()
         if now - last_audio_notice_at >= 1.0:
             rms = float(np.sqrt(np.mean(np.square(frame)))) if len(frame) else 0.0
-            label = "Audio OK" if rms >= 0.003 else "No system audio"
+            label = "Audio OK" if rms >= 0.003 else quiet_label
             put_latest_threadsafe(
                 session.status_queue,
                 {"type": "notice", "label": label, "detail": f"rms={rms:.4f}"},

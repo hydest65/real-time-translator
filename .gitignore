@@ -1,6 +1,8 @@
 .venv/
 __pycache__/
 *.pyc
+backend/*.log
+logs/
 .env
 .env*
 !.env.example
@@ -11,6 +13,7 @@ backend/glossary.csv
 recordings/
 .model-cache/
 .pip-cache/
+design-previews/
 git_meta/
 .git_locked_by_acl/
 新建 文本文档.txt

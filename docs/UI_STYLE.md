@@ -11,40 +11,41 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
   - small red status lamp
   - input selector
   - speech selector
-  - `Start Meeting`
-  - `End Meeting`
-  - `Open Bilingual Notes`, when notes are ready
-  - advanced settings disclosure for lower-frequency controls
+  - compact `Start` and `End` meeting buttons
+  - one compact icon-only shortcut for Notes
 - Left side panel:
   - current step
   - caption readiness
   - recording status
+  - Cloud usage
   - meeting notes status
   - delay hint
-- Azure main subtitle monitor:
+  - no large background capsule behind the whole vertical rail; keep only the individual status cards so the subtitle monitors receive more horizontal space
+- Cloud main subtitle monitor:
   - largest visual area on the screen
   - soft raised outer shell
   - recessed inner subtitle stream
   - internal right-side scrollbar
   - preserved subtitle history
   - live row plus final bilingual rows
-- Azure mode keeps the single bilingual subtitle monitor and its scroll-review behavior.
+- Cloud mode keeps the single bilingual subtitle monitor and its scroll-review behavior.
 - Local mode uses two stacked monitors:
-  - upper monitor split into stable English context above and live ASR draft below
-  - lower monitor for slightly delayed complete Chinese sentence translation
+  - upper monitor for stable source context when English/Spanish local fallback is active
+  - lower monitor for slightly delayed complete Chinese sentence translation, or recent live Chinese captions when FunASR local Chinese mode is active
 
 ## Subtitle Behavior
 
 - Chinese translation is visually emphasized.
-- Azure mode keeps English source visible above the Chinese in each subtitle row.
+- Cloud mode keeps English source visible above the Chinese in each subtitle row.
 - In local mode, English and Chinese are separated into two monitors so the English live transcript can stay responsive while Chinese prioritizes completeness.
-- In local mode, stable English context and complete Chinese translation render as continuous text blocks. The English context pane should fill its readable area first and then scroll.
-- In local mode, the English live draft stays in its own lower English pane and updates quickly.
+- In local Chinese FunASR mode, the Chinese monitor acts as a live caption window: startup status is shown immediately, then only the recent 2-3 lines of realtime text stay visible while the full transcript remains available internally.
+- In English/Spanish local mode, stable source context and complete Chinese translation render as continuous text blocks. The source context pane should fill its readable area first and then scroll.
 - Long subtitles remain semantically continuous and wrap at the same fixed subtitle size as short subtitles.
 - Subtitle rows use compact padding and tight spacing so more history fits inside the monitor.
-- Azure users can scroll up inside the subtitle monitor without losing incoming live subtitles.
-- In Azure mode, if the user is at the bottom, new subtitles auto-follow.
-- In Azure mode, if the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
+- Cloud users can scroll up inside the subtitle monitor without losing incoming live subtitles.
+- In Cloud mode, if the user is at the bottom, new subtitles auto-follow.
+- In Cloud mode, if the user scrolls upward, auto-follow pauses until the user scrolls back to the bottom.
+- Tester-facing UI uses `Cloud` wording and avoids naming the underlying provider in labels, hints, status text, and common error messages.
 
 ## Status Lamp Behavior
 
@@ -66,6 +67,9 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 - The main operation should be understandable as a simple sequence: start meeting, watch captions, end meeting, open bilingual notes.
 - The top-level topbar shell is transparent; the brand block and toolbar keep their own soft raised cards.
 - The main subtitle monitor keeps its soft raised outer shell because removing it made the page feel visually unfinished.
+- Compact controls prefer familiar icon buttons over long labels when the meaning is clear. Any remaining text buttons should share the same soft capsule style as the rest of the UI.
+- Diagnostics remains available at `/static/diagnostics.html`, but it is not shown as a main-toolbar shortcut. Open it directly by URL when backend health checks are needed.
+- The Notes utility should stay operationally compact. The old visible `Title`, `People`, `Keywords`, and `Context` input block is intentionally removed from the main UI unless a future workflow clearly needs it.
 
 ## Visual UI Editor
 
