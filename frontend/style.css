@@ -11,8 +11,8 @@
   --accent-strong: #3f54d2;
   --accent-soft: #7ad0c0;
   --danger: #c96d76;
-  --subtitle-font-size: 16px;
-  --source-font-size: 12px;
+  --subtitle-font-size: 32px;
+  --source-font-size: 18px;
   --panel-width: 136px;
   --ui-radius: 18px;
   --background-art: radial-gradient(circle at 10% 8%, rgba(240, 244, 250, 0.95), transparent 28%),
@@ -48,7 +48,7 @@ select,
   min-height: 0;
   padding: 12px;
   display: grid;
-  grid-template-rows: auto 1fr;
+  grid-template-rows: auto auto minmax(0, 1fr) auto;
   gap: 12px;
   overflow: hidden;
 }
@@ -65,14 +65,23 @@ select,
 }
 
 .studio-topbar {
-  display: grid;
-  grid-template-columns: minmax(190px, 250px) 1fr;
+  display: flex;
+  flex-wrap: nowrap;
   gap: 12px;
-  align-items: stretch;
+  align-items: center;
+  background: var(--bg-soft);
+  box-shadow: 6px 6px 12px var(--dark-shadow), -6px -6px 12px var(--light-shadow);
+  border-radius: var(--ui-radius);
+}
+
+.studio-topbar > .brand,
+.studio-topbar > .toolbar {
   background: transparent;
   box-shadow: none;
-  border-radius: 0;
 }
+
+.studio-topbar > .brand { flex: 0 0 auto; white-space: nowrap; }
+.studio-topbar > .toolbar { flex: 1 1 auto; min-width: 0; }
 
 .brand {
   display: flex;
@@ -1637,6 +1646,124 @@ select,
   margin-top: 0;
 }
 
+/* Every subtitle renderer uses the same user-selected sizes. */
+.english-context-stream .flow-text,
+.unified-chinese-transcript .english-context-stream .flow-text,
+.english-flow-text,
+.english-stream .subtitle-row .source,
+.english-draft-stream .subtitle-row .source,
+.draft-measure-probe {
+  font-size: var(--source-font-size);
+}
+
+.chinese-stream .flow-text,
+.translation-flow-text,
+.funasr-live-text,
+.chinese-stream .subtitle-row .translation {
+  font-size: var(--subtitle-font-size);
+}
+
+.subtitle-row {
+  flex: 0 0 auto;
+  min-width: 0;
+  box-sizing: border-box;
+}
+
+.source,
+.translation,
+.flow-text,
+.chinese-stream .flow-text {
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
+  line-height: 1.5;
+}
+
+.english-draft-stream .subtitle-row {
+  height: auto;
+}
+
+.english-draft-stream .subtitle-row .source {
+  display: block;
+  overflow: visible;
+  -webkit-line-clamp: unset;
+}
+
+.connection-strip {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 18px;
+  padding: 8px 14px;
+  border-radius: 12px;
+  background: var(--bg-soft);
+  font-size: 13px;
+}
+
+.connection-strip > span { overflow-wrap: anywhere; }
+.connection-strip [data-state="online"] { color: #17643d; font-weight: 700; }
+.connection-strip [data-state="pending"] { color: #805600; font-weight: 700; }
+.connection-strip [data-state="error"] { color: #a32435; font-weight: 700; }
+#liveConnectionActivity { flex: 1 1 180px; }
+.connection-strip button {
+  padding: 5px 10px;
+  border: 1px solid #b6c2d4;
+  border-radius: 8px;
+  background: var(--bg);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.caption-settings {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px 24px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  background: var(--bg-soft);
+  font-size: 12px;
+}
+
+.caption-size-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.caption-size-control input[type="range"] {
+  width: clamp(64px, 9vw, 140px);
+  accent-color: var(--accent-strong);
+}
+
+.caption-size-control input[type="number"] {
+  width: 62px;
+  min-width: 0;
+  padding: 6px;
+  font: inherit;
+  color: var(--text);
+  border: 1px solid #b6c2d4;
+  border-radius: 6px;
+  background: var(--bg);
+}
+
+.caption-settings button {
+  padding: 7px 12px;
+  border: 1px solid #b6c2d4;
+  border-radius: 8px;
+  color: var(--text);
+  background: var(--bg);
+  cursor: pointer;
+}
+
+.caption-settings :focus-visible {
+  outline: 2px solid var(--accent-strong);
+  outline-offset: 3px;
+}
+
+#captionSettingsStatus {
+  color: #586577;
+}
+
 .timestamp {
   margin-top: 4px;
   color: #8895a5;
@@ -1647,15 +1774,14 @@ select,
 @media (max-width: 980px) {
   html,
   body {
-    overflow: auto;
+    overflow: hidden;
   }
 
   .studio {
-    min-height: 100vh;
-    height: auto;
+    min-height: 0;
+    height: 100dvh;
   }
 
-  .studio-topbar,
   .studio-grid {
     grid-template-columns: 1fr;
   }
@@ -1667,29 +1793,35 @@ select,
   }
 
   .side-panel {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    overflow: visible;
-    padding-bottom: 10px;
+    display: none;
   }
 
   .subtitle-box {
-    min-height: 460px;
+    min-height: 0;
+  }
+
+  .local-subtitle-layout {
+    grid-template-rows: minmax(0, 1fr) minmax(0, 2fr);
+  }
+
+  .local-subtitle-layout.target-only {
+    grid-template-rows: minmax(0, 1fr);
   }
 }
 
 @media (max-width: 640px) {
   .studio {
-    padding: 14px;
+    padding: 8px;
+    gap: 8px;
   }
 
   .toolbar label,
   .toolbar button {
-    flex: 1 1 132px;
+    flex: 0 1 auto;
   }
 
   .side-panel {
-    grid-template-columns: 1fr;
+    display: none;
   }
 
   .workbench-utilities {
@@ -1706,7 +1838,22 @@ select,
   }
 
   .subtitle-box {
-    min-height: 420px;
+    min-height: 0;
+  }
+
+  .studio-topbar { gap: 2px; }
+  .studio-topbar > .brand { display: flex; gap: 5px; padding: 8px; }
+  .brand-title { font-size: 12px; }
+  .brand-subtitle { display: none; }
+  .studio-topbar > .toolbar { gap: 5px; padding: 6px; }
+  .toolbar label { min-width: 72px; }
+  .toolbar button { min-width: 48px; padding: 0 8px; }
+  .toolbar .primary-flow-button,
+  .toolbar .end-flow-button { min-width: 58px; }
+
+  .caption-settings {
+    gap: 8px 16px;
+    padding: 8px;
   }
 
   .translation {

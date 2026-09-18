@@ -73,6 +73,18 @@ The app uses the selected `Soft UI Evolution / Focus Display` direction. It is s
 
 ## Visual UI Editor
 
+- Interface language is English across the main window, connection and font settings, UI editor, diagnostics, and local speech startup messages. Recognized speech, translated captions, and user recording names retain their original language.
+
+### Caption sizing (2026-09-18)
+
+- The main window footer exposes separate source and translation sliders and numeric inputs (12–96px).
+- Defaults are 18px source and 32px translation. Changes apply immediately and persist in the existing browser theme storage; reset restores these two defaults without clearing other theme settings.
+- Cloud history, local source text, local translation, and FunASR caption text use the same font variables. Resizing the window does not reduce the selected font size.
+- Long captions wrap, including unbroken words, and remain scrollable. Changing font size keeps readers following the live end when already at the bottom and preserves the scroll offset when reviewing history.
+- Below 980px, hide the status sidebar and keep the subtitle stream and footer inside the viewport. This is a responsive browser layout, not a native always-on-top window.
+- Windows packaging, independent floating-window preferences, and overall UI zoom remain future work.
+- Verified in headless Edge: numeric input, slider keyboard input, bounds, empty input, reload persistence, reset, long cloud captions at 96px, local translation sizing, history scroll position, and 640px-wide layout. No real microphone/cloud translation session was started during these UI checks.
+
 - The editor is available at `/static/ui-editor.html`.
 - It provides browser-side controls for background color, panel color, accent/subtitle color, text color, Chinese subtitle size, English subtitle size, left panel width, corner radius, and background decoration.
 - The editor previews the live page through an embedded frame and saves changes to browser `localStorage`.

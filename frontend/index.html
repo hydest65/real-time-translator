@@ -1,10 +1,10 @@
 ﻿<!doctype html>
-<html lang="zh-CN">
+<html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=lean-toolbar-20260720" />
+    <link rel="stylesheet" href="/static/style.css?v=english-ui-20260918" />
   </head>
   <body>
     <main class="studio">
@@ -111,6 +111,12 @@
         </section>
       </header>
 
+      <section class="connection-strip" aria-label="Connection status" role="status" aria-live="polite">
+        <span id="backendConnection" data-state="pending">Server: Checking</span>
+        <span id="streamConnection" data-state="idle">Captions: Not connected</span>
+        <span id="liveConnectionActivity">Ready to start</span>
+        <button id="retryConnectionCheck" type="button">Check connection</button>
+      </section>
       <section class="studio-grid">
         <aside class="side-panel" aria-label="Runtime information">
           <div class="panel-section summary-card status-summary">
@@ -203,9 +209,25 @@
           </section>
         </section>
       </section>
+      <footer class="caption-settings" aria-label="Caption font settings">
+        <div class="caption-size-control">
+          <label for="sourceFontSize">Source</label>
+          <input id="sourceFontSlider" type="range" min="12" max="96" step="1" value="18" aria-label="Source font size slider" />
+          <input id="sourceFontSize" type="number" min="12" max="96" step="1" value="18" aria-label="Source font size" /><span>px</span>
+        </div>
+        <div class="caption-size-control">
+          <label for="translationFontSize">Translation</label>
+          <input id="translationFontSlider" type="range" min="12" max="96" step="1" value="32" aria-label="Translation font size slider" />
+          <input id="translationFontSize" type="number" min="12" max="96" step="1" value="32" aria-label="Translation font size" /><span>px</span>
+        </div>
+        <button id="resetCaptionFonts" type="button">Reset defaults</button>
+        <span id="captionSettingsStatus" role="status">Font sizes saved automatically</span>
+      </footer>
     </main>
 
-    <script src="/static/app.js?v=lean-toolbar-20260720"></script>
+    <script src="/static/connection-status.js?v=english-ui-20260918"></script>
+    <script src="/static/app.js?v=english-ui-20260918"></script>
+    <script src="/static/caption-settings.js?v=english-ui-20260918"></script>
   </body>
 </html>
 

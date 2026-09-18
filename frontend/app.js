@@ -152,6 +152,7 @@ const audioSourceStorageKey = "subtitleStudioAudioSource20260711";
 
 function providerNeutralText(value = "") {
   return String(value || "")
+    .replace(/\u672c\u5730\u4e2d\u6587\u5b9e\u65f6\u5b57\u5e55\uff1aFunASR Streaming/g, "Local Chinese captions: FunASR Streaming")
     .replace(/azure\.cognitiveservices\.speech/gi, "cloud speech SDK")
     .replace(/login\.microsoftonline\.com/gi, "cloud auth endpoint")
     .replace(/management\.azure\.com/gi, "cloud usage endpoint")
@@ -303,7 +304,7 @@ function renderRecordingList() {
     title.textContent = recording.displayName || recordingFileName(recording.path || recording.name);
     const meta = document.createElement("div");
     meta.className = "recording-meta";
-    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} 路 ${formatBytes(recording.sizeBytes || 0)}`;
+    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} | ${formatBytes(recording.sizeBytes || 0)}`;
     meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} | ${formatBytes(recording.sizeBytes || 0)}`;
     content.append(title, meta);
     label.append(checkbox, content);
@@ -559,7 +560,7 @@ function updateDelayHintFromSubtitle(item) {
 function applySavedUiTheme() {
   let theme;
   try {
-    theme = JSON.parse(localStorage.getItem(uiThemeStorageKey) || "{}");
+    theme = JSON.parse(localStorage.getItem(uiThemeStorageKey) || "{}") || {};
   } catch (error) {
     theme = {};
   }
@@ -584,10 +585,10 @@ function applySavedUiTheme() {
     if (theme[property]) {
       let value = theme[property];
       if (property === "--subtitle-font-size") {
-        value = clampPixelValue(value, 12, 16);
+        value = clampPixelValue(value, 12, 96);
       }
       if (property === "--source-font-size") {
-        value = clampPixelValue(value, 10, 12);
+        value = clampPixelValue(value, 12, 96);
       }
       document.documentElement.style.setProperty(property, value);
     }
@@ -603,6 +604,7 @@ function clampPixelValue(value, min, max) {
 }
 
 function setStatus(status, detail = "") {
+  window.captionConnection?.status(status, providerNeutralText(detail));
   statusText.textContent = status;
   logText.textContent = providerNeutralText(detail || status);
   updateDelayHintFromStatus(status, detail);
@@ -975,7 +977,7 @@ function renderSubtitle(item) {
 
     const translation = document.createElement("p");
     translation.className = "translation";
-    translation.textContent = entry.translatedText || "缈昏瘧涓?..";
+    translation.textContent = entry.translatedText || "Translating...";
 
     const timestamp = document.createElement("div");
     timestamp.className = "timestamp";
@@ -1112,7 +1114,7 @@ function renderFunasrStreamingSubtitle(payload) {
     return;
   }
   const latency = Math.round(Number(payload.latency_ms) || 0);
-  perfText.textContent = `鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: ${latency} ms`;
+  perfText.textContent = `Local Chinese captions: FunASR Streaming | Latency: ${latency} ms`;
 
   if (payload.type === "partial") {
     funasrStreamingPartialItem = {
@@ -2002,8 +2004,8 @@ function updateEngineControls() {
     ? isQualityFinalMode()
       ? "Local Chinese Quality: recording only; build notes manually after End."
       : isBalancedChineseMode()
-      ? "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
-      : "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
+      ? "Local Chinese captions: FunASR Streaming | Latency: -- ms"
+      : "Local Chinese captions: FunASR Streaming | Latency: -- ms"
     : "Local mode: English live transcript above, Chinese sentence translation below.";
   azureSubtitleBox.classList.toggle("hidden", !isCloud);
   localSubtitleLayout.classList.toggle("hidden", isCloud);
@@ -2091,12 +2093,12 @@ function transcriptMarkdown() {
   ];
 
   for (const entry of sessionTranscript) {
-    lines.push(`### ${entry.turnLabel} 路 ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
+    lines.push(`### ${entry.turnLabel} | ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
     lines.push("");
     lines.push(`Source: ${entry.sourceText}`);
     if (entry.translatedText) {
       lines.push("");
-      lines.push(`涓枃: ${entry.translatedText}`);
+      lines.push(`Chinese: ${entry.translatedText}`);
     }
     lines.push("");
   }
@@ -2152,12 +2154,12 @@ function minutesMarkdown() {
 
   lines.push("", "## Full Transcript", "");
   for (const entry of sessionTranscript) {
-    lines.push(`### ${entry.turnLabel} 路 ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
+    lines.push(`### ${entry.turnLabel} | ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
     lines.push("");
     lines.push(`Source: ${entry.sourceText}`);
     if (entry.translatedText) {
       lines.push("");
-      lines.push(`涓枃: ${entry.translatedText}`);
+      lines.push(`Chinese: ${entry.translatedText}`);
     }
     lines.push("");
   }
@@ -2414,8 +2416,8 @@ function updateLanguageHints() {
     ? isQualityFinalMode()
       ? "Local Chinese Quality: recording only; build notes manually after End."
       : isBalancedChineseMode()
-      ? "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
-      : "鏈湴涓枃瀹炴椂瀛楀箷锛欶unASR Streaming | Latency: -- ms"
+      ? "Local Chinese captions: FunASR Streaming | Latency: -- ms"
+      : "Local Chinese captions: FunASR Streaming | Latency: -- ms"
     : "Local English: optimized English ASR is available.";
 }
 
@@ -2511,6 +2513,17 @@ function floatToPcm16Bytes(samples) {
     view.setInt16(i * 2, value < 0 ? value * 0x8000 : value * 0x7fff, true);
   }
   return buffer;
+}
+
+function isLocalBackendHost() {
+  const host = window.location.hostname;
+  return host === "localhost" || host === "127.0.0.1" || host === "::1";
+}
+
+function cloudAudioTransportMode() {
+  // Local desktop use should let the backend capture Windows loopback audio.
+  // Remote testers need browser capture because the backend runs on another machine.
+  return isLocalBackendHost() ? "server" : "browser";
 }
 
 async function startBrowserAudioStreaming(selectedAudioSource) {
@@ -2654,9 +2667,10 @@ function start() {
   const funasrStreamingMode = useFunasrStreamingMode();
   const socketPath = funasrStreamingMode ? "/ws/asr/funasr" : "/ws/subtitles";
   if (funasrStreamingMode) {
-    renderFunasrStatusText("\u6b63\u5728\u8fde\u63a5 FunASR\u2026");
+    renderFunasrStatusText("Connecting to local speech...");
   }
   socket = new WebSocket(`${protocol}://${window.location.host}${socketPath}`);
+  window.captionConnection?.watch(socket);
 
   socket.addEventListener("open", () => {
     startButton.disabled = false;
@@ -2664,6 +2678,7 @@ function start() {
     const isCloud = translationEngine.value === "azure";
     const selectedAudioSource = audioSource.value === "microphone" ? "microphone" : "system";
     const selectedAudioLabel = selectedAudioSource === "microphone" ? "Mic" : "System";
+    const audioTransport = isCloud ? cloudAudioTransportMode() : "server";
     const isLowLatencyLocal = !isCloud && localLatencyPreset?.value === "low";
     const qualityFinalMode = isQualityFinalMode();
     const effectiveChunk = effectiveLocalChunkSeconds(isLowLatencyLocal);
@@ -2680,7 +2695,7 @@ function start() {
         : "Preparing low-latency local pipeline.",
     );
     if (funasrStreamingMode) {
-      renderFunasrStatusText("\u6b63\u5728\u52a0\u8f7d\u672c\u5730\u6a21\u578b\uff0c\u9996\u6b21\u542f\u52a8\u53ef\u80fd\u9700\u8981\u51e0\u79d2\u2026");
+      renderFunasrStatusText("Loading local models. First startup may take a few seconds...");
     }
     startAzureUsageSession();
     updateMeetingActionButtons();
@@ -2704,7 +2719,7 @@ function start() {
         asr_hotwords_enabled: false,
         asr_use_default_hotwords: false,
         audio_source: selectedAudioSource,
-        audio_transport: isCloud ? "browser" : "server",
+        audio_transport: audioTransport,
         source_language: sourceLanguage.value,
         target_language: "zho_Hans",
         translation_engine: translationEngine.value,
@@ -2731,7 +2746,7 @@ function start() {
         enable_vad: false,
       },
     }));
-    if (isCloud) {
+    if (isCloud && audioTransport === "browser") {
       startBrowserAudioStreaming(selectedAudioSource).catch((error) => {
         const message = error?.message || "Browser audio permission failed.";
         setStatus("Error", message);
@@ -2759,7 +2774,7 @@ function start() {
     if (payload.type === "status") {
       setStatus(payload.status || "Status", providerNeutralText(payload.detail || payload.text || ""));
       if (funasrStreamingMode && !funasrStreamingPartialItem && chineseTranslationHistory.length === 0) {
-        renderFunasrStatusText(providerNeutralText(payload.detail || payload.text || "\u6b63\u5728\u51c6\u5907\u8bc6\u522b\u2026"));
+        renderFunasrStatusText(providerNeutralText(payload.detail || payload.text || "Preparing speech recognition..."));
       }
       if (payload.recordingPath) {
         updateRecordingPanel("recording", payload.recordingPath);
@@ -2828,6 +2843,7 @@ function start() {
 }
 
 function stop() {
+  window.captionConnection?.stop(socket);
   isLiveSessionActive = false;
   stopBrowserAudioStreaming();
   if (!socket) {
