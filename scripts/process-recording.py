@@ -6,6 +6,7 @@ import os
 import re
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -48,14 +49,23 @@ def load_dotenv_file() -> None:
 
 load_dotenv_file()
 
+
+def env_flag(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
+
 FUNASR_MODEL_BY_QUALITY = {
     "fast": "iic/SenseVoiceSmall",
-    "balanced": "iic/SenseVoiceSmall",
-    "high": "iic/SenseVoiceSmall",
+    "balanced": "paraformer-zh",
+    "high": "paraformer-zh",
 }
 
 FUNASR_LOCAL_MODEL_DIRS = {
     "iic/SenseVoiceSmall": DEFAULT_MODEL_CACHE / "models" / "iic" / "SenseVoiceSmall",
+    "paraformer-zh": DEFAULT_MODEL_CACHE / "models" / "iic" / "speech_seaco_paraformer_large_asr_nat-zh-cn-16k-common-vocab8404-pytorch",
     "fsmn-vad": DEFAULT_MODEL_CACHE / "models" / "iic" / "speech_fsmn_vad_zh-cn-16k-common-pytorch",
     "ct-punc": DEFAULT_MODEL_CACHE / "models" / "iic" / "punc_ct-transformer_cn-en-common-vocab471067-large",
 }
@@ -144,16 +154,34 @@ def transcribe_audio_azure_fast(args: argparse.Namespace) -> list[TranscriptSegm
     api_version = os.getenv("AZURE_FAST_TRANSCRIPTION_API_VERSION", "2024-11-15").strip() or "2024-11-15"
     locale = azure_fast_locale(args.language)
     max_speakers = max(2, min(35, int(args.azure_fast_max_speakers or 5)))
-    definition = {
-        "locales": [locale],
-        "diarization": {
-            "enabled": bool(args.azure_fast_diarization),
+    use_locales = env_flag("AZURE_FAST_TRANSCRIPTION_USE_LOCALES", False)
+    definition = {}
+    if use_locales:
+        definition["locales"] = [locale]
+    if args.azure_fast_diarization:
+        definition["diarization"] = {
+            "enabled": True,
             "maxSpeakers": max_speakers,
-        },
-    }
+        }
     url = f"{endpoint.rstrip('/')}/speechtotext/transcriptions:transcribe?api-version={api_version}"
-    print(f"Using Azure Fast Transcription: locale={locale}, diarization={definition['diarization']['enabled']}, maxSpeakers={max_speakers}")
-    response = post_azure_fast_transcription(url, key, args.audio, definition, args.azure_fast_timeout_seconds)
+    locale_message = locale if use_locales else "auto"
+    print(f"Using Azure Fast Transcription: locale={locale_message}, diarization={bool(args.azure_fast_diarization)}, maxSpeakers={max_speakers}")
+    try:
+        response = post_azure_fast_transcription(url, key, args.audio, definition, args.azure_fast_timeout_seconds)
+    except SystemExit as exc:
+        detail = str(exc)
+        can_fallback = (
+            env_flag("AZURE_FAST_SDK_FALLBACK", True)
+            and (
+                "InvalidModel" in detail
+                or "InvalidLocale" in detail
+                or "Diarization is currently not supported" in detail
+            )
+        )
+        if not can_fallback:
+            raise
+        print("Azure Fast is unavailable for this resource; falling back to Azure Speech SDK file transcription.")
+        return transcribe_audio_azure_sdk(args)
     return normalize_azure_fast_output(response)
 
 
@@ -250,6 +278,70 @@ def normalize_azure_fast_output(output: dict[str, object]) -> list[TranscriptSeg
                 speaker=speaker_label,
             )
         )
+    return segments
+
+
+def transcribe_audio_azure_sdk(args: argparse.Namespace) -> list[TranscriptSegment]:
+    try:
+        import azure.cognitiveservices.speech as speechsdk
+    except ImportError as exc:
+        raise SystemExit("Install azure-cognitiveservices-speech to use Azure Speech file transcription.") from exc
+
+    key = os.getenv("AZURE_SPEECH_KEY", "").strip()
+    region = os.getenv("AZURE_SPEECH_REGION", "").strip()
+    if not key:
+        raise SystemExit("Set AZURE_SPEECH_KEY for Azure Speech file transcription.")
+    if not region:
+        raise SystemExit("Set AZURE_SPEECH_REGION for Azure Speech file transcription.")
+
+    locale = azure_fast_locale(args.language)
+    print(f"Using Azure Speech SDK file transcription: locale={locale}, speakerSeparation=False")
+    speech_config = speechsdk.SpeechConfig(subscription=key, region=region)
+    speech_config.speech_recognition_language = locale
+    speech_config.output_format = speechsdk.OutputFormat.Detailed
+    audio_config = speechsdk.audio.AudioConfig(filename=str(args.audio))
+    recognizer = speechsdk.SpeechRecognizer(speech_config=speech_config, audio_config=audio_config)
+
+    done = threading.Event()
+    errors: list[str] = []
+    segments: list[TranscriptSegment] = []
+
+    def on_recognized(event) -> None:
+        result = event.result
+        if result.reason != speechsdk.ResultReason.RecognizedSpeech:
+            return
+        text = (result.text or "").strip()
+        if not text:
+            return
+        start = float(getattr(result, "offset", 0) or 0) / 10_000_000.0
+        duration = float(getattr(result, "duration", 0) or 0) / 10_000_000.0
+        segments.append(
+            TranscriptSegment(
+                start=start,
+                end=start + max(0.0, duration),
+                text=text,
+                speaker="Speaker ?",
+            )
+        )
+
+    def on_canceled(event) -> None:
+        details = getattr(event, "error_details", "") or ""
+        if details:
+            errors.append(str(details))
+        done.set()
+
+    recognizer.recognized.connect(on_recognized)
+    recognizer.canceled.connect(on_canceled)
+    recognizer.session_stopped.connect(lambda _event: done.set())
+
+    recognizer.start_continuous_recognition_async().get()
+    timeout_seconds = max(60, int(args.azure_fast_timeout_seconds or 600))
+    if not done.wait(timeout_seconds):
+        recognizer.stop_continuous_recognition_async().get()
+        raise SystemExit("Azure Speech file transcription timed out.")
+    recognizer.stop_continuous_recognition_async().get()
+    if errors and not segments:
+        raise SystemExit(f"Azure Speech file transcription failed: {errors[0]}")
     return segments
 
 
@@ -458,7 +550,7 @@ def transcribe_audio_faster_whisper(args: argparse.Namespace) -> list[Transcript
         from faster_whisper import WhisperModel
     except ImportError as exc:
         raise SystemExit(
-            "faster-whisper is not installed. Run: python -m pip install -r backend\\requirements.txt"
+            "faster-whisper is not installed. Run: python -m pip install -r backend\\requirements-local.txt"
         ) from exc
 
     meeting_prompt = build_meeting_prompt(limit=100)
@@ -585,8 +677,8 @@ def transcribe_audio_funasr(args: argparse.Namespace) -> list[TranscriptSegment]
         ) from exc
 
     model_name = resolve_funasr_model(args.funasr_model or FUNASR_MODEL_BY_QUALITY[args.quality])
-    vad_model = resolve_funasr_model(args.funasr_vad_model or "fsmn-vad")
-    punc_model = resolve_funasr_model(args.funasr_punc_model or "ct-punc")
+    vad_model = args.funasr_vad_model or "fsmn-vad"
+    punc_model = args.funasr_punc_model or "ct-punc"
     device = args.device
     if device == "auto" or (device == "cuda" and not torch.cuda.is_available()):
         device = "cpu"
@@ -597,12 +689,16 @@ def transcribe_audio_funasr(args: argparse.Namespace) -> list[TranscriptSegment]
         device=device,
         disable_update=True,
     )
-    output = model.generate(
-        input=str(args.audio),
-        language="auto" if args.language == "auto" else args.language,
-        use_itn=True,
-        batch_size_s=args.funasr_batch_size,
-    )
+    generate_args = {
+        "input": str(args.audio),
+        "language": "auto" if args.language == "auto" else args.language,
+        "use_itn": True,
+        "batch_size_s": args.funasr_batch_size,
+    }
+    hotword_text = build_hotword_text(limit=100)
+    if hotword_text:
+        generate_args["hotword"] = hotword_text
+    output = model.generate(**generate_args)
     return normalize_funasr_output(output)
 
 
@@ -644,6 +740,14 @@ def normalize_funasr_output(output: object) -> list[TranscriptSegment]:
         if text:
             segments.append(TranscriptSegment(start=0.0, end=0.0, text=text))
     return segments
+
+
+def describe_asr_model(args: argparse.Namespace) -> str:
+    if args.asr_engine == "faster-whisper":
+        return args.model
+    if args.asr_engine == "funasr":
+        return args.funasr_model or FUNASR_MODEL_BY_QUALITY[args.quality]
+    return args.asr_engine
 
 
 def diarize_audio(args: argparse.Namespace) -> list[SpeakerSegment]:
@@ -770,12 +874,23 @@ def clean_sentence(text: str) -> str:
     return cleaned.strip(" -\t\r\n,.;")
 
 
+def is_chinese_language(language: str | None) -> bool:
+    return str(language or "").strip().lower().startswith("zh")
+
+
+def readable_unit_count(text: str) -> int:
+    cjk_count = len(re.findall(r"[\u4e00-\u9fff]", text or ""))
+    if cjk_count >= 6:
+        return cjk_count
+    return len(str(text or "").split())
+
+
 def split_readable_sentences(text: str) -> list[str]:
     normalized = clean_sentence(text)
     if not normalized:
         return []
     parts = re.split(r"(?<=[.!?。！？])\s+", normalized)
-    return [clean_sentence(part) for part in parts if len(clean_sentence(part)) >= 8]
+    return [clean_sentence(part) for part in parts if readable_unit_count(clean_sentence(part)) >= 8]
 
 
 def transcript_sentences(transcript: list[TranscriptSegment]) -> list[tuple[TranscriptSegment, str]]:
@@ -843,7 +958,156 @@ def speaker_sections(transcript: list[TranscriptSegment]) -> dict[str, list[Tran
     return sections
 
 
-def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+def truncate_chinese_text(text: str, max_units: int = 90) -> str:
+    cleaned = clean_sentence(text)
+    if readable_unit_count(cleaned) <= max_units:
+        return cleaned
+    if len(re.findall(r"[\u4e00-\u9fff]", cleaned)) >= 6:
+        return cleaned[:max_units].rstrip("，。；、,. ") + "。"
+    words = cleaned.split()
+    return " ".join(words[:max_units]).rstrip(" ,.;") + "."
+
+
+def chinese_summary_points(paragraphs: list[tuple[float, float, str]], limit: int = 5) -> list[str]:
+    points: list[str] = []
+    seen: set[str] = set()
+    for _, _, paragraph in paragraphs:
+        candidate = (split_readable_sentences(paragraph) or [paragraph])[0]
+        candidate = truncate_chinese_text(candidate, 88)
+        key = re.sub(r"\s+", "", candidate)
+        if readable_unit_count(candidate) >= 8 and key not in seen:
+            points.append(candidate)
+            seen.add(key)
+        if len(points) >= limit:
+            break
+    return points
+
+
+def chinese_topic_sections(paragraphs: list[tuple[float, float, str]], limit: int = 8) -> list[TopicSection]:
+    sections: list[TopicSection] = []
+    for index, (start, end, paragraph) in enumerate(paragraphs[:limit], start=1):
+        bullets = [
+            truncate_chinese_text(sentence, 70)
+            for sentence in split_readable_sentences(paragraph)[:3]
+            if readable_unit_count(sentence) >= 8
+        ]
+        if not bullets and paragraph:
+            bullets = [truncate_chinese_text(paragraph, 70)]
+        sections.append(
+            TopicSection(
+                title=f"议题 {index}",
+                start=start,
+                end=end,
+                bullets=bullets,
+            )
+        )
+    return sections
+
+
+def chinese_minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+    cleaned_transcript = [
+        TranscriptSegment(
+            start=item.start,
+            end=item.end,
+            text=clean_sentence(item.text),
+            speaker=item.speaker,
+        )
+        for item in transcript
+    ]
+    usable = [item for item in cleaned_transcript if readable_unit_count(item.text) >= 6]
+    sentences = transcript_sentences(usable)
+    paragraphs = build_natural_paragraphs(usable, max_words=160, max_seconds=100)
+    total_start = min((item.start for item in usable), default=0.0)
+    total_end = max((item.end for item in usable), default=0.0)
+    sections = speaker_sections(usable)
+    speakers = sorted(sections)
+    summary_points = chinese_summary_points(paragraphs)
+    topics = chinese_topic_sections(paragraphs)
+    decisions = extract_chinese_decisions(sentences)
+    actions = extract_chinese_action_items(sentences)
+    risks = extract_chinese_risks(sentences)
+    is_substantive = sum(readable_unit_count(item.text) for item in usable) >= 80 and len(sentences) >= 3
+
+    lines = [
+        "# 中文会议纪要",
+        "",
+        f"- 音频：`{audio.name}`",
+        f"- 时长：{format_time(total_start)}-{format_time(total_end)}",
+        f"- 说话人：{', '.join(speakers) if speakers else '未区分'}",
+        "- 来源：会后 ASR 转写，正式分享前建议人工复核。",
+        "",
+        "## 1. 摘要",
+        "",
+    ]
+    if not is_substantive:
+        lines.append("- 录音内容较短、较嘈杂或转写内容不足，暂时无法可靠生成完整会议纪要。")
+    elif summary_points:
+        for point in summary_points:
+            lines.append(f"- {point}")
+    else:
+        lines.append("- 未检测到足够清晰的摘要内容。")
+
+    lines.extend(["", "## 2. 议题时间线", ""])
+    if topics:
+        for topic in topics:
+            lines.append(f"### {format_time(topic.start)}-{format_time(topic.end)} | {topic.title}")
+            for bullet in topic.bullets:
+                lines.append(f"- {bullet}")
+            lines.append("")
+    else:
+        lines.append("- 未检测到可分段的议题内容。")
+
+    lines.extend(["", "## 3. 关键讨论", ""])
+    if paragraphs:
+        for start, end, paragraph in paragraphs:
+            lines.append(f"### {format_time(start)}-{format_time(end)}")
+            lines.append(truncate_chinese_text(paragraph, 180))
+            lines.append("")
+    else:
+        lines.append("- 未检测到可读讨论段落。")
+
+    lines.extend(["", "## 4. 决议", ""])
+    if decisions:
+        for item, sentence in decisions:
+            lines.append(f"- [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- 未检测到明确决议。")
+
+    lines.extend(["", "## 5. 行动项", ""])
+    if actions:
+        for item, sentence in actions:
+            lines.append(f"- [ ] [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- 未检测到明确行动项。")
+
+    lines.extend(["", "## 6. 风险与待确认问题", ""])
+    if risks:
+        for item, sentence in risks:
+            lines.append(f"- [{item.speaker} {format_time(item.start)}] {sentence}")
+    else:
+        lines.append("- 未检测到明确风险或待确认问题。")
+
+    lines.extend(["", "## 7. 说话人记录", ""])
+    if sections:
+        for speaker, items in sections.items():
+            lines.append(f"### {speaker}")
+            for item in items[:18]:
+                lines.append(f"- {format_time(item.start)} {clean_sentence(item.text)}")
+            if len(items) > 18:
+                lines.append(f"- 另有 {len(items) - 18} 条记录见完整转写。")
+            lines.append("")
+    else:
+        lines.append("- 当前录音未启用说话人分离。")
+
+    lines.extend(["", "## 8. 完整转写", ""])
+    for item in usable:
+        lines.append(f"- {format_time(item.start)}-{format_time(item.end)} `{item.speaker}` {item.text}")
+    return "\n".join(lines)
+
+
+def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_language: str = "en") -> str:
+    if is_chinese_language(notes_language):
+        return chinese_minutes_markdown(audio, transcript)
     cleaned_transcript = [
         TranscriptSegment(
             start=item.start,
@@ -1061,7 +1325,7 @@ def build_natural_paragraphs(
         text = clean_sentence(item.text)
         if not text:
             continue
-        words = len(text.split())
+        words = readable_unit_count(text)
         starts_new = (
             bool(current_text)
             and (
@@ -1252,6 +1516,29 @@ def extract_risks(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8
     return pick_regex_items(sentences, patterns, limit)
 
 
+def extract_chinese_decisions(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"(决定|确定|确认|同意|通过|批准|采用|定下来|结论是)",
+        r"(最终|暂定).{0,12}(方案|做法|时间|负责人)",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def extract_chinese_action_items(sentences: list[tuple[TranscriptSegment, str]], limit: int = 10) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"(需要|要|请|麻烦|负责|跟进|推进|准备|整理|发送|检查|确认|复核|更新|提交)",
+        r"(下一步|后续|会后|今天|明天|本周|下周|截止|时间节点)",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
+def extract_chinese_risks(sentences: list[tuple[TranscriptSegment, str]], limit: int = 8) -> list[tuple[TranscriptSegment, str]]:
+    patterns = [
+        r"(风险|问题|阻塞|卡点|延迟|不清楚|不确定|待确认|缺少|失败|担心|注意)",
+    ]
+    return pick_regex_items(sentences, patterns, limit)
+
+
 def pick_regex_items(
     sentences: list[tuple[TranscriptSegment, str]],
     patterns: list[str],
@@ -1262,7 +1549,7 @@ def pick_regex_items(
     for item, sentence in sentences:
         normalized = clean_sentence(sentence)
         lowered = normalized.lower()
-        if len(normalized.split()) < 5 or lowered in seen:
+        if readable_unit_count(normalized) < 5 or lowered in seen:
             continue
         if any(re.search(pattern, normalized, flags=re.IGNORECASE) for pattern in patterns):
             picked.append((item, normalized))
@@ -1299,13 +1586,17 @@ def polish_chinese_text(text: str) -> str:
     return polished
 
 
-def ollama_notes_enabled() -> bool:
+def notes_llm_enabled() -> bool:
     value = os.getenv("POST_MEETING_LLM_ENABLED", "1").strip().lower()
     return value not in {"0", "false", "no", "off", "rule", "rules"}
 
 
+def notes_llm_provider() -> str:
+    return os.getenv("POST_MEETING_LLM_PROVIDER", "ollama").strip().lower() or "ollama"
+
+
 def ollama_notes_model() -> str:
-    return os.getenv("OLLAMA_NOTES_MODEL", "gemma4:e2b").strip() or "gemma4:e2b"
+    return os.getenv("OLLAMA_NOTES_MODEL", "qwen3:14b").strip() or "qwen3:14b"
 
 
 def ollama_notes_url() -> str:
@@ -1318,6 +1609,34 @@ def ollama_timeout_seconds() -> int:
         return max(10, int(os.getenv("POST_MEETING_LLM_TIMEOUT_SECONDS", "120")))
     except ValueError:
         return 120
+
+
+def transformers_notes_model() -> str:
+    return (
+        os.getenv("TRANSFORMERS_NOTES_MODEL", "")
+        or os.getenv("HF_NOTES_MODEL", "")
+        or os.getenv("POST_MEETING_TRANSFORMERS_MODEL", "")
+        or "google/gemma-4-E2B-it"
+    ).strip()
+
+
+def transformers_notes_device() -> str:
+    requested = os.getenv("TRANSFORMERS_NOTES_DEVICE", "auto").strip().lower()
+    if requested in {"cpu", "cuda"}:
+        return requested
+    try:
+        import torch
+
+        return "cuda" if torch.cuda.is_available() else "cpu"
+    except Exception:
+        return "cpu"
+
+
+def transformers_notes_max_new_tokens() -> int:
+    try:
+        return max(256, min(4096, int(os.getenv("TRANSFORMERS_NOTES_MAX_NEW_TOKENS", "1400"))))
+    except ValueError:
+        return 1400
 
 
 def transcript_for_writer(transcript: list[TranscriptSegment], max_chars: int = 14000) -> str:
@@ -1340,7 +1659,7 @@ def ollama_minutes_markdown(
     total_end: float,
     speakers: list[str],
 ) -> str:
-    if not ollama_notes_enabled():
+    if not notes_llm_enabled():
         return ""
     source = transcript_for_writer(transcript)
     if len(source.split()) < 80:
@@ -1350,6 +1669,7 @@ def ollama_minutes_markdown(
         "You are a professional bilingual meeting-notes writer. "
         "Create concise, faithful meeting minutes from an ASR transcript. "
         "Do not invent decisions or action items. If none are explicit, say none detected. "
+        "Do not map speaker labels or personal names; use neutral owner wording such as the team or the relevant party. "
         "Keep protected terms, acronyms, numbers, units, device IDs, and room/level labels unchanged. "
         "Write natural English first, then a natural Simplified Chinese reading version. "
         "Return Markdown only."
@@ -1429,7 +1749,141 @@ Transcript:
     return content + "\n\n---\n\nGenerated with Ollama model `" + model + "`.\n"
 
 
-def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
+def transformers_minutes_markdown(
+    audio: Path,
+    transcript: list[TranscriptSegment],
+    total_start: float,
+    total_end: float,
+    speakers: list[str],
+) -> str:
+    if not notes_llm_enabled():
+        return ""
+    source = transcript_for_writer(transcript)
+    if len(source.split()) < 80:
+        return ""
+
+    model_name = transformers_notes_model()
+    device = transformers_notes_device()
+    system_prompt = (
+        "You are a professional bilingual meeting-notes writer. "
+        "Create concise, faithful meeting minutes from an ASR transcript. "
+        "Do not invent decisions or action items. Return Markdown only."
+    )
+    user_prompt = f"""
+Audio: {audio.name}
+Duration: {format_time(total_start)}-{format_time(total_end)}
+Speakers: {', '.join(speakers) if speakers else 'Not separated'}
+
+Write this exact Markdown structure:
+# Meeting Notes
+
+## English Version
+- Audio: `{audio.name}`
+- Duration: {format_time(total_start)}-{format_time(total_end)}
+- Speakers: {', '.join(speakers) if speakers else 'Not separated'}
+- Source: post-meeting ASR transcript. Review before sharing.
+
+## 1. Executive Summary
+## 2. Topic Timeline
+## 3. Key Discussion
+## 4. Decisions
+## 5. Action Items
+## 6. Risks / Open Questions
+## 7. Speaker Notes
+
+## 中文阅读版
+## 1. 摘要
+## 2. 讨论内容
+## 3. 决议
+## 4. 行动项
+## 5. 风险与待确认问题
+
+Rules:
+- Use concise bullet points.
+- Stay faithful to the transcript.
+- Do not invent decisions, owners, deadlines, or action items.
+- If a section has no explicit evidence, say none detected.
+- Chinese should be natural Simplified Chinese, not word-by-word translation.
+
+Transcript:
+{source}
+""".strip()
+
+    try:
+        import torch
+        from transformers import AutoModelForCausalLM, AutoModelForImageTextToText, AutoTokenizer
+
+        token = os.getenv("HF_TOKEN") or os.getenv("HUGGINGFACE_TOKEN") or None
+        print(f"Notes model: preparing {model_name}", flush=True)
+        print("Notes model: downloading or loading tokenizer", flush=True)
+        tokenizer = AutoTokenizer.from_pretrained(model_name, token=token)
+        model_kwargs = {"token": token} if token else {}
+        print("Notes model: downloading or loading weights", flush=True)
+        try:
+            model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
+        except Exception:
+            model = AutoModelForImageTextToText.from_pretrained(model_name, **model_kwargs)
+
+        if device == "cuda":
+            model = model.to("cuda")
+        else:
+            model = model.to("cpu")
+        model.eval()
+        print(f"Notes model: ready on {device}", flush=True)
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+        if hasattr(tokenizer, "apply_chat_template"):
+            prompt = tokenizer.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
+        else:
+            prompt = f"{system_prompt}\n\n{user_prompt}\n\nMeeting Notes:\n"
+
+        inputs = tokenizer(prompt, return_tensors="pt", truncation=True, max_length=8192)
+        inputs = {key: value.to(model.device) for key, value in inputs.items()}
+        print("Notes model: refining meeting notes", flush=True)
+        with torch.inference_mode():
+            output_ids = model.generate(
+                **inputs,
+                max_new_tokens=transformers_notes_max_new_tokens(),
+                do_sample=False,
+                temperature=None,
+                pad_token_id=tokenizer.eos_token_id,
+            )
+        generated_ids = output_ids[0][inputs["input_ids"].shape[-1]:]
+        content = tokenizer.decode(generated_ids, skip_special_tokens=True).strip()
+    except Exception as exc:
+        print(f"Direct Transformers notes writer unavailable: {exc}", flush=True)
+        return ""
+
+    if not content or "# Meeting Notes" not in content or "## English Version" not in content:
+        return ""
+    content = content.replace("```markdown", "").replace("```", "").strip()
+    print(f"Used direct Transformers notes writer: {model_name} on {device}", flush=True)
+    return content + "\n\n---\n\nGenerated with direct Transformers model `" + model_name + "`.\n"
+
+
+def llm_minutes_markdown(
+    audio: Path,
+    transcript: list[TranscriptSegment],
+    total_start: float,
+    total_end: float,
+    speakers: list[str],
+) -> str:
+    provider = notes_llm_provider()
+    if provider in {"transformers", "hf", "huggingface", "direct"}:
+        direct_minutes = transformers_minutes_markdown(audio, transcript, total_start, total_end, speakers)
+        if direct_minutes:
+            return direct_minutes
+        if os.getenv("POST_MEETING_LLM_FALLBACK", "1").strip().lower() in {"0", "false", "no", "off"}:
+            return ""
+    return ollama_minutes_markdown(audio, transcript, total_start, total_end, speakers)
+
+
+def minutes_markdown(audio: Path, transcript: list[TranscriptSegment], notes_language: str = "en") -> str:
+    if is_chinese_language(notes_language):
+        return chinese_minutes_markdown(audio, transcript)
     cleaned_transcript = [
         TranscriptSegment(
             start=item.start,
@@ -1453,7 +1907,7 @@ def minutes_markdown(audio: Path, transcript: list[TranscriptSegment]) -> str:
     risks = extract_risks(sentences)
     readable_word_count = sum(len(sentence.split()) for _, sentence in sentences)
     is_substantive = readable_word_count >= 80 and len(sentences) >= 3
-    llm_minutes = ollama_minutes_markdown(audio, usable, total_start, total_end, speakers)
+    llm_minutes = llm_minutes_markdown(audio, usable, total_start, total_end, speakers)
     if llm_minutes:
         return llm_minutes
 
@@ -1628,12 +2082,13 @@ def write_outputs(
     audio: Path,
     transcript: list[TranscriptSegment],
     speakers: list[SpeakerSegment],
+    notes_language: str = "en",
 ) -> None:
     output_base = audio.with_suffix("")
     transcript_path = output_base.with_suffix(".transcript.md")
     minutes_path = output_base.with_suffix(".minutes.md")
     transcript_path.write_text(transcript_markdown(audio, transcript) + "\n", encoding="utf-8")
-    minutes_path.write_text(minutes_markdown(audio, transcript) + "\n", encoding="utf-8")
+    minutes_path.write_text(minutes_markdown(audio, transcript, notes_language) + "\n", encoding="utf-8")
     print(f"Wrote {transcript_path}")
     print(f"Wrote {minutes_path}")
 
@@ -1684,6 +2139,7 @@ def main() -> int:
     )
     parser.add_argument("--model", default="", help="Override faster-whisper model from --quality.")
     parser.add_argument("--language", default="en", help="ASR language code. Default: en")
+    parser.add_argument("--notes-language", default="en", choices=["en", "zh"], help="Meeting-notes output language. Default: en")
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu", "auto"], help="Default: cuda")
     parser.add_argument("--compute-type", default="", help="Override compute type from --quality.")
     parser.add_argument("--beam-size", type=int, default=0, help="Override beam size from --quality.")
@@ -1696,7 +2152,7 @@ def main() -> int:
         help="Default: pyannote/speaker-diarization-3.1",
     )
     parser.add_argument("--hf-token", default="", help="Hugging Face token for pyannote.")
-    parser.add_argument("--funasr-model", default="", help="Override FunASR model. Default: iic/SenseVoiceSmall")
+    parser.add_argument("--funasr-model", default="", help="Override FunASR model. Default: balanced/high use paraformer-zh; fast uses iic/SenseVoiceSmall")
     parser.add_argument("--funasr-vad-model", default="", help="Override FunASR VAD model. Default: fsmn-vad")
     parser.add_argument("--funasr-punc-model", default="", help="Override FunASR punctuation model. Default: ct-punc")
     parser.add_argument("--funasr-batch-size", type=int, default=60, help="FunASR batch_size_s. Default: 60")
@@ -1706,7 +2162,7 @@ def main() -> int:
         default=600,
         help="Split long WAV files into ASR chunks. Use 0 to disable. Default: 600",
     )
-    parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=True)
+    parser.add_argument("--azure-fast-diarization", action=argparse.BooleanOptionalAction, default=False)
     parser.add_argument("--azure-fast-max-speakers", type=int, default=5)
     parser.add_argument("--azure-fast-timeout-seconds", type=int, default=600)
     parser.add_argument("--azure-batch-max-speakers", type=int, default=5)
@@ -1720,6 +2176,8 @@ def main() -> int:
 
     preset = QUALITY_PRESETS[args.quality]
     args.model = args.model or preset["model"]
+    if args.asr_engine == "faster-whisper" and is_chinese_language(args.language) and args.model.endswith(".en"):
+        args.model = args.model[:-3]
     args.compute_type = args.compute_type or preset["compute_type"]
     args.beam_size = args.beam_size or preset["beam_size"]
     args.best_of = args.best_of or preset["best_of"]
@@ -1730,7 +2188,7 @@ def main() -> int:
     print(
         "Using quality preset "
         f"{args.quality}: engine={args.asr_engine}, "
-        f"model={args.model if args.asr_engine == 'faster-whisper' else args.funasr_model or FUNASR_MODEL_BY_QUALITY[args.quality]}, "
+        f"model={describe_asr_model(args)}, "
         f"compute={args.compute_type}, "
         f"beam={args.beam_size}, best_of={args.best_of}"
     )
@@ -1739,7 +2197,7 @@ def main() -> int:
     speakers = diarize_audio(args) if args.diarize else []
     assign_speakers(transcript, speakers)
     assign_fallback_turns(transcript)
-    write_outputs(args.audio, transcript, speakers)
+    write_outputs(args.audio, transcript, speakers, args.notes_language)
     return 0
 
 

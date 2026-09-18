@@ -1,15 +1,15 @@
 # Real Time Translator MVP
 
-Windows real-time subtitle translator. It supports English-to-Chinese and Spanish-to-Chinese subtitles through two routes:
+Windows real-time subtitle translator. It supports English, Spanish, Japanese, and Chinese meeting speech with Simplified Chinese subtitles through two routes:
 
-- `Azure Cloud`: lowest-latency streaming speech translation, similar to commercial meeting subtitle apps.
-- `Local`: private offline ASR + translation with faster-whisper and local translators.
+- `Cloud`: lowest-latency streaming speech translation, shown with provider-neutral labels for testers.
+- `Local`: private offline ASR + translation. English/Spanish fallback uses faster-whisper plus local translators; local Chinese realtime mode uses FunASR streaming.
 
 ## Current Low-Latency Defaults
 
-- Engine: `Azure Cloud` for lowest latency, or local engines when privacy/offline mode matters
+- Engine: `Cloud` for lowest latency, or local engines when privacy/offline mode matters
 - Input: `System` by default; it first tries the current default Windows output device through loopback capture, then falls back to Stereo Mix / speaker-monitor input. Use `Mic` when you want room or headset microphone audio.
-- Local ASR: `faster-whisper`
+- Local ASR: `faster-whisper` for English/Spanish fallback; `FunASR Paraformer streaming` for Chinese realtime subtitles
 - Local ASR preset: `Balanced`
 - Whisper model: `small.en`
 - Speed option: `base.en`
@@ -21,14 +21,17 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 - Local steady preset: `3s` max audio chunk, `1.5s` adaptive minimum, `0.45s` silence flush, `0.5s` overlap, queue max size `2`
 - VAD: skip low-RMS silence before ASR; `System` input uses a stricter default gate than `Mic` to avoid loopback silence/weak-noise hallucinations
 - Local translation engine: `argos`
-- Local subtitles use an English context pane, an English live draft pane, and a Chinese complete-translation pane
-- Frontend: Azure uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
-- Meeting export: after ending a meeting, the app generates one bilingual Word notes file with English minutes first and Chinese minutes second
+- Local English/Spanish subtitles use an English context pane and a Chinese complete-translation pane; local Chinese FunASR mode uses one Chinese live caption window
+- Frontend: Cloud mode uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
+- Local Chinese FunASR subtitles use a recent live caption window instead of a separate draft pane
+- Meeting notes: `End Meeting` closes the recording session; use the Notes tools to build one bilingual Word notes file with English minutes first and Chinese minutes second
 - Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
+- Diagnostics: monitor panel remains available at `/static/diagnostics.html`, but the main toolbar no longer shows a diagnostics shortcut
+- Cloud usage panel: shows current-session cloud time, account-level sync when configured, and the centrally enforced monthly quota
 - Status lamp: small red indicator stays visible when stopped and slowly pulses while translation is running
-- Source language: English or Spanish, both translated into Simplified Chinese
-- Azure subtitles: live partial results update the current row; final results enter the scrollable history
+- Source language: English, Spanish, Japanese, or Chinese meeting speech, translated or transcribed into Simplified Chinese
+- Cloud subtitles: live partial results update the current row; final results enter the scrollable history
 - Long subtitles stay continuous and wrap at the same fixed subtitle size as short subtitles
 - Local English context and Chinese translation panes render as continuous text; the English pane fills first and then scrolls
 - Paragraph turns: final subtitles after a pause start a new visual paragraph; short filler/noise is ignored
@@ -36,16 +39,16 @@ Windows real-time subtitle translator. It supports English-to-Chinese and Spanis
 
 ## Translation Engines
 
-- `azure`: cloud streaming speech translation through Azure Speech Translation. Best for Teams meetings and low latency.
+- `azure`: internal cloud streaming speech translation route. Best for Teams meetings and low latency.
 - `argos`: lowest latency local translation. Best offline/default local choice.
 - `marianmt`: local neural translation through Helsinki-NLP MarianMT models. Better as a quality/comparison path than a real-time default on this machine.
 - `nllb`: higher quality but slow; kept for comparison and non-real-time use.
 
-First use of Argos may download and install the required language package. First use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
+Argos, MarianMT, NLLB, faster-whisper, and FunASR are optional local-model features. They are not installed by the default lightweight dependency set. If you install the optional local stack, first use of Argos may download and install the required language package, and first use of MarianMT or NLLB may download Hugging Face models into `.cache/huggingface`.
 
 Spanish mode notes:
 
-- Azure mode uses `es-ES` speech recognition and `zh-Hans` translation.
+- Cloud mode uses `es-ES` speech recognition and `zh-Hans` translation.
 - Local ASR automatically maps `base.en` to multilingual `base`, and `small.en` to multilingual `small`, because `.en` Whisper models cannot recognize Spanish.
 - Argos first tries a direct `es -> zh` package, then falls back to `es -> en -> zh` if the direct package is unavailable.
 - MarianMT uses a separate Spanish-to-Chinese model setting: `Helsinki-NLP/opus-mt-es-zh`.
@@ -55,6 +58,10 @@ Spanish mode notes:
 
 ```text
 real_time_translator/
+  asr/
+    funasr_streaming.py
+    audio_capture.py
+    subtitle_state.py
   backend/
     main.py
     audio_capture.py
@@ -63,6 +70,7 @@ real_time_translator/
     translator.py
     config.py
     requirements.txt
+    requirements-local.txt
   frontend/
     index.html
     style.css
@@ -70,12 +78,15 @@ real_time_translator/
     ui-editor.html
     ui-editor.css
     ui-editor.js
+    diagnostics.html
+    diagnostics.css
+    diagnostics.js
   README.md
 ```
 
 ## Version Closeout Docs
 
-- Current closeout: `0.1.10-local-t600 - Guided Meeting Flow and Bilingual Word Notes`.
+- Current closeout: `0.3.3-remote-quota-lightweight - Remote tester mode, cloud quota guard, and lightweight handoff`.
 - Local-only profile: `docs/LOCAL_T600_PROFILE.md`. Do not treat this as the GitHub/5070Ti baseline unless a separate multi-machine profile feature is intentionally added.
 - `docs/PRODUCT_REQUIREMENTS.md`: product scope and success criteria.
 - `docs/TECHNICAL_ARCHITECTURE.md`: Azure and local fallback architecture.
@@ -85,6 +96,8 @@ real_time_translator/
 - `docs/VERSION_CLOSEOUT_SKILL.md`: project-local version closeout workflow.
 
 ## Install
+
+The default install is cloud-first and lightweight. It supports the browser UI, Azure live translation, Aliyun Tingwu meeting notes, audio capture, and local recording. It does not install local realtime/offline model packages such as Whisper, FunASR, Argos, MarianMT, NLLB, Torch, or Hugging Face Transformers.
 
 Use Python 3.11 on Windows.
 
@@ -96,14 +109,19 @@ python -m pip install --upgrade pip
 python -m pip install -r backend\requirements.txt
 ```
 
-If your pip source says it cannot find `argostranslate`, install it from PyPI directly:
+Only install the optional local-model stack when you specifically need offline/local ASR or offline/local translation:
 
 ```powershell
-python -m pip install argostranslate==1.9.6 -i https://pypi.org/simple
-python -m pip install sacremoses==0.0.53 -i https://pypi.org/simple
+python -m pip install -r backend\requirements-local.txt
 ```
 
-If Windows cannot install the local `faster-whisper` stack immediately, you can still start and use the Azure Cloud route first. The backend now delays loading `faster-whisper` until a local engine is actually selected.
+If your pip source says it cannot find `argostranslate`, install the optional stack from PyPI directly:
+
+```powershell
+python -m pip install -r backend\requirements-local.txt -i https://pypi.org/simple
+```
+
+If Windows cannot install the local `faster-whisper` or FunASR stack immediately, you can still start and use the Azure Cloud route first. The backend delays loading local model libraries until a local engine is actually selected.
 
 If you already have the virtual environment, just run:
 
@@ -122,6 +140,36 @@ $env:AZURE_SPEECH_REGION="your_region"
 ```
 
 For a local test package, copy `.env.example` to `.env` and fill in your own Azure Speech values. Do not share your real `.env` file.
+
+Optional Azure Monitor usage sync:
+
+```powershell
+$env:AZURE_TENANT_ID="your_tenant_id"
+$env:AZURE_CLIENT_ID="your_app_registration_client_id"
+$env:AZURE_CLIENT_SECRET="your_client_secret"
+$env:AZURE_SPEECH_RESOURCE_ID="/subscriptions/<subscription-id>/resourceGroups/<resource-group>/providers/Microsoft.CognitiveServices/accounts/<speech-resource-name>"
+$env:AZURE_SPEECH_MONTHLY_SECONDS_LIMIT="18000"
+```
+
+The Speech key is enough for live translation, but it cannot read account-level usage. The usage panel calls `/api/cloud-usage`, which uses Azure Monitor `AudioSecondsTranslated` through a service principal with `Monitoring Reader` access on the Speech resource. If these Azure Monitor variables are missing, the app still enforces the local backend quota ledger, but the panel labels the cloud sync as unavailable.
+
+Cloud live translation has a default monthly quota of `18000` seconds, or 5 hours. The quota window resets at 00:00 UTC on the first day of each month, which is 08:00 in China Standard Time. When the combined Azure Monitor usage, local backend quota ledger, and currently active cloud sessions reach the limit, the backend rejects new cloud subtitle sessions and stops active cloud sessions at the quota boundary.
+
+## Remote Testing Mode
+
+For small external tests, keep the Azure Speech key only on your own center backend. Testers should open your hosted Subtitle Studio page instead of receiving `.env` or Azure keys.
+
+Start the center backend on all network interfaces:
+
+```powershell
+.\scripts\start-remote-server.ps1
+```
+
+For browser microphone capture, testers must access the app through HTTPS unless they are on `localhost`. A Cloudflare Tunnel, ngrok tunnel, VPN-hosted HTTPS reverse proxy, or normal HTTPS deployment works. Plain `http://public-ip:8000` may open the page, but Chrome/Edge can block microphone capture.
+
+In remote cloud mode, the browser captures the tester's audio, sends 16 kHz PCM audio over WebSocket to the center backend, and the center backend streams it to Azure. The Azure key never leaves the backend. The 5-hour monthly quota is enforced centrally across all testers.
+
+Do not expose the center backend publicly without a tunnel access policy, VPN, or reverse-proxy authentication. Anyone who can reach the page can spend the shared cloud quota.
 
 Optional phrase list for better names and technical terms:
 
@@ -151,6 +199,10 @@ $env:AZURE_BATCH_CONTAINER_SAS_URL="https://<storage>.blob.core.windows.net/<con
 The SAS URL should point to a private Blob container and allow create/write/read/list for the processing window. The app uploads the original WAV, submits Azure Batch Transcription with diarization enabled, polls the job, downloads the transcript, and then builds the notes locally. If the SAS URL is missing, the app falls back to local transcription without speaker separation.
 
 Post-meeting notes follow the selected live engine: Azure Cloud mode attempts Azure Batch meeting notes, while Argos, MarianMT, and NLLB modes use local post-meeting transcription without speaker separation.
+
+For Aliyun Tingwu notes, the local archive stays as the original WAV. Before upload, the backend can create a lossless FLAC file with `ffmpeg` and upload that smaller file instead. This is enabled by default with `ALIYUN_TINGWU_AUDIO_COMPRESSION=flac`; set it to `off` to upload the original WAV. The compressed upload file is cached as `recordings/*.upload.flac` when `ALIYUN_TINGWU_CACHE_COMPRESSED_AUDIO=1`, so rebuilding notes for the same WAV does not recompress audio. If `ffmpeg` is not found or the FLAC is not meaningfully smaller, the app automatically falls back to the original WAV.
+
+Meeting notes can run a second-pass topic rewrite after cloud or local transcription. With `POST_MEETING_NOTES_REWRITE_ENABLED=1`, the backend sends the generated minutes plus the full transcript to the configured Ollama notes model and asks it to expand each important topic with concrete discussion points, examples, numbers, risks, decisions, and next steps that are supported by the transcript. The original generated draft is saved beside the recording as `*.minutes.raw.md` whenever the rewrite is accepted.
 
 MiniMax polishing and Balanced/Quality modes have been removed. The app now keeps a single fast/direct live-subtitle path.
 
@@ -193,7 +245,7 @@ python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
 
 This writes `.transcript.md` and `.minutes.md`. Add `--diarize` when `pyannote.audio` and `HF_TOKEN` are ready:
 
-The UI generates notes when the meeting is ended. After `End Meeting`, the app processes the latest `recordings/session-*.wav` file and writes a readable bilingual Word document. The document keeps the English professional meeting minutes first, then adds the Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
+`End Meeting` only stops the live session and closes the current recording. To build notes, open the Notes tool, choose the recording, and click `Build Notes`. The app writes a readable bilingual Word document with English professional meeting minutes first, then a Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
 
 Quality presets for this T600 4GB GPU machine:
 
@@ -231,6 +283,8 @@ Double-click: Subtitle Studio.bat
 
 This starts the local backend and opens Subtitle Studio automatically. The first run creates `.venv` if needed and installs missing dependencies, so it can take a while. When you are done, close the app/browser window and the launcher will stop the local server it started.
 
+By default the launcher installs only the lightweight cloud-first dependency set. To include optional offline/local models on your own machine, start from PowerShell with `-InstallLocalModels`.
+
 Backup manual controls:
 
 ```text
@@ -245,7 +299,35 @@ cd path\to\real-time-translator
 .\scripts\start-server.ps1
 ```
 
+Optional local-model start:
+
+```powershell
+.\scripts\start-server.ps1 -InstallLocalModels
+```
+
 You can also double-click `start-server.bat` in the project folder. These options use the project's `.venv` automatically, so you do not need to activate the virtual environment every time.
+
+## Keep the Project Lightweight
+
+Model downloads, Python environments, recordings, generated previews, runtime caches, and logs should not be shared with other users or pushed to GitHub. The repo already ignores these paths, and the helper below can clean local artifacts before packaging or handing off the project.
+
+Preview what would be removed:
+
+```powershell
+.\scripts\cleanup-local-artifacts.ps1 -WhatIf
+```
+
+Remove model/runtime caches and logs, while keeping `.venv` and `recordings`:
+
+```powershell
+.\scripts\cleanup-local-artifacts.ps1
+```
+
+Full cleanup for a transfer package, including `.venv`, recordings, and design previews:
+
+```powershell
+.\scripts\cleanup-local-artifacts.ps1 -All
+```
 
 Manual developer start:
 
@@ -269,6 +351,14 @@ http://127.0.0.1:8000/static/ui-editor.html
 
 The UI editor previews the main page in a browser frame. Changes are stored in the browser's `localStorage` and applied by the main page on load. Use it for fast personal UI tuning before deciding whether a style should be written permanently into `frontend/style.css`.
 
+Diagnostics panel:
+
+```text
+http://127.0.0.1:8000/static/diagnostics.html
+```
+
+The diagnostics page shows backend health, cloud/local notes readiness, meeting-notes progress, recent recordings, and quick connection checks. Open it directly by URL when needed; the main toolbar no longer includes a diagnostics shortcut so the live subtitle surface stays uncluttered.
+
 Recommended first test:
 
 ```text
@@ -278,6 +368,14 @@ Device: cuda
 Chunk: 2s
 Engine: Azure Cloud
 Input: System, if available for Teams audio
+```
+
+Recommended Japanese test:
+
+```text
+Source: Japanese
+Input: Mic or System
+Engine: Azure Cloud
 ```
 
 Recommended Spanish test:
@@ -330,9 +428,9 @@ audio_capture_worker
   -> websocket_push_worker
 ```
 
-In the Low latency preset, the audio queue uses max size `2`. The English draft still updates quickly, but the local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
+In the Low latency preset, the audio queue uses max size `2`. The local segmenter waits for fuller utterances before Chinese translation so short ASR fragments do not become broken Chinese sentences. A contextual translation buffer can briefly hold short or dependent utterances, merge them with the next ready utterance, and then translate the combined text. The translation queue preserves ready utterances so completed sentences are not lost.
 
-For local mode, the frontend receives fast English draft updates first. When an utterance is ready, the stable English text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. The English context and Chinese panes do not behave like scrolling subtitle history rows; they keep a continuous readable text flow, with the English context pane filling first and then scrolling. Azure mode keeps the original single bilingual scrolling monitor.
+For English/Spanish local mode, the frontend receives fast ASR updates first. When an utterance is ready, stable source text is appended to a continuous context pane and the Chinese translation is appended to a continuous translation pane. For Chinese local mode, FunASR streaming feeds a recent live caption window directly and keeps the full transcript buffer internally. Azure mode keeps the original single bilingual scrolling monitor.
 
 Azure mode uses a shorter cloud-streaming route:
 

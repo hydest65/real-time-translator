@@ -3,6 +3,7 @@ param(
     [string]$HostAddress = "127.0.0.1",
     [string]$ProjectRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path,
     [switch]$NoInstall,
+    [switch]$InstallLocalModels,
     [switch]$NoOpen
 )
 
@@ -59,8 +60,14 @@ if (-not (Test-Path $python)) {
 
 if (-not $NoInstall) {
     Write-Step "Checking dependencies"
-    & $python -c "import fastapi, uvicorn, numpy, sounddevice, azure.cognitiveservices.speech" *> $null
-    if ($LASTEXITCODE -ne 0) {
+    $dependencyCheck = Start-Process -FilePath $python `
+        -ArgumentList @("-c", "import fastapi, uvicorn, numpy, sounddevice, azure.cognitiveservices.speech") `
+        -NoNewWindow `
+        -Wait `
+        -PassThru `
+        -RedirectStandardOutput (Join-Path $runtimeDir "dependency-check.out.log") `
+        -RedirectStandardError (Join-Path $runtimeDir "dependency-check.err.log")
+    if ($dependencyCheck.ExitCode -ne 0) {
         Write-Host "Installing dependencies. First run can take a while." -ForegroundColor Yellow
         & $python -m pip install --upgrade pip
         Stop-IfFailed "Could not upgrade pip."
@@ -68,6 +75,12 @@ if (-not $NoInstall) {
         Stop-IfFailed "Could not install project dependencies."
     } else {
         Write-Host "Dependencies look ready."
+    }
+
+    if ($InstallLocalModels) {
+        Write-Step "Installing optional local model dependencies"
+        & $python -m pip install -r "backend\requirements-local.txt"
+        Stop-IfFailed "Could not install optional local model dependencies."
     }
 }
 

@@ -29,6 +29,8 @@ def nllb_to_short_code(language: str | None) -> str:
         return "zh"
     if language == "spa_Latn":
         return "es"
+    if language == "jpn_Jpan":
+        return "ja"
     return "en"
 
 

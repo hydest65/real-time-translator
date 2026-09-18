@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import os
 import re
+import tempfile
+import wave
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Literal
@@ -13,10 +15,27 @@ from .terminology import build_hotword_text, build_meeting_prompt
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_HF_CACHE = PROJECT_ROOT / ".cache" / "huggingface"
+DEFAULT_MODEL_CACHE = PROJECT_ROOT / ".model-cache"
 DEFAULT_HF_CACHE.mkdir(parents=True, exist_ok=True)
+DEFAULT_MODEL_CACHE.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("HF_HOME", str(DEFAULT_HF_CACHE))
 os.environ.setdefault("HF_HUB_CACHE", str(DEFAULT_HF_CACHE / "hub"))
 os.environ.setdefault("TRANSFORMERS_CACHE", str(DEFAULT_HF_CACHE / "transformers"))
+os.environ.setdefault("MODELSCOPE_CACHE", str(DEFAULT_MODEL_CACHE))
+
+try:
+    from opencc import OpenCC
+except Exception:
+    OpenCC = None
+
+_ZH_TO_SIMPLIFIED = OpenCC("t2s") if OpenCC is not None else None
+
+
+CHINESE_INITIAL_PROMPT = (
+    "\u4ee5\u4e0b\u662f\u666e\u901a\u8bdd\u4e2d\u6587\u8bed\u97f3\u8f6c\u5199\u3002"
+    "\u8bf7\u4f7f\u7528\u7b80\u4f53\u4e2d\u6587\uff0c\u4fdd\u7559\u6570\u5b57\u3001"
+    "\u82f1\u6587\u7f29\u5199\u548c\u4e13\u4e1a\u672f\u8bed\u3002"
+)
 
 VIDEO_OUTRO_HALLUCINATION_RE = re.compile(
     r"(?:^|(?<=[\s.!?;:,]))"
@@ -125,7 +144,7 @@ class WhisperASR:
             no_repeat_ngram_size=self.no_repeat_ngram_size,
             temperature=0,
             condition_on_previous_text=self.condition_on_previous_text,
-            initial_prompt=self.meeting_prompt if language == "en" and self.meeting_prompt else None,
+            initial_prompt=self._initial_prompt(language),
             hotwords=self.hotword_text if language == "en" and self.hotword_text else None,
             no_speech_threshold=self.no_speech_threshold,
             log_prob_threshold=self.log_prob_threshold,
@@ -151,11 +170,183 @@ class WhisperASR:
             )
         return results
 
+    def _initial_prompt(self, language: str) -> str | None:
+        if language == "zh":
+            return CHINESE_INITIAL_PROMPT
+        if language == "en" and self.meeting_prompt:
+            return self.meeting_prompt
+        return None
+
+
+class FunASRRealtimeASR:
+    """Chinese-focused local ASR for realtime chunks."""
+
+    model_size = "iic/SenseVoiceSmall"
+    device = "cpu"
+
+    def __init__(
+        self,
+        model_name: str = "iic/SenseVoiceSmall",
+        device: Literal["auto", "cuda", "cpu"] = "auto",
+    ) -> None:
+        from funasr import AutoModel
+        import torch
+
+        self.model_size = model_name
+        if device == "cuda" and torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
+        self.model = AutoModel(
+            model=model_name,
+            device=self.device,
+            disable_update=True,
+        )
+
+    async def transcribe(
+        self,
+        samples: np.ndarray,
+        chunk_start_seconds: float,
+        language: str = "zh",
+    ) -> list[TranscriptionResult]:
+        return await asyncio.to_thread(self._transcribe_sync, samples, chunk_start_seconds, language)
+
+    def _transcribe_sync(
+        self,
+        samples: np.ndarray,
+        chunk_start_seconds: float,
+        language: str,
+    ) -> list[TranscriptionResult]:
+        if samples.size == 0:
+            return []
+        with tempfile.NamedTemporaryFile(prefix="funasr-realtime-", suffix=".wav", delete=False) as file:
+            temp_path = Path(file.name)
+        try:
+            write_mono_wav(temp_path, samples, 16000)
+            output = self.model.generate(
+                input=str(temp_path),
+                language="zh",
+                use_itn=True,
+                batch_size_s=8,
+            )
+            return normalize_funasr_output(output, chunk_start_seconds, max(0.0, len(samples) / 16000.0))
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+class FunASRParaformerASR:
+    """Chinese quality ASR for final reading text."""
+
+    model_size = "paraformer-zh"
+    device = "cpu"
+
+    def __init__(
+        self,
+        model_name: str = "paraformer-zh",
+        device: Literal["auto", "cuda", "cpu"] = "auto",
+        hotwords_enabled: bool = True,
+    ) -> None:
+        from funasr import AutoModel
+        import torch
+
+        self.model_size = model_name
+        if device == "cuda" and torch.cuda.is_available():
+            self.device = "cuda"
+        else:
+            self.device = "cpu"
+        self.hotword_text = build_hotword_text(limit=80, include_defaults=True) if hotwords_enabled else ""
+        self.model = AutoModel(
+            model=model_name,
+            vad_model="fsmn-vad",
+            punc_model="ct-punc",
+            device=self.device,
+            disable_update=True,
+        )
+
+    async def transcribe(
+        self,
+        samples: np.ndarray,
+        chunk_start_seconds: float,
+        language: str = "zh",
+    ) -> list[TranscriptionResult]:
+        return await asyncio.to_thread(self._transcribe_sync, samples, chunk_start_seconds, language)
+
+    def _transcribe_sync(
+        self,
+        samples: np.ndarray,
+        chunk_start_seconds: float,
+        language: str,
+    ) -> list[TranscriptionResult]:
+        if samples.size == 0:
+            return []
+        with tempfile.NamedTemporaryFile(prefix="funasr-final-", suffix=".wav", delete=False) as file:
+            temp_path = Path(file.name)
+        try:
+            write_mono_wav(temp_path, samples, 16000)
+            output = self.model.generate(
+                input=str(temp_path),
+                language="zh",
+                use_itn=True,
+                batch_size_s=60,
+                hotword=self.hotword_text,
+            )
+            return normalize_funasr_output(output, chunk_start_seconds, max(0.0, len(samples) / 16000.0))
+        finally:
+            try:
+                temp_path.unlink(missing_ok=True)
+            except Exception:
+                pass
+
+
+def write_mono_wav(path: Path, samples: np.ndarray, sample_rate: int) -> None:
+    pcm16 = (np.clip(samples.astype(np.float32, copy=False), -1.0, 1.0) * 32767.0).astype(np.int16)
+    with wave.open(str(path), "wb") as target:
+        target.setnchannels(1)
+        target.setsampwidth(2)
+        target.setframerate(sample_rate)
+        target.writeframes(pcm16.tobytes())
+
+
+def normalize_funasr_output(output: object, chunk_start_seconds: float, duration_seconds: float) -> list[TranscriptionResult]:
+    records = [output] if isinstance(output, dict) else output if isinstance(output, list) else []
+    results: list[TranscriptionResult] = []
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        sentence_info = record.get("sentence_info")
+        if isinstance(sentence_info, list):
+            for sentence in sentence_info:
+                if not isinstance(sentence, dict):
+                    continue
+                text = clean_transcription_text(sentence.get("text") or "")
+                if not text:
+                    continue
+                start = chunk_start_seconds + float(sentence.get("start") or 0) / 1000.0
+                end = chunk_start_seconds + float(sentence.get("end") or sentence.get("timestamp") or 0) / 1000.0
+                results.append(TranscriptionResult(text=text, start_seconds=start, end_seconds=max(start, end)))
+            continue
+        text = clean_transcription_text(record.get("text") or "")
+        if text:
+            results.append(
+                TranscriptionResult(
+                    text=text,
+                    start_seconds=chunk_start_seconds,
+                    end_seconds=chunk_start_seconds + duration_seconds,
+                )
+            )
+    return results
+
 
 def clean_transcription_text(text: str) -> str:
     cleaned = str(text or "").strip()
     if not cleaned:
         return ""
+    cleaned = re.sub(r"<\|[^|]+?\|>", " ", cleaned)
+    if _ZH_TO_SIMPLIFIED is not None and re.search(r"[\u4e00-\u9fff]", cleaned):
+        cleaned = _ZH_TO_SIMPLIFIED.convert(cleaned)
     cleaned = VIDEO_OUTRO_HALLUCINATION_RE.sub(" ", cleaned)
     cleaned = re.sub(r"\s*,\s*(?=(?:and|also|then)\b)", " ", cleaned, flags=re.IGNORECASE)
     cleaned = re.sub(r"([.!?])\s+(?:and|also|then)\s+(?=[A-Z])", r"\1 ", cleaned, flags=re.IGNORECASE)

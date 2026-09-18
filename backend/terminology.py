@@ -50,6 +50,49 @@ DEFAULT_TERMS = (
     "P&ID",
     "Level +6.00",
     "6 inch",
+    "MPC",
+    "MPPI",
+    "MDP",
+    "POMDP",
+    "reward",
+    "policy",
+    "trajectory",
+    "state",
+    "value function",
+    "reinforcement learning",
+    "robot learning",
+    "robotics",
+    "humanoid robot",
+    "legged robot",
+    "locomotion",
+    "gait",
+    "motion control",
+    "perception",
+    "simulation",
+    "sim-to-real",
+    "UC Berkeley",
+    "CMU",
+    "MIT",
+    "Stanford",
+    "IJRR",
+    "IROS",
+    "ICRA",
+    "CoRL",
+    "Science Robotics",
+    "\u5f3a\u5316\u5b66\u4e60",
+    "\u673a\u5668\u4eba",
+    "\u4eba\u5f62\u673a\u5668\u4eba",
+    "\u8db3\u5f0f\u673a\u5668\u4eba",
+    "\u8fd0\u52a8\u63a7\u5236",
+    "\u611f\u77e5",
+    "\u884c\u8d70",
+    "\u8dd1\u6b65",
+    "\u4eff\u771f",
+    "\u5b9e\u9a8c",
+    "\u8f68\u8ff9",
+    "\u7b56\u7565",
+    "\u5956\u52b1",
+    "\u72b6\u6001",
 )
 
 HEADER_NAMES = {
@@ -85,7 +128,13 @@ def build_azure_phrase_list(
     limit: int = 500,
     include_defaults: bool = True,
 ) -> list[str]:
-    language = "es" if source_language.lower().startswith("es") else "en"
+    lowered = source_language.lower()
+    if lowered.startswith("es"):
+        language = "es"
+    elif lowered.startswith("ja"):
+        language = "ja"
+    else:
+        language = "en"
     return build_hotword_terms(extra_terms=extra_terms, language=language, limit=limit, include_defaults=include_defaults)
 
 
@@ -190,6 +239,6 @@ def clean_term(value: str) -> str:
     term = re.sub(r"\s+", " ", str(value or "")).strip(" \t\r\n\"'")
     if len(term) > 64:
         return ""
-    if not re.search(r"[A-Za-z0-9]", term):
+    if not re.search(r"[A-Za-z0-9\u4e00-\u9fff]", term):
         return ""
     return term

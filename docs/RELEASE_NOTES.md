@@ -1,5 +1,280 @@
 # Release Notes
 
+## 0.3.3-remote-quota-lightweight - Remote Tester Mode, Cloud Quota Guard, and Lightweight Handoff
+
+Date: 2026-07-20
+
+### Product
+
+- Added a remote tester operating path: testers open a hosted Subtitle Studio page, while the speech key stays only on the center backend.
+- Added Japanese source speech support for Cloud live translation into Simplified Chinese.
+- Added a centrally enforced Cloud live-translation quota, defaulting to 5 hours per month and resetting at the first day of each UTC month.
+- Changed the default install to a lightweight cloud-first dependency set so new testers do not download local Whisper, FunASR, Argos, MarianMT, NLLB, Torch, or Hugging Face model stacks unless they explicitly need offline/local mode.
+
+### UI
+
+- Removed the visible mode/settings panel and the Diag toolbar button from the main workspace.
+- Kept a single compact Notes shortcut in the top-right utility area.
+- Kept diagnostics available at `/static/diagnostics.html` for direct health checks without occupying the live subtitle surface.
+- Preserved provider-neutral tester wording such as `Cloud`, `Cloud Usage`, and neutral cloud status labels.
+
+### Technical
+
+- Added browser-audio Cloud streaming for remote testers: the browser captures mic/system share audio, converts it to 16 kHz mono PCM, and sends it over the existing subtitle WebSocket to the center backend.
+- Reused `AzureSpeechTranslationSession.write_audio(...)` so remote browser audio feeds the cloud stream without exposing credentials to the browser.
+- Added backend monthly quota enforcement that combines Azure Monitor usage when configured, a local backend ledger at `sync-meta/cloud-usage-quota.json`, and active sessions.
+- Added active-session quota guarding so Cloud sessions are rejected or stopped once the configured monthly limit is reached.
+- Split dependencies into `backend/requirements.txt` for lightweight cloud-first use and `backend/requirements-local.txt` for optional offline/local models.
+- Added `scripts/start-remote-server.ps1` for center-hosted testing and `scripts/cleanup-local-artifacts.ps1` for removing model/runtime caches before handoff.
+
+### Verification
+
+- Python syntax checks passed for the changed backend modules and recording-processing script.
+- Frontend JavaScript syntax check passed for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js` with the bundled Codex Node runtime.
+- PowerShell parse checks passed for `scripts/start-server.ps1`, `scripts/start-remote-server.ps1`, `scripts/launch-app.ps1`, and `scripts/cleanup-local-artifacts.ps1`.
+- Cloud quota smoke tests passed for limit reached, remaining seconds, active-session accounting, and ledger update after session finish.
+- Runtime smoke test passed for `GET /api/health` and the main page on a temporary local port.
+- Secret scan found placeholders/documented environment-variable names only; `.env`, recordings, generated notes, sync metadata, and model caches remain ignored.
+
+### Known Limitations
+
+- Remote browser microphone capture requires HTTPS unless the tester is on `localhost`.
+- Remote browser system-audio sharing depends on browser and OS support; Mic is the safest remote-test input.
+- The hosted center backend should sit behind tunnel access policy, VPN, or reverse-proxy authentication before wider external testing, because anyone who can reach it can spend the shared quota.
+
+## 0.3.2-speaker-aware-notes-ui-trim - Speaker-Aware Meeting Notes and Subtitle Workspace Cleanup
+
+Date: 2026-06-04
+
+### Product
+
+- Improved post-meeting notes so detailed discussion sections can preserve who raised, answered, challenged, confirmed, or owned an important point when speaker-separated transcript evidence is available.
+- Kept speaker names conservative: use real names only when supplied by the transcript or meeting context; otherwise preserve anonymous labels such as `Speaker 1` / `Speaker 2` or Chinese `发言人 1` / `发言人 2`.
+- Removed the visible Notes context input block (`Title`, `People`, `Keywords`, `Context`) from the main UI so the subtitle workspace stays focused and less crowded.
+
+### UI
+
+- Removed the left vertical panel's large background capsule and narrowed the panel from 160px to 136px, giving more horizontal space back to the subtitle monitors.
+- Kept the individual left-side status cards for meeting state, recording state, Cloud usage, and notes status.
+- Versioned frontend assets with `speaker-aware-notes-ui-trim-20260604` so browser refreshes load the UI cleanup.
+
+### Technical
+
+- Added speaker-attributed transcript evidence extraction in `backend/notes_quality.py` for the second-pass notes rewrite.
+- Filtered short greetings, acknowledgements, and other low-information transcript snippets before sending speaker evidence to the local notes model.
+- Strengthened the notes rewrite prompt so major topics prefer speaker-attributed bullets when diarized transcript evidence exists.
+- Removed unused Notes context CSS after the UI inputs were removed; backend context payload handling remains compatible and simply receives empty context from the current UI.
+
+### Verification
+
+- Python syntax check passed for `backend/notes_quality.py`.
+- Speaker-evidence smoke test on `recordings/rec-0603-220033.transcript.md` extracted substantive `Speaker 1` / `Speaker 2` discussion lines while filtering short greetings.
+- `git diff --check` passed with GitHub Desktop's bundled Git.
+- Backend health check passed for `GET /api/health` on the running local server.
+- Known local limitation: regenerating the full speaker-aware notes preview with Ollama `qwen3:14b` failed when Ollama reported insufficient available memory (`6.3 GiB` required, `4.3 GiB` available). The prompt/code path is in place, but a full rewrite needs memory to be freed or a smaller notes model.
+
+## 0.3.1-notes-quality-compressed-upload - Richer Meeting Notes and Lossless Upload Compression
+
+Date: 2026-06-04
+
+### Product
+
+- Improved post-meeting notes so important topics are expanded with concrete discussion points, examples, numbers, risks, decisions, open questions, and next steps supported by the transcript.
+- Preserved the original WAV as the local recording archive while allowing smaller lossless FLAC uploads for cloud meeting-notes processing.
+- Added optional meeting context fields in the Notes panel for title, people, keywords, and background so the notes model can resolve ambiguous references more reliably.
+
+### Technical
+
+- Added `backend/notes_quality.py` for a second-pass Ollama notes rewrite over generated minutes plus the full transcript.
+- Wired topic-level refinement into both Aliyun Tingwu cloud notes and local post-meeting notes before Markdown/DOCX output is written.
+- Saved accepted pre-rewrite drafts as `*.minutes.raw.md` for review and rollback.
+- Added Tingwu upload FLAC compression, cached `recordings/*.upload.flac` reuse, ffmpeg diagnostics, and fallback to original WAV when compression is unavailable or not beneficial.
+- Added `.env.example` controls for notes rewrite and Tingwu upload compression.
+
+### UI
+
+- Added compact Notes panel context inputs without changing the Start/End Meeting flow.
+- Added `compressing` and `refining` progress stages so long note builds show what the backend is doing.
+
+### Verification
+
+- Python syntax checks passed for `backend/notes_quality.py`, `backend/main.py`, and `backend/aliyun_tingwu.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Codex Node runtime.
+- Prompt smoke test passed for the topic-level rewrite instructions.
+- Tail-whitespace scan passed for the changed code and documentation files.
+- `git diff --check` passed with GitHub Desktop's bundled Git.
+
+## 0.3.0-funasr-streaming-live-window - Local Chinese FunASR Streaming Subtitles
+
+Date: 2026-06-03
+
+### Product
+
+- Added a dedicated local Chinese realtime subtitle path based on FunASR Paraformer streaming.
+- Kept the realtime goal focused on low-latency Chinese ASR instead of post-meeting translation quality.
+- Changed End Meeting behavior so ending a live session saves/stops recording only; meeting notes are built manually from the notes tools.
+- Preserved System audio as the default test path for local Chinese meeting/video audio.
+
+### UI
+
+- Added explicit startup feedback in the Chinese subtitle pane while FunASR connects, loads the model, and starts listening.
+- Reworked realtime Chinese display into a recent live subtitle window instead of showing the entire accumulated transcript as one machine-like paragraph.
+- Added live subtitle line wrapping and status styling for FunASR so short streaming updates feel closer to natural captions.
+- Updated frontend asset versioning to `funasr-live-window-20260603`.
+
+### Technical
+
+- Added `asr/funasr_streaming.py`, `asr/audio_capture.py`, and `asr/subtitle_state.py` for PCM16 16 kHz mono chunk streaming, queue-limited capture, streaming cache reuse, partial/final subtitle state, and low-latency WebSocket events.
+- Added FastAPI WebSocket `/ws/asr/funasr` for FunASR streaming messages with `partial`, `final`, `status`, and `error` event types.
+- Added FunASR/model download dependencies through `funasr`, `modelscope`, and `huggingface-hub`.
+- Improved partial subtitle merging so FunASR's short incremental fragments accumulate without replacing the full current caption.
+- Tuned CPU fallback for stability with 800 ms chunks, `[5, 10, 5]` chunk size, queue size 3, and short-phrase partial updates.
+- Added runtime logging for chunk inference time, latency, RTF, model/device load, and dropped stale chunks.
+
+### Verification
+
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Codex Node runtime.
+- Python syntax checks passed for `backend/main.py`, `asr/subtitle_state.py`, and the FunASR streaming modules.
+- `git diff --check` passed for the candidate code and docs.
+- Runtime smoke test passed for `GET /` on port `8000`.
+- FunASR route registration was verified for `/ws/asr/funasr`.
+- Current local limitation: the active virtual environment still has CPU-only Torch, so FunASR does not use the NVIDIA GPU until CUDA PyTorch is installed.
+
+## 0.2.1-compact-diagnostics-draft-tape - Compact UI, Diagnostics, and Stable Draft Captions
+
+Date: 2026-05-30
+
+### Product
+
+- Simplified the main UI into a more compact, icon-forward operating surface while preserving the large subtitle workspace.
+- Added a diagnostics monitor page for backend health, cloud/local notes readiness, meeting-notes progress, quick checks, and recent recordings.
+- Kept tester-facing meeting-notes controls provider-neutral: notes engine is shown as `Cloud` / `Local`, and upload routing is controlled by configuration instead of a visible upload-path selector.
+- Preserved Tencent Relay as the default private upload bridge for cloud meeting notes.
+
+### UI
+
+- Replaced oversized or inconsistent lower-panel buttons with the same soft capsule style used elsewhere.
+- Converted dense Cloud Usage labels to icon-first counters with hover labels, reducing sidebar width pressure.
+- Added a small monitor icon that opens diagnostics in a separate tab so checking health does not stop the active subtitle session.
+- Reworked local English draft display into a one-line visual tape that fills to the end of the row before restarting from the left edge.
+
+### Technical
+
+- Added `frontend/diagnostics.html`, `frontend/diagnostics.css`, and `frontend/diagnostics.js`.
+- The diagnostics live-socket test opens and closes a WebSocket without starting a caption session.
+- Added `scripts/translation-quality-preview.py` for offline comparison of direct translation, stabilized English windows, and optional local `qwen3:14b` polishing.
+- Versioned frontend assets with `draft-visual-tape-20260530` so browser refreshes load the draft subtitle changes.
+
+### Verification
+
+- Backend Python compile/import checks passed.
+- Frontend JavaScript syntax checks passed for `frontend/app.js`, `frontend/ui-editor.js`, and `frontend/diagnostics.js`.
+- `scripts/translation-quality-preview.py` syntax check passed.
+- `git diff --check` passed.
+- Runtime smoke test passed for `GET /api/health` and `GET /static/diagnostics.html` on port `8000`.
+- Secret scan found placeholders only and no live Aliyun AccessKey, Tingwu AppKey, relay IP, or Azure secret in candidate committed paths.
+
+## 0.2.0-aliyun-tingwu-qwen-notes - Aliyun Cloud Notes and Qwen Local Refinement
+
+Date: 2026-05-30
+
+### Product
+
+- Added Aliyun Tingwu as the selected cloud meeting-notes path, with Tencent Relay supported as the default private upload bridge.
+- Added compact UI controls for meeting-notes engine choice, progress display, diagnostics, and quick access to recordings / minutes folders.
+- Kept tester-facing upload-path details out of the main UI; upload routing is controlled by local environment configuration.
+- Set the local meeting-notes refinement model direction to Ollama `qwen3:14b` after Gemma and Phi test models were removed locally.
+
+### Technical
+
+- Added Aliyun Tingwu task submission, polling, transcript/minutes rendering, raw result capture, and temporary audio cleanup.
+- Added Tencent Relay upload support with byte-level progress reporting and post-task deletion.
+- Added `.env.example` settings for local Ollama notes refinement, Aliyun Tingwu, OSS, and relay cleanup.
+- Added Aliyun SDK requirements and ignored backend runtime log files.
+
+### Verification
+
+- Python syntax checks passed for `backend/main.py`, `backend/aliyun_tingwu.py`, core backend modules, and `scripts/process-recording.py`.
+- Backend import check passed.
+- Frontend JavaScript syntax checks passed for `frontend/app.js` and `frontend/ui-editor.js` with the bundled Codex Node runtime.
+- `git diff --check` passed.
+- Secret scan found placeholders and environment-variable names only; live Aliyun, Azure, relay IP, and AppKey values were not present in committed paths.
+
+## 0.1.12-cloud-branding-notes-fallback - Provider-Neutral UI and Stable Meeting Notes
+
+Date: 2026-05-28
+
+### Product
+
+- Removed provider-specific wording from tester-facing UI. The app now presents the live route, usage panel, status messages, and settings as `Cloud` / `Cloud Usage` / `Cloud Sync`.
+- Added Chinese meeting speech as a selectable input language while keeping meeting notes output bilingual, with English first and Chinese reading copy second.
+- Reworked local hardware choices into three tester-friendly abbreviation tiers: `iGPU`, `dGPU`, and `HP`, assuming 16GB RAM and choosing the tier by graphics/compute class.
+- Kept cloud usage remaining-time sync tied to the configured monthly quota, now set for a 5-hour free monthly allowance.
+
+### Technical
+
+- Added `/api/cloud-usage` as the provider-neutral usage endpoint while keeping `/api/azure-usage` as a compatibility alias.
+- Reduced provider leakage in frontend status rendering with a display-layer neutralizer for backend and SDK errors.
+- Changed public config payloads to expose `cloud_*` fields instead of returning the full runtime config to the browser.
+- Fixed post-meeting local fallback on CUDA-incomplete machines by defaulting meeting-notes ASR to CPU unless `POST_MEETING_ASR_DEVICE` is explicitly set to `cuda` or `auto`.
+- Kept generated recordings and notes under `recordings/`, which remains ignored by Git.
+
+### UI
+
+- Updated the top subtitle, speech selector, engine selector, usage panel, delay hints, and progress messages to use neutral cloud wording.
+- Preserved the compact left-panel scroll behavior so Meeting Notes and Delay Hint remain reachable on shorter screens.
+- Versioned frontend assets with `cloud-branding-20260528` so browser refresh picks up the new labels.
+
+### Verification
+
+- Python syntax checks passed for `backend/main.py`, `backend/cloud_speech.py`, and `scripts/process-recording.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js` with the bundled Node runtime.
+- Local runtime smoke test passed for `GET /` on port `8000`.
+- `GET /api/cloud-usage` returned a configured account-level usage payload with neutral `source` and `metric` fields.
+- `GET /api/config` now returns provider-neutral public config fields.
+- A real recording, `rec-0528-131932.wav`, successfully generated `rec-0528-131932.minutes.docx` after the CPU fallback fix, and `/api/open-latest-minutes` opened the Word file.
+
+### Known Limitations
+
+- The internal environment variable names and some internal code identifiers still use the cloud provider's original naming so existing local configuration keeps working.
+- Cloud batch speaker separation still requires a configured Blob/SAS batch-storage path; otherwise notes fall back to local transcription without verified speaker separation.
+- CPU meeting-notes fallback is slower than CUDA, but avoids the `cublas64_12.dll` failure on tester machines without a complete CUDA runtime.
+
+## 0.1.11-local-t600 - Azure Usage Sync Panel
+
+Date: 2026-05-25
+
+### Product
+
+- Added an Azure Usage panel to the left runtime sidebar.
+- The panel shows current-session Azure time and local browser day/month estimates.
+- The UI clearly labels local-only estimates so users do not confuse one machine's browser storage with account-wide Azure usage.
+
+### Technical
+
+- Added `GET /api/azure-usage` for optional Azure Monitor synchronization.
+- The backend queries Azure Monitor `AudioSecondsTranslated` with a service principal when `AZURE_TENANT_ID`, `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET`, and `AZURE_SPEECH_RESOURCE_ID` are configured.
+- Azure Monitor usage responses are cached for 60 seconds.
+- `.env.example` now documents Azure Monitor usage-sync variables and optional monthly seconds budget.
+
+### UI
+
+- Reduced usage-card label sizing and shortened labels to prevent two-line wrapping in the compact sidebar.
+- The panel switches between local estimate labels and Cloud Day / Cloud Month labels depending on whether Azure Monitor sync is configured.
+
+### Verification
+
+- Backend Python syntax check passed for `backend/main.py`.
+- Frontend JavaScript syntax check passed for `frontend/app.js`.
+- Local runtime smoke test passed for `GET /` on port `8001`.
+- `GET /api/azure-usage` safely returned `configured=false` before Azure Monitor credentials were added.
+
+### Known Limitations
+
+- Azure Speech API keys can run live translation, but cannot read Azure Monitor metrics.
+- Account-level cloud usage sync requires a service principal with `Monitoring Reader` access to the Speech resource.
+- Until those Azure Monitor variables are configured, day/month numbers remain browser-local estimates.
+
 ## 0.1.10-local-t600 - Guided Meeting Flow and Bilingual Word Notes
 
 Date: 2026-05-17

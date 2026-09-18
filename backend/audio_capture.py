@@ -189,14 +189,18 @@ class MicrophoneAudioCapture:
             self.selected_source_label = "Default microphone"
             self.selected_source_detail = f"Windows default input ({self._input_sample_rate} Hz)"
 
-        self._stream = sd.InputStream(
-            samplerate=self._input_sample_rate,
-            channels=max(1, input_channels),
-            device=self._device,
-            dtype="float32",
-            callback=self._callback,
-        )
-        self._stream.start()
+        try:
+            self._stream = sd.InputStream(
+                samplerate=self._input_sample_rate,
+                channels=max(1, input_channels),
+                device=self._device,
+                dtype="float32",
+                callback=self._callback,
+            )
+            self._stream.start()
+        except Exception as exc:
+            source = "Microphone" if self.audio_source != "system" else "System audio fallback"
+            raise RuntimeError(f"{source} input failed: {exc}") from exc
 
     def _start_system_loopback(self) -> bool:
         if sc is None:
@@ -245,6 +249,10 @@ class MicrophoneAudioCapture:
                 for microphone in sc.all_microphones(include_loopback=True)
                 if getattr(microphone, "isloopback", False)
             ]
+            active_loopback = self._select_active_loopback(loopbacks)
+            if active_loopback is not None:
+                return active_loopback
+
             exact_match = next((item for item in loopbacks if getattr(item, "name", "") == speaker_name), None)
             if exact_match is not None:
                 return exact_match
@@ -258,6 +266,34 @@ class MicrophoneAudioCapture:
                 return substring_match
         except Exception:
             return None
+        return None
+
+    def _select_active_loopback(self, loopbacks) -> object | None:
+        best_microphone = None
+        best_rms = 0.0
+        for microphone in loopbacks:
+            try:
+                with microphone.recorder(
+                    samplerate=self.sample_rate,
+                    channels=1,
+                    blocksize=max(512, int(self.sample_rate * 0.1)),
+                ) as recorder:
+                    audio = recorder.record(numframes=max(1600, int(self.sample_rate * 0.35)))
+            except Exception:
+                continue
+            normalized = self._normalize_audio(audio, self.sample_rate)
+            if len(normalized) == 0:
+                continue
+            rms = float(np.sqrt(np.mean(normalized * normalized)))
+            if rms > best_rms:
+                best_rms = rms
+                best_microphone = microphone
+        if best_microphone is not None and best_rms >= max(0.001, self.chunk_flush_rms_threshold * 0.25):
+            print(
+                f"[audio] active system loopback: {getattr(best_microphone, 'name', 'loopback')} rms={best_rms:.4f}",
+                flush=True,
+            )
+            return best_microphone
         return None
 
     def _read_system_loopback(self) -> None:

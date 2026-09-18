@@ -9,6 +9,7 @@ from typing import Literal
 DevicePreference = Literal["auto", "cuda", "cpu"]
 TranslationEngine = Literal["argos", "marianmt", "nllb", "azure"]
 AudioSource = Literal["microphone", "system"]
+SourceLanguage = Literal["eng_Latn", "spa_Latn", "jpn_Jpan", "zho_Hans"]
 
 
 def load_dotenv_file() -> None:
@@ -46,7 +47,7 @@ class AppConfig:
     asr_no_repeat_ngram_size: int = 3
     asr_hotwords_enabled: bool = False
     asr_use_default_hotwords: bool = False
-    source_language: str = "eng_Latn"
+    source_language: SourceLanguage = "eng_Latn"
     target_language: str = "zho_Hans"
     translation_engine: TranslationEngine = "azure"
     audio_source: AudioSource = "system"
@@ -81,6 +82,7 @@ class AppConfig:
     context_buffer_min_words: int = 10
     context_buffer_max_words: int = 42
     context_buffer_max_wait_seconds: float = 0.8
+    quality_final_mode: bool = False
 
 
 config = AppConfig()
