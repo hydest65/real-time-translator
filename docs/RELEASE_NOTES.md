@@ -1,5 +1,13 @@
 # Release Notes
 
+## Realtime-only UI — 2026-09-29
+
+- Removed meeting-note controls, summary cards, generation, progress polling, and document export from the application.
+- Removed the notes generation, cancellation, progress, diagnostics, and document-serving APIs. The realtime backend no longer imports Tingwu or notes-quality modules or probes notes configuration.
+- Removed notes-only cloud SDKs from the default installation requirements.
+- Retained live translation, caption history, independent font controls, connection status, recording, and usage tracking. Existing recordings and documents are untouched; historical notes source and documentation are legacy only.
+- Verified backend import and route registration, removed APIs returning 404, diagnostics, no notes requests on page load, and start/caption/end with simulated speech events. Font and connection browser checks pass. Real microphone capture and paid speech translation were not exercised.
+
 ## 0.3.3-remote-quota-lightweight - Remote Tester Mode, Cloud Quota Guard, and Lightweight Handoff
 
 Date: 2026-07-20

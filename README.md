@@ -5,6 +5,10 @@ Windows real-time subtitle translator. It supports English, Spanish, Japanese, a
 - `Cloud`: lowest-latency streaming speech translation, shown with provider-neutral labels for testers.
 - `Local`: private offline ASR + translation. English/Spanish fallback uses faster-whisper plus local translators; local Chinese realtime mode uses FunASR streaming.
 
+## Realtime-only edition
+
+The app now focuses on live translation, caption history, custom font sizes, connection status, and audio recording. Notes controls, background queries, generation APIs, and notes-specific cloud installation dependencies have been removed. Existing recordings and generated documents are not deleted. Older notes scripts and historical documentation are retained as legacy source; they are not part of the supported application workflow.
+
 ## Current Low-Latency Defaults
 
 - Engine: `Cloud` for lowest latency, or local engines when privacy/offline mode matters
@@ -24,8 +28,8 @@ Windows real-time subtitle translator. It supports English, Spanish, Japanese, a
 - Local English/Spanish subtitles use an English context pane and a Chinese complete-translation pane; local Chinese FunASR mode uses one Chinese live caption window
 - Frontend: Cloud mode uses a fixed bilingual subtitle monitor; local mode uses separate English live and Chinese translation monitors
 - Local Chinese FunASR subtitles use a recent live caption window instead of a separate draft pane
-- Meeting notes: `End Meeting` closes the recording session; use the Notes tools to build one bilingual Word notes file with English minutes first and Chinese minutes second
-- Audio archive: each session saves a local WAV file under `recordings/` for post-meeting speaker diarization
+- Focused realtime edition (2026-09-29): meeting-note generation, summarization, and Word export have been removed from the application and API.
+- Audio archive: each session saves a local WAV file under `recordings/` as an audio archive
 - UI editor: visual theme editor at `/static/ui-editor.html` for color, subtitle size, panel width, corner radius, and background-art toggles
 - Diagnostics: monitor panel remains available at `/static/diagnostics.html`, but the main toolbar no longer shows a diagnostics shortcut
 - Cloud usage panel: shows current-session cloud time, account-level sync when configured, and the centrally enforced monthly quota
@@ -97,7 +101,7 @@ real_time_translator/
 
 ## Install
 
-The default install is cloud-first and lightweight. It supports the browser UI, Azure live translation, Aliyun Tingwu meeting notes, audio capture, and local recording. It does not install local realtime/offline model packages such as Whisper, FunASR, Argos, MarianMT, NLLB, Torch, or Hugging Face Transformers.
+The default install is cloud-first and lightweight. It supports the browser UI, Azure live translation, audio capture, and local recording. It does not install local realtime/offline model packages such as Whisper, FunASR, Argos, MarianMT, NLLB, Torch, or Hugging Face Transformers.
 
 Use Python 3.11 on Windows.
 
@@ -187,92 +191,6 @@ AHU,空气处理机组,Air Handling Unit,HVAC equipment
 
 `source` and `aliases` are used as recognition hotwords. `target` is kept for human-readable translation terminology and future glossary-assisted translation. `backend/glossary.csv` is ignored by Git so private project terms stay local. Set `TERMINOLOGY_GLOSSARY_PATH` if you want to keep the glossary elsewhere.
 
-## Azure Batch Meeting Notes
-
-For post-meeting notes with cloud speaker separation, set:
-
-```powershell
-$env:POST_MEETING_ASR_ENGINE="azure-batch"
-$env:AZURE_BATCH_CONTAINER_SAS_URL="https://<storage>.blob.core.windows.net/<container>?<sas>"
-```
-
-The SAS URL should point to a private Blob container and allow create/write/read/list for the processing window. The app uploads the original WAV, submits Azure Batch Transcription with diarization enabled, polls the job, downloads the transcript, and then builds the notes locally. If the SAS URL is missing, the app falls back to local transcription without speaker separation.
-
-Post-meeting notes follow the selected live engine: Azure Cloud mode attempts Azure Batch meeting notes, while Argos, MarianMT, and NLLB modes use local post-meeting transcription without speaker separation.
-
-For Aliyun Tingwu notes, the local archive stays as the original WAV. Before upload, the backend can create a lossless FLAC file with `ffmpeg` and upload that smaller file instead. This is enabled by default with `ALIYUN_TINGWU_AUDIO_COMPRESSION=flac`; set it to `off` to upload the original WAV. The compressed upload file is cached as `recordings/*.upload.flac` when `ALIYUN_TINGWU_CACHE_COMPRESSED_AUDIO=1`, so rebuilding notes for the same WAV does not recompress audio. If `ffmpeg` is not found or the FLAC is not meaningfully smaller, the app automatically falls back to the original WAV.
-
-Meeting notes can run a second-pass topic rewrite after cloud or local transcription. With `POST_MEETING_NOTES_REWRITE_ENABLED=1`, the backend sends the generated minutes plus the full transcript to the configured Ollama notes model and asks it to expand each important topic with concrete discussion points, examples, numbers, risks, decisions, and next steps that are supported by the transcript. The original generated draft is saved beside the recording as `*.minutes.raw.md` whenever the rewrite is accepted.
-
-MiniMax polishing and Balanced/Quality modes have been removed. The app now keeps a single fast/direct live-subtitle path.
-
-Example region values look like `eastus`, `westus`, or the region shown in your Azure resource page.
-
-When the web page opens, choose:
-
-```text
-Engine: Azure Cloud
-```
-
-In Azure mode, the app streams microphone audio to Azure Speech Translation and receives live source-language and Chinese subtitle results. It does not load Whisper, Argos, MarianMT, or NLLB for that run.
-
-Azure can sometimes return very long final segments. The app keeps them as one semantic subtitle with fixed subtitle sizing instead of forcing time-based cuts.
-
-The paragraph detector is intentionally lightweight. It uses the pause between final subtitles plus a short noise list such as `uh`, `um`, `ok`, and `yeah`. This is not true speaker diarization; it avoids noise-triggered paragraph breaks while keeping latency low.
-
-Meeting export uses the final subtitle stream rather than the visible history window, so the downloaded transcript can keep the full meeting text even though the on-screen monitor only keeps a compact rolling display. Speaker labels in the export are pause-based `Turn` labels, not verified voiceprints.
-
-Each started session also writes a WAV file to `recordings/session-YYYYMMDD-HHMMSS.wav`. The folder is ignored by Git because meeting audio may contain private information.
-
-If you accidentally press Stop and then Start again within 5 minutes, the app continues appending to the same WAV file instead of creating a new meeting recording. After a longer break, it creates a new session file.
-
-Use `End Meeting` when the meeting is truly over. It closes the current recording session, so the next `Start` creates a new WAV even if it happens within 5 minutes.
-
-Optional post-meeting speaker diarization can be run against that WAV file in a separate Python environment with `pyannote.audio` installed:
-
-```powershell
-$env:HF_TOKEN="your_huggingface_token"
-python scripts\diarize-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
-```
-
-This writes `.speakers.rttm` and `.speakers.md` files with anonymous speaker clusters such as `SPEAKER_00`. Those labels are not real names and still need human review.
-
-To turn a recording into post-meeting transcript and minutes files, run:
-
-```powershell
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav
-```
-
-This writes `.transcript.md` and `.minutes.md`. Add `--diarize` when `pyannote.audio` and `HF_TOKEN` are ready:
-
-`End Meeting` only stops the live session and closes the current recording. To build notes, open the Notes tool, choose the recording, and click `Build Notes`. The app writes a readable bilingual Word document with English professional meeting minutes first, then a Chinese reading version in the same file. Without diarization it falls back to pause-based turn labels; with diarization it uses anonymous speaker clusters.
-
-Quality presets for this T600 4GB GPU machine:
-
-```powershell
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality fast
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality balanced
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --quality high
-```
-
-`balanced` uses `small.en + int8 + beam 2` and is the default. `high` uses `medium.en + int8 + beam 3`; use it only for post-meeting processing because it can be slow or may fall back if GPU memory is tight.
-
-Optional Alibaba/FunASR post-meeting ASR:
-
-```powershell
-python -m pip install funasr
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --asr-engine funasr
-```
-
-The FunASR path defaults to `iic/SenseVoiceSmall` with VAD and punctuation. It is intended for post-meeting experiments, not the realtime subtitle path.
-
-```powershell
-$env:HF_TOKEN="your_huggingface_token"
-python scripts\process-recording.py recordings\session-YYYYMMDD-HHMMSS.wav --diarize
-```
-
-For Teams meetings, keep `Input: System`. The app now prefers the current default Windows playback device through loopback capture when available. If loopback is unavailable, it falls back to Stereo Mix / speaker-monitor input. If the app still reports that system audio input was not found, enable Stereo Mix in Windows sound settings or use `Input: Mic`.
-
 ## Run
 
 Easiest local-app style start:
@@ -357,7 +275,7 @@ Diagnostics panel:
 http://127.0.0.1:8000/static/diagnostics.html
 ```
 
-The diagnostics page shows backend health, cloud/local notes readiness, meeting-notes progress, recent recordings, and quick connection checks. Open it directly by URL when needed; the main toolbar no longer includes a diagnostics shortcut so the live subtitle surface stays uncluttered.
+The diagnostics page shows backend health, live cloud readiness, recent recordings, and connection checks. Open it directly by URL when needed.
 
 Recommended first test:
 

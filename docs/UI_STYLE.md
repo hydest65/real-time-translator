@@ -1,6 +1,11 @@
 # UI Style
 
+> Current scope (2026-09-29): realtime-only. Notes shortcuts, notes status cards, notes settings, and post-meeting processing described in older sections below have been removed. The single-row toolbar contains the brand, audio source, language, Start, and End. Connection status and caption font controls remain visible.
+
 ## Direction
+
+- `Captions only` switches to a caption-focused view with a persistent `Full view` return button. Escape also restores all controls. The selected mode is saved locally.
+- Switching modes keeps the same caption elements, font settings, and live socket. The compact view hides normal chrome but preserves a brief connection-error warning. This switches the layout inside the current window; it does not create an always-on-top native window.
 
 The app uses the selected `Soft UI Evolution / Focus Display` direction. It is still a compact working subtitle studio, not a marketing page, but the visual priority is now the large subtitle monitor.
 

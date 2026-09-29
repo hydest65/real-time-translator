@@ -24,21 +24,6 @@ const chunkSeconds = document.querySelector("#chunkSeconds");
 const localLatencyPreset = document.querySelector("#localLatencyPreset");
 const translationEngine = document.querySelector("#translationEngine");
 const downloadTranscriptButton = document.querySelector("#downloadTranscriptButton");
-const downloadMinutesButton = document.querySelector("#downloadMinutesButton");
-const processMeetingButton = document.querySelector("#processMeetingButton");
-const openMinutesButton = document.querySelector("#openMinutesButton");
-const checkCloudNotesButton = document.querySelector("#checkCloudNotesButton");
-const refreshRecordingsButton = document.querySelector("#refreshRecordingsButton");
-const openRecordingsFolderButton = document.querySelector("#openRecordingsFolderButton");
-const openNotesFolderButton = document.querySelector("#openNotesFolderButton");
-const notesUtilityToggle = document.querySelector("#notesUtilityToggle");
-const notesUtilityBody = document.querySelector("#notesUtilityBody");
-const notesEngine = document.querySelector("#notesEngine");
-const notesMeetingTitle = document.querySelector("#notesMeetingTitle");
-const notesParticipants = document.querySelector("#notesParticipants");
-const notesKeywords = document.querySelector("#notesKeywords");
-const notesBackground = document.querySelector("#notesBackground");
-const recordingList = document.querySelector("#recordingList");
 const localControls = document.querySelectorAll(".local-control");
 const cloudControls = document.querySelectorAll(".cloud-control");
 const logText = document.querySelector("#logText");
@@ -46,13 +31,6 @@ const perfText = document.querySelector("#perfText");
 const noticeText = document.querySelector("#noticeText");
 const recordingStatusText = document.querySelector("#recordingStatusText");
 const recordingFileText = document.querySelector("#recordingFileText");
-const notesStatusText = document.querySelector("#notesStatusText");
-const notesHintText = document.querySelector("#notesHintText");
-const notesProgress = document.querySelector("#notesProgress");
-const notesProgressStage = document.querySelector("#notesProgressStage");
-const notesProgressPercent = document.querySelector("#notesProgressPercent");
-const notesProgressFill = document.querySelector("#notesProgressFill");
-const notesProgressDetail = document.querySelector("#notesProgressDetail");
 const delayStatusText = document.querySelector("#delayStatusText");
 const delayHintText = document.querySelector("#delayHintText");
 const azureUsageStatusText = document.querySelector("#azureUsageStatusText");
@@ -94,23 +72,9 @@ let recordingStartedAt = null;
 let recordingTimer = null;
 let currentRecordingPath = "";
 let azureConfigured = false;
-let azureBatchConfigured = false;
-let aliyunTingwuConfigured = false;
-let aliyunTingwuEnabled = false;
-let aliyunTingwuMissing = [];
-let aliyunTingwuUploadProvider = "oss";
 let funasrConfigured = false;
-let postMeetingAsrRequested = "azure-batch";
-let postMeetingAsrEffective = "faster-whisper";
-let latestMinutesPath = "";
 let isRecordingActive = false;
 let isLiveSessionActive = false;
-let isProcessingNotes = false;
-let notesAbortController = null;
-let notesTimeoutId = null;
-let notesProgressTimer = null;
-let availableRecordings = [];
-let selectedRecordingPaths = new Set();
 let lastSubtitleReceivedAt = 0;
 let funasrStreamingFinalIndex = 0;
 let funasrStreamingPartialItem = null;
@@ -169,16 +133,6 @@ function providerNeutralText(value = "") {
     .replace(/\bAzure\b/gi, "Cloud");
 }
 
-function cloudCheckStatusText(item) {
-  if (item?.ok) {
-    return "OK";
-  }
-  const message = String(item?.message || "");
-  if (/UserDisable|overdue|security reasons|not currently available/i.test(message)) {
-    return "Blocked";
-  }
-  return "Missing";
-}
 
 function applyDefaultInputMode() {
   const savedAudioSource = window.localStorage.getItem(audioSourceStorageKey);
@@ -196,14 +150,7 @@ async function loadRuntimeConfig() {
     }
     const payload = await response.json();
     azureConfigured = Boolean(payload.cloud_configured ?? payload.azure_configured);
-    azureBatchConfigured = Boolean(payload.cloud_batch_configured ?? payload.azure_batch_configured);
-    aliyunTingwuConfigured = Boolean(payload.aliyun_tingwu_configured);
-    aliyunTingwuEnabled = Boolean(payload.aliyun_tingwu_enabled);
-    aliyunTingwuMissing = Array.isArray(payload.aliyun_tingwu_missing) ? payload.aliyun_tingwu_missing : [];
-    aliyunTingwuUploadProvider = payload.aliyun_tingwu_upload_provider || "oss";
     funasrConfigured = Boolean(payload.funasr_configured);
-    postMeetingAsrRequested = payload.post_meeting_asr_requested || "cloud-batch";
-    postMeetingAsrEffective = payload.post_meeting_asr_effective || "faster-whisper";
     updateMeetingActionButtons();
     renderAzureUsage();
     if (!azureConfigured && translationEngine.value === "azure") {
@@ -218,247 +165,27 @@ async function loadRuntimeConfig() {
   }
 }
 
-async function refreshLatestMinutesState() {
-  try {
-    const response = await fetch("/api/latest-minutes");
-    if (!response.ok) {
-      return;
-    }
-    const payload = await response.json();
-    latestMinutesPath = payload.minutes || "";
-    updateMeetingActionButtons();
-  } catch (error) {
-    latestMinutesPath = "";
-    updateMeetingActionButtons();
-  }
-}
 
-function setUtilityPanel(toggle, body, open) {
-  if (!toggle || !body) {
-    return;
-  }
-  body.classList.toggle("hidden", !open);
-  toggle.classList.toggle("is-open", open);
-  toggle.setAttribute("aria-expanded", open ? "true" : "false");
-}
 
-function toggleUtilityPanel(target) {
-  const openingNotes = target === "notes" && notesUtilityBody?.classList.contains("hidden");
-  setUtilityPanel(notesUtilityToggle, notesUtilityBody, openingNotes);
-}
 
-async function refreshRecordings(preferredPath = "") {
-  if (!recordingList) {
-    return;
-  }
-  try {
-    const response = await fetch("/api/recordings");
-    if (!response.ok) {
-      throw new Error(`Recordings list failed: ${response.status}`);
-    }
-    const payload = await response.json();
-    availableRecordings = payload.recordings || [];
-    if (preferredPath) {
-      selectedRecordingPaths.add(preferredPath);
-    }
-    if (!selectedRecordingPaths.size && availableRecordings[0]) {
-      selectedRecordingPaths.add(availableRecordings[0].path);
-    }
-    renderRecordingList();
-  } catch (error) {
-    recordingList.textContent = "Could not load recordings.";
-  }
-  updateMeetingActionButtons();
-}
 
-function renderRecordingList() {
-  if (!recordingList) {
-    return;
-  }
-  recordingList.innerHTML = "";
-  if (!availableRecordings.length) {
-    const empty = document.createElement("p");
-    empty.className = "panel-line";
-    empty.textContent = "No recordings yet.";
-    recordingList.append(empty);
-    return;
-  }
-  availableRecordings.forEach((recording) => {
-    const label = document.createElement("label");
-    label.className = "recording-option";
-    const checkbox = document.createElement("input");
-    checkbox.type = "checkbox";
-    checkbox.value = recording.path;
-    checkbox.checked = selectedRecordingPaths.has(recording.path);
-    checkbox.addEventListener("change", () => {
-      if (checkbox.checked) {
-        selectedRecordingPaths.add(recording.path);
-      } else {
-        selectedRecordingPaths.delete(recording.path);
-      }
-      updateMeetingActionButtons();
-    });
-    const content = document.createElement("span");
-    const title = document.createElement("span");
-    title.className = "recording-title";
-    title.textContent = recording.displayName || recordingFileName(recording.path || recording.name);
-    const meta = document.createElement("div");
-    meta.className = "recording-meta";
-    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} | ${formatBytes(recording.sizeBytes || 0)}`;
-    meta.textContent = `${formatDuration((recording.durationSeconds || 0) * 1000)} | ${formatBytes(recording.sizeBytes || 0)}`;
-    content.append(title, meta);
-    label.append(checkbox, content);
-    recordingList.append(label);
-  });
-}
 
-function selectedRecordings() {
-  return availableRecordings
-    .filter((recording) => selectedRecordingPaths.has(recording.path))
-    .map((recording) => recording.path);
-}
 
 function updateMeetingActionButtons() {
-  const isMeetingLive = Boolean(socket && socket.readyState === WebSocket.OPEN);
-  const hasSelectedRecordings = selectedRecordings().length > 0;
+  const connected = Boolean(socket && socket.readyState === WebSocket.OPEN);
+  const connecting = Boolean(socket && socket.readyState === WebSocket.CONNECTING);
   const quotaBlocked = cloudQuotaExceeded();
-  startButton.innerHTML = '<span class="button-glyph start-glyph"></span><span>Start</span>';
-  startButton.classList.remove("is-danger", "is-ready");
-  startButton.disabled = isProcessingNotes || isMeetingLive || isRecordingActive || quotaBlocked;
+  startButton.disabled = connected || connecting || isRecordingActive || quotaBlocked;
   startButton.title = quotaBlocked ? cloudQuotaMessage() : "";
-  endMeetingButton.disabled = isProcessingNotes || (!isMeetingLive && !isRecordingActive);
-  openMinutesButton.classList.toggle("hidden", !latestMinutesPath && !isProcessingNotes);
-
-  if (isProcessingNotes) {
-    processMeetingButton.textContent = "Cancel";
-    openMinutesButton.textContent = "Creating";
-    openMinutesButton.disabled = true;
-    notesStatusText.textContent = "Creating";
-    notesStatusText.classList.remove("muted");
-    notesHintText.textContent = "Please wait. Selected recordings are being transcribed and summarized.";
-  } else if (isMeetingLive || isRecordingActive) {
-    processMeetingButton.textContent = "Build";
-    notesStatusText.textContent = "After meeting";
-    notesStatusText.classList.add("muted");
-    notesHintText.textContent = "End the meeting first, then choose recordings and build notes.";
-  } else if (latestMinutesPath) {
-    processMeetingButton.textContent = "Build";
-    openMinutesButton.textContent = "Open";
-    notesStatusText.textContent = "Ready";
-    notesStatusText.classList.remove("muted");
-    notesHintText.textContent = recordingFileName(latestMinutesPath);
-  } else {
-    processMeetingButton.textContent = "Build";
-    openMinutesButton.textContent = "Open";
-    notesStatusText.textContent = hasSelectedRecordings ? "Ready to build" : "Select recordings";
-    notesStatusText.classList.add("muted");
-    notesHintText.textContent = hasSelectedRecordings
-      ? notesBuildHint()
-      : "Choose one or more recordings as the source files.";
-  }
-
-  stopButton.disabled = !isMeetingLive || isProcessingNotes;
-  processMeetingButton.disabled = isRecordingActive || (!isProcessingNotes && (!hasSelectedRecordings || !notesEngineReady()));
-  openMinutesButton.disabled = isRecordingActive || isProcessingNotes || !latestMinutesPath;
-  if (checkCloudNotesButton) {
-    checkCloudNotesButton.disabled = isRecordingActive || isProcessingNotes || notesEngine?.value !== "aliyun-tingwu";
-  }
+  endMeetingButton.disabled = !connected && !connecting && !isRecordingActive;
+  stopButton.disabled = !connected;
 }
 
-function notesEngineReady() {
-  if (!notesEngine) {
-    return true;
-  }
-  if (notesEngine.value === "aliyun-tingwu") {
-    return aliyunTingwuConfigured;
-  }
-  if (notesEngine.value === "azure-fast") {
-    return azureConfigured;
-  }
-  if (notesEngine.value === "funasr") {
-    return funasrConfigured;
-  }
-  return true;
-}
 
-function notesBuildHint() {
-  if (notesEngine?.value === "aliyun-tingwu") {
-    const uploadLabel = aliyunTingwuUploadProvider === "tencent-relay" ? "Tencent Relay" : "Aliyun OSS";
-    if (!aliyunTingwuEnabled) {
-      return "Aliyun Tingwu is selected. Enable ALIYUN_TINGWU_ENABLED in .env to use cloud meeting notes.";
-    }
-    if (!aliyunTingwuConfigured) {
-      const missing = aliyunTingwuMissing.length ? ` Missing: ${aliyunTingwuMissing.join(", ")}.` : "";
-      return `Aliyun Tingwu needs its cloud settings before notes can run. Upload path: ${uploadLabel}.${missing}`;
-    }
-    return `Build Notes will use Aliyun Tingwu for speaker-separated cloud transcription and meeting summary via ${uploadLabel}.`;
-  }
-  if (notesEngine?.value === "azure-fast") {
-    if (!azureConfigured) {
-      return "Cloud Speech is selected, but Azure Speech to Text is not configured yet.";
-    }
-    return "Build Notes will use Azure Speech to Text, then refine the transcript locally.";
-  }
-  if (notesEngine?.value === "funasr") {
-    if (!funasrConfigured) {
-      return "Local FunASR is selected, but FunASR is not installed yet.";
-    }
-    return "Build Notes will use local FunASR transcription, keeping recordings on this computer.";
-  }
-  return "Build Notes will generate English-Chinese meeting minutes from the selected recordings.";
-}
 
-function setNotesProgress(percent = 0, stage = "", message = "", visible = false) {
-  if (!notesProgress || !notesProgressFill || !notesProgressPercent || !notesProgressStage) {
-    return;
-  }
-  const normalizedPercent = Math.max(0, Math.min(100, Number(percent) || 0));
-  const normalizedMessage = providerNeutralText(message);
-  notesProgress.classList.toggle("hidden", !visible);
-  notesProgressFill.style.width = `${normalizedPercent}%`;
-  notesProgressPercent.textContent = `${Math.round(normalizedPercent)}%`;
-  notesProgressStage.textContent = stage || "Preparing";
-  if (notesProgressDetail) {
-    notesProgressDetail.textContent = normalizedMessage || "Working on meeting notes.";
-    notesProgressDetail.title = normalizedMessage || "";
-  }
-  notesProgress.querySelector(".notes-progress-track")?.setAttribute("aria-valuenow", String(Math.round(normalizedPercent)));
-  if (message && !visible) {
-    notesHintText.textContent = normalizedMessage;
-  }
-}
 
-function stopNotesProgressPolling() {
-  if (notesProgressTimer) {
-    window.clearInterval(notesProgressTimer);
-    notesProgressTimer = null;
-  }
-}
 
-function startNotesProgressPolling() {
-  stopNotesProgressPolling();
-  setNotesProgress(2, "Queued", "Preparing selected recordings.", true);
-  notesProgressTimer = window.setInterval(refreshNotesProgress, 1000);
-  refreshNotesProgress();
-}
 
-async function refreshNotesProgress() {
-  try {
-    const response = await fetch("/api/process-recording-progress", { cache: "no-store" });
-    if (!response.ok) {
-      return;
-    }
-    const progress = await response.json();
-    const stage = progress.stage ? readableNotesStage(progress.stage) : "Processing";
-    const current = progress.total ? ` (${progress.current || 0}/${progress.total})` : "";
-    setNotesProgress(progress.percent || 0, `${stage}${current}`, progress.message || "", isProcessingNotes || progress.running);
-    if (!progress.running && progress.stage === "complete") {
-      setNotesProgress(100, "Complete", progress.message || "Meeting notes are ready.", true);
-    }
-  } catch (error) {
-    // Progress is best-effort; the main request still controls success/failure.
-  }
-}
 
 function setDelayHint(label, detail, isWarning = false) {
   const normalizedDetail = providerNeutralText(detail);
@@ -474,14 +201,6 @@ function updateDelayHintFromStatus(status, detail = "") {
   const isCloud = translationEngine.value === "azure";
   const inputLabel = audioSource.value === "microphone" ? "microphone" : "system audio";
 
-  if (isProcessingNotes) {
-    setDelayHint(
-      "Notes running",
-      "Post-meeting notes generation is using the computer. Live captions should stay paused.",
-      true,
-    );
-    return;
-  }
 
   if (isCloud && !azureConfigured) {
     setDelayHint(
@@ -662,29 +381,6 @@ function readAzureUsageEstimate() {
   }
 }
 
-function readableNotesStage(stage = "") {
-  const normalized = String(stage || "").toLowerCase();
-  const labels = {
-    queued: "Queued",
-    compressing: "Compressing",
-    uploading: "Uploading",
-    submitting: "Submitting",
-    waiting: "Waiting",
-    downloading: "Downloading",
-    transcribing: "Transcribing",
-    model: "Model",
-    model_loading: "Model",
-    model_ready: "Model Ready",
-    refining: "Refining",
-    writing: "Writing",
-    processed: "Processed",
-    combining: "Combining",
-    complete: "Complete",
-    failed: "Failed",
-    cancelled: "Cancelled",
-  };
-  return labels[normalized] || normalized.replace(/_/g, " ").replace(/^\w/, (char) => char.toUpperCase());
-}
 
 function normalizedAzureUsageEstimate() {
   const usage = readAzureUsageEstimate();
@@ -1751,29 +1447,6 @@ function stripSubtitleMarkup(text) {
     .trim();
 }
 
-function extractPostMeetingTranscriptText(markdown) {
-  const lines = String(markdown || "").split(/\r?\n/);
-  const body = [];
-  let inTranscript = false;
-  for (const rawLine of lines) {
-    const line = rawLine.trim();
-    if (/^##\s+Full Transcript/i.test(line)) {
-      inTranscript = true;
-      continue;
-    }
-    if (!inTranscript) {
-      continue;
-    }
-    if (/^##\s+/.test(line)) {
-      break;
-    }
-    if (!line || /^###\s+/.test(line) || /^[-*]\s+Audio:/i.test(line)) {
-      continue;
-    }
-    body.push(line);
-  }
-  return polishFinalChineseText(body.join(""));
-}
 
 function polishFinalChineseText(text) {
   return String(text || "")
@@ -1787,28 +1460,6 @@ function polishFinalChineseText(text) {
     .trim();
 }
 
-function renderQualityFinalTranscriptResult(payload) {
-  if (!isChineseSource()) {
-    return;
-  }
-  const text = extractPostMeetingTranscriptText(payload.transcriptText || "");
-  if (!text) {
-    return;
-  }
-  chineseTranslationHistory = [{
-    sequenceId: `quality-final-${Date.now()}`,
-    sourceText: text,
-    translatedText: text,
-    start: 0,
-    end: 0,
-    isFinal: true,
-    perf: { engine: payload.asrEngine || "funasr" },
-  }];
-  renderTextFlow(chineseSubtitleStack, chineseTranslationHistory, "translatedText", null, "translation");
-  chineseSubtitleStack.scrollTop = chineseSubtitleStack.scrollHeight;
-  noticeText.textContent = "Quality final ready";
-  localTargetSubtitle.textContent = "High-quality post-meeting transcript";
-}
 
 function dedupeChineseFlowEntries(entries, field) {
   const kept = [];
@@ -2002,7 +1653,7 @@ function updateEngineControls() {
     ? "Cloud mode: streaming live subtitles."
     : sourceLanguage.value === "zho_Hans"
     ? isQualityFinalMode()
-      ? "Local Chinese Quality: recording only; build notes manually after End."
+      ? "Local Chinese realtime captions."
       : isBalancedChineseMode()
       ? "Local Chinese captions: FunASR Streaming | Latency: -- ms"
       : "Local Chinese captions: FunASR Streaming | Latency: -- ms"
@@ -2053,7 +1704,6 @@ function recordTranscriptEntry(item, mode) {
 function updateExportButtons() {
   const hasTranscript = sessionTranscript.length > 0;
   downloadTranscriptButton.disabled = !hasTranscript;
-  downloadMinutesButton.disabled = !hasTranscript;
 }
 
 function meetingMetadata() {
@@ -2105,66 +1755,6 @@ function transcriptMarkdown() {
   return lines.join("\n");
 }
 
-function minutesMarkdown() {
-  const meta = meetingMetadata();
-  const usableEntries = sessionTranscript.filter((entry) => !entry.isNoise && (entry.sourceText || entry.translatedText));
-  const highlights = usableEntries
-    .filter((entry) => (entry.translatedText || entry.sourceText).length >= 16)
-    .slice(0, 10);
-  const actionKeywords = ["need", "should", "must", "follow up", "action", "todo", "next", "confirm", "decide", "owner", "deadline"];
-  const chineseActionKeywords = ["\u9700\u8981", "\u5e94\u8be5", "\u5fc5\u987b", "\u8ddf\u8fdb", "\u786e\u8ba4", "\u51b3\u5b9a", "\u8d1f\u8d23\u4eba", "\u622a\u6b62", "\u4e0b\u4e00\u6b65"];
-  const actionCandidates = usableEntries.filter((entry) => {
-    const source = String(entry.sourceText || "").toLowerCase();
-    const translated = String(entry.translatedText || "");
-    return actionKeywords.some((keyword) => source.includes(keyword))
-      || chineseActionKeywords.some((keyword) => translated.includes(keyword));
-  });
-
-  const lines = [
-    "# Meeting Minutes",
-    "",
-    `- Started: ${formatDateTime(meta.startedAt)}`,
-    `- Exported: ${formatDateTime(meta.exportedAt)}`,
-    `- Input: ${meta.inputLabel}`,
-    `- Source: ${meta.sourceLabel}`,
-    `- Engine: ${meta.engineLabel}`,
-    "",
-    "Speaker labels are pause-based turns, not verified voiceprints.",
-    "",
-    "## Summary Draft",
-    "",
-  ];
-
-  if (highlights.length) {
-    for (const entry of highlights) {
-      lines.push(`- ${entry.translatedText || entry.sourceText}`);
-    }
-  } else {
-    lines.push("- No final transcript text was captured yet.");
-  }
-
-  lines.push("", "## Action Candidates", "");
-  if (actionCandidates.length) {
-    for (const entry of actionCandidates.slice(0, 12)) {
-      lines.push(`- [${entry.turnLabel} ${formatTimestamp(entry.start)}] ${entry.translatedText || entry.sourceText}`);
-    }
-  } else {
-    lines.push("- No obvious action items detected automatically.");
-  }
-
-  lines.push("", "## Full Transcript", "");
-  for (const entry of sessionTranscript) {
-    lines.push(`### ${entry.turnLabel} | ${formatTimestamp(entry.start)}-${formatTimestamp(entry.end)}`);
-    lines.push("");
-    lines.push(`Source: ${entry.sourceText}`);
-    if (entry.translatedText) {
-      lines.push("");
-      lines.push(`Chinese: ${entry.translatedText}`);
-    }
-    lines.push("");
-  }
-  return lines.join("\n");
-}
 
 function downloadMarkdown(filenamePrefix, content) {
   const timestamp = new Date().toISOString().replace(/[:.]/g, "-").slice(0, 19);
@@ -2248,7 +1838,7 @@ function isChineseSource() {
 }
 
 function isQualityFinalMode() {
-  return isChineseSource() && translationEngine.value !== "azure" && localLatencyPreset?.value === "quality";
+  return false;
 }
 
 function isBalancedChineseMode() {
@@ -2391,7 +1981,7 @@ function updateLanguageHints() {
   updateLocalMonitorLabels();
   if (subtitle) {
     subtitle.textContent = isChinese
-      ? "Chinese meeting notes - Chinese transcript"
+      ? "Chinese realtime transcription"
       : isJapanese
       ? "Japanese to Chinese - Cloud"
       : isSpanish
@@ -2400,7 +1990,7 @@ function updateLanguageHints() {
   }
   if (isCloud) {
     perfText.textContent = isChinese
-      ? "Cloud Chinese: zh-CN transcription for bilingual notes."
+      ? "Cloud Chinese: zh-CN realtime transcription."
       : isJapanese
       ? "Cloud Japanese: ja-JP -> zh-Hans live translation."
       : isSpanish
@@ -2414,7 +2004,7 @@ function updateLanguageHints() {
     ? "Local Japanese is not optimized here. Use Cloud for Japanese -> Chinese."
     : isChinese
     ? isQualityFinalMode()
-      ? "Local Chinese Quality: recording only; build notes manually after End."
+      ? "Local Chinese realtime captions."
       : isBalancedChineseMode()
       ? "Local Chinese captions: FunASR Streaming | Latency: -- ms"
       : "Local Chinese captions: FunASR Streaming | Latency: -- ms"
@@ -2443,14 +2033,14 @@ function updateLocalMonitorLabels() {
   englishDraftStack?.setAttribute("aria-hidden", isChinese ? "true" : "false");
   localSourceSubtitle.textContent = isChinese
     ? isQuality
-      ? "Recording only - notes manual"
+      ? "Live transcription"
       : isBalanced
       ? "FunASR Streaming partial"
       : "FunASR Streaming partial"
     : "Confirmed transcript";
   localTargetSubtitle.textContent = isChinese
     ? isQuality
-      ? "High-quality transcript built after meeting"
+      ? "Live transcript"
       : isBalanced
       ? "Final streaming subtitles"
       : "Final streaming subtitles"
@@ -2462,27 +2052,7 @@ function updateLocalMonitorLabels() {
   );
 }
 
-function notesRecordingLanguage() {
-  if (sourceLanguage.value === "spa_Latn") {
-    return "es-ES";
-  }
-  if (sourceLanguage.value === "jpn_Jpan") {
-    return "ja-JP";
-  }
-  if (sourceLanguage.value === "zho_Hans") {
-    return "zh-CN";
-  }
-  return "en";
-}
 
-function meetingNotesContext() {
-  return {
-    title: notesMeetingTitle?.value?.trim() || "",
-    participants: notesParticipants?.value?.trim() || "",
-    keywords: notesKeywords?.value?.trim() || "",
-    background: notesBackground?.value?.trim() || "",
-  };
-}
 
 function downsampleAudioBuffer(input, sourceRate, targetRate = 16000) {
   if (sourceRate === targetRate) {
@@ -2652,7 +2222,6 @@ function start() {
   meetingStartedAt = new Date();
   recordingStartedAt = null;
   currentRecordingPath = "";
-  latestMinutesPath = "";
   isRecordingActive = true;
   liveSubtitle = null;
   autoFollowSubtitles = true;
@@ -2689,7 +2258,7 @@ function start() {
       isCloud
         ? `Connecting to cloud speech translation using ${selectedAudioLabel}.`
         : qualityFinalMode
-        ? "Recording only. End saves the recording; notes are manual."
+        ? "Live transcription. End saves the recording."
         : isBalancedChineseMode()
         ? "Preparing FunASR Streaming. End saves the recording only."
         : "Preparing low-latency local pipeline.",
@@ -2872,202 +2441,19 @@ async function endMeeting() {
     const endedRecording = payload.endedRecording || currentRecordingPath;
     if (endedRecording) {
       currentRecordingPath = endedRecording;
-      selectedRecordingPaths.add(endedRecording);
     }
-    logText.textContent = "Recording session closed. Choose recordings and click Build Notes if needed.";
+    logText.textContent = "Recording session closed.";
     updateRecordingPanel("ended");
-    setStatus("Stopped", "Meeting ended. Recording saved; notes are manual.");
-    await refreshRecordings(endedRecording);
+    setStatus("Stopped", "Translation stopped. Recording saved.");
   } catch (error) {
     setStatus("Error", error.message || "Could not end meeting.");
   }
 }
 
-async function processMeetingRecording(options = {}) {
-  if (isProcessingNotes) {
-    await cancelMeetingNotes();
-    return;
-  }
-  if (isRecordingActive) {
-    return;
-  }
-  isProcessingNotes = true;
-  latestMinutesPath = "";
-  notesAbortController = new AbortController();
-  notesTimeoutId = window.setTimeout(() => {
-    cancelMeetingNotes("Meeting notes timed out. Try a shorter recording.");
-  }, 30 * 60 * 1000);
-  startNotesProgressPolling();
-  updateMeetingActionButtons();
-  noticeText.textContent = "Processing meeting notes";
-  const recordings = options.recordings || selectedRecordings();
-  const requestedNotesEngine = options.notesEngine || notesEngine?.value || "aliyun-tingwu";
-  logText.textContent = `Building notes from ${recordings.length} selected recording(s). You can cancel this if it takes too long.`;
-  updateDelayHintFromStatus("Creating notes", logText.textContent);
-  try {
-    const response = await fetch("/api/process-recording", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        recordings,
-        engine: translationEngine.value,
-        notesEngine: requestedNotesEngine,
-        tingwuUploadProvider: aliyunTingwuUploadProvider || "oss",
-        notesLanguage: notesRecordingLanguage(),
-        meetingContext: meetingNotesContext(),
-      }),
-      signal: notesAbortController.signal,
-    });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(providerNeutralText(payload.detail || "Post-meeting processing failed."));
-    }
 
-    const minutesPreview = (payload.minutesText || "").slice(0, 1600).trim();
-    latestMinutesPath = payload.minutes || "";
-    noticeText.textContent = "Meeting notes ready";
-    setNotesProgress(100, "Complete", "Meeting notes are ready.", true);
-    logText.textContent = providerNeutralText([
-      "Post-meeting files generated.",
-      payload.notesMode || notesBuildHint(),
-      `ASR engine: ${payload.asrEngine || "auto"}`,
-      `Recording: ${payload.recording}`,
-      `Transcript: ${payload.transcript}`,
-      `Minutes: ${payload.minutes}`,
-      "",
-      minutesPreview || payload.log || "No preview text returned.",
-    ].join("\n"));
-    if (options.renderQualityFinal) {
-      renderQualityFinalTranscriptResult(payload);
-    }
-    setStatus("Stopped", "Meeting notes ready.");
-  } catch (error) {
-    if (error.name === "AbortError") {
-      noticeText.textContent = "Meeting notes cancelled";
-      setNotesProgress(0, "Cancelled", "Meeting notes generation was cancelled.", false);
-      setStatus("Stopped", "Meeting notes generation was cancelled.");
-      logText.textContent = "Post-meeting notes generation was cancelled. Choose recordings and build again when ready.";
-    } else {
-      noticeText.textContent = "Meeting notes failed";
-      const message = providerNeutralText(error.message || "Post-meeting processing failed.");
-      setNotesProgress(0, "Failed", message, false);
-      setStatus("Error", message);
-      logText.textContent = message;
-    }
-  } finally {
-    if (notesTimeoutId) {
-      window.clearTimeout(notesTimeoutId);
-      notesTimeoutId = null;
-    }
-    notesAbortController = null;
-    stopNotesProgressPolling();
-    isProcessingNotes = false;
-    updateMeetingActionButtons();
-  }
-}
 
-async function cancelMeetingNotes(message = "Meeting notes generation was cancelled.") {
-  try {
-    await fetch("/api/cancel-process-recording", { method: "POST" });
-  } catch (error) {
-    // The local abort below still releases the UI.
-  }
-  if (notesAbortController) {
-    notesAbortController.abort();
-  }
-  stopNotesProgressPolling();
-  setNotesProgress(0, "Cancelled", message, false);
-  noticeText.textContent = "Meeting notes cancelled";
-  logText.textContent = message;
-}
 
-async function checkCloudNotesSetup() {
-  if (notesEngine?.value !== "aliyun-tingwu") {
-    return;
-  }
-  if (checkCloudNotesButton) {
-    checkCloudNotesButton.disabled = true;
-    checkCloudNotesButton.textContent = "Checking";
-  }
-  notesStatusText.textContent = "Checking";
-  notesStatusText.classList.add("muted");
-  notesHintText.textContent = "Checking Aliyun Tingwu cloud notes setup.";
-  try {
-    const uploadProvider = aliyunTingwuUploadProvider || "oss";
-    const response = await fetch(`/api/aliyun-tingwu-diagnostics?uploadProvider=${encodeURIComponent(uploadProvider)}`);
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(payload.detail || "Cloud notes setup check failed.");
-    }
-    const checks = Array.isArray(payload.checks) ? payload.checks : [];
-    const failed = checks.filter((item) => !item.ok);
-    aliyunTingwuConfigured = Boolean(payload.ok);
-    aliyunTingwuEnabled = checks.some((item) => item.name === "Tingwu Enabled" && item.ok) || aliyunTingwuEnabled;
-    aliyunTingwuMissing = failed
-      .filter((item) => ["Tingwu AppKey", "OSS Bucket", "Tencent Relay URL"].includes(item.name))
-      .map((item) => item.name);
-    notesStatusText.textContent = payload.ok ? "Cloud ready" : "Cloud setup";
-    notesStatusText.classList.toggle("muted", !payload.ok);
-    notesHintText.textContent = payload.ok
-      ? "Aliyun Tingwu is ready for cloud meeting notes."
-      : failed.map((item) => item.message).join(" ");
-    logText.textContent = checks
-      .map((item) => `${cloudCheckStatusText(item)} - ${item.name}: ${item.message}`)
-      .join("\n");
-    noticeText.textContent = payload.ok ? "Cloud notes ready" : "Cloud setup incomplete";
-  } catch (error) {
-    const message = providerNeutralText(error.message || "Could not check Aliyun Tingwu setup.");
-    notesStatusText.textContent = "Check failed";
-    notesStatusText.classList.add("muted");
-    notesHintText.textContent = message;
-    logText.textContent = message;
-  } finally {
-    if (checkCloudNotesButton) {
-      checkCloudNotesButton.disabled = false;
-      checkCloudNotesButton.textContent = "Check";
-    }
-    updateMeetingActionButtons();
-  }
-}
 
-async function openLatestMinutes() {
-  if (isRecordingActive || isProcessingNotes || !latestMinutesPath) {
-    return;
-  }
-  openMinutesButton.disabled = true;
-  try {
-    const response = await fetch("/api/latest-minutes");
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok || !payload.available) {
-      throw new Error(providerNeutralText(payload.detail || "No meeting notes file found."));
-    }
-    latestMinutesPath = payload.minutes || latestMinutesPath;
-    window.open("/api/latest-minutes-file", "_blank", "noopener");
-    noticeText.textContent = "Meeting notes opened";
-    logText.textContent = `Opened: ${latestMinutesPath}`;
-  } catch (error) {
-    noticeText.textContent = "Open notes failed";
-    logText.textContent = providerNeutralText(error.message || "Could not open meeting notes.");
-  } finally {
-    updateMeetingActionButtons();
-  }
-}
-
-async function openProjectFolder(kind) {
-  const label = kind === "notes" ? "notes folder" : "recordings folder";
-  try {
-    const response = await fetch(`/api/open-folder/${kind}`, { method: "POST" });
-    const payload = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      throw new Error(providerNeutralText(payload.detail || `Could not open ${label}.`));
-    }
-    noticeText.textContent = kind === "notes" ? "Notes folder opened" : "Recordings folder opened";
-    logText.textContent = `Opened: ${payload.path || label}`;
-  } catch (error) {
-    noticeText.textContent = "Open folder failed";
-    logText.textContent = providerNeutralText(error.message || `Could not open ${label}.`);
-  }
-}
 
 function handlePrimaryMeetingAction() {
   start();
@@ -3076,18 +2462,8 @@ function handlePrimaryMeetingAction() {
 startButton.addEventListener("click", handlePrimaryMeetingAction);
 stopButton.addEventListener("click", stop);
 endMeetingButton.addEventListener("click", endMeeting);
-processMeetingButton.addEventListener("click", processMeetingRecording);
-openMinutesButton.addEventListener("click", openLatestMinutes);
-checkCloudNotesButton?.addEventListener("click", checkCloudNotesSetup);
-refreshRecordingsButton?.addEventListener("click", () => refreshRecordings(currentRecordingPath));
-openRecordingsFolderButton?.addEventListener("click", () => openProjectFolder("recordings"));
-openNotesFolderButton?.addEventListener("click", () => openProjectFolder("notes"));
-notesUtilityToggle?.addEventListener("click", () => toggleUtilityPanel("notes"));
 downloadTranscriptButton.addEventListener("click", () => {
   downloadMarkdown("meeting-transcript", transcriptMarkdown());
-});
-downloadMinutesButton.addEventListener("click", () => {
-  downloadMarkdown("meeting-minutes", minutesMarkdown());
 });
 translationEngine.addEventListener("change", updateEngineControls);
 translationEngine.addEventListener("change", updateLanguageHints);
@@ -3096,7 +2472,6 @@ audioSource.addEventListener("change", () => {
   window.localStorage.setItem(audioSourceStorageKey, audioSource.value);
   updateDelayHintFromStatus(statusText.textContent || "Ready");
 });
-notesEngine?.addEventListener("change", updateMeetingActionButtons);
 localAsrPreset.addEventListener("change", applyLocalAsrPreset);
 localLatencyPreset.addEventListener("change", applyLocalLatencyPreset);
 sourceLanguage.addEventListener("change", updateLanguageHints);
@@ -3117,5 +2492,3 @@ updateLanguageHints();
 renderAzureUsage();
 startAzureUsageCloudPolling();
 loadRuntimeConfig();
-refreshLatestMinutesState();
-refreshRecordings();

@@ -1,12 +1,16 @@
-﻿<!doctype html>
+<!doctype html>
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=english-ui-20260918" />
+    <link rel="stylesheet" href="/static/style.css?v=soft-controls-20260929" />
   </head>
   <body>
+    <div class="caption-view-tools">
+      <span id="captionViewWarning" role="status" hidden></span>
+      <button id="exitCaptionView" type="button" title="Return to full view (Esc)">Full view</button>
+    </div>
     <main class="studio">
       <header class="studio-topbar">
         <div class="brand">
@@ -41,34 +45,7 @@
           <button id="stopButton" class="secondary-flow-button hidden" disabled>Pause Captions</button>
           <a class="editor-link hidden" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
           <button id="downloadTranscriptButton" class="export-button hidden" disabled>Transcript</button>
-          <button id="downloadMinutesButton" class="export-button hidden" disabled>Minutes</button>
 
-          <section class="workbench-utilities" aria-label="Secondary meeting tools">
-            <div class="utility-card notes-utility">
-              <button class="utility-toggle notes-toggle" id="notesUtilityToggle" type="button" aria-label="Meeting notes" aria-expanded="false" aria-controls="notesUtilityBody"></button>
-              <div class="utility-body hidden" id="notesUtilityBody">
-                <label class="notes-engine-control tool-select-row" title="Notes engine">
-                  <span class="field-icon notes-mini-icon" aria-label="Notes engine"></span>
-                  <select id="notesEngine">
-                    <option value="aliyun-tingwu" selected>Cloud</option>
-                    <option value="funasr">Local</option>
-                  </select>
-                </label>
-                <p class="panel-line" id="notesHintText">After the meeting, choose one or more recordings and build English-Chinese notes.</p>
-                <div class="recording-picker" aria-label="Recorded meeting files">
-                  <div class="recording-list" id="recordingList"></div>
-                  <div class="panel-action-row">
-                    <button class="panel-action-button is-primary" id="processMeetingButton" type="button" title="Build Notes">Build</button>
-                    <button class="panel-action-button" id="openMinutesButton" type="button" title="Open Notes" disabled>Open</button>
-                    <button class="panel-action-button" id="checkCloudNotesButton" type="button" title="Cloud Check">Check</button>
-                    <button class="panel-action-button" id="refreshRecordingsButton" type="button">Refresh</button>
-                    <button class="folder-action-button" id="openRecordingsFolderButton" type="button" title="Open recordings folder">Rec</button>
-                    <button class="folder-action-button" id="openNotesFolderButton" type="button" title="Open notes folder">Files</button>
-                  </div>
-                </div>
-              </div>
-            </div>
-          </section>
 
           <div class="hidden internal-settings-controls" aria-hidden="true">
             <select id="translationEngine">
@@ -95,7 +72,7 @@
             <select id="localLatencyPreset" class="local-control local-extension internal-control">
               <option value="low" selected>Low</option>
               <option value="steady">Balanced</option>
-              <option value="quality">Quality</option>
+
             </select>
             <select id="chunkSeconds" class="local-control local-extension internal-control">
               <option value="1">1s</option>
@@ -116,6 +93,7 @@
         <span id="streamConnection" data-state="idle">Captions: Not connected</span>
         <span id="liveConnectionActivity">Ready to start</span>
         <button id="retryConnectionCheck" type="button">Check connection</button>
+        <button id="enterCaptionView" type="button" title="Show only captions">Captions only</button>
       </section>
       <section class="studio-grid">
         <aside class="side-panel" aria-label="Runtime information">
@@ -153,20 +131,6 @@
               </div>
             </div>
             <p class="panel-line usage-note" id="azureUsageSyncText">This browser only. Cloud sync not connected.</p>
-          </div>
-          <div class="panel-section summary-card notes-summary">
-            <p class="panel-label panel-icon notes-panel-icon" title="Meeting notes" aria-label="Meeting notes"></p>
-            <span class="notice-pill muted" id="notesStatusText">Not created yet</span>
-            <div class="notes-progress hidden" id="notesProgress" aria-label="Meeting notes progress">
-              <div class="notes-progress-header">
-                <span id="notesProgressStage">Preparing</span>
-                <span id="notesProgressPercent">0%</span>
-              </div>
-              <p class="notes-progress-detail" id="notesProgressDetail">Preparing selected recordings.</p>
-              <div class="notes-progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0">
-                <div class="notes-progress-fill" id="notesProgressFill"></div>
-              </div>
-            </div>
           </div>
           <p class="panel-line hidden" id="logText">Ready.</p>
           <p class="panel-line hidden" id="perfText">Waiting for first subtitle.</p>
@@ -225,9 +189,10 @@
       </footer>
     </main>
 
-    <script src="/static/connection-status.js?v=english-ui-20260918"></script>
-    <script src="/static/app.js?v=english-ui-20260918"></script>
-    <script src="/static/caption-settings.js?v=english-ui-20260918"></script>
+    <script src="/static/connection-status.js?v=live-only-20260929"></script>
+    <script src="/static/app.js?v=live-only-20260929"></script>
+    <script src="/static/caption-settings.js?v=live-only-20260929"></script>
+    <script src="/static/caption-view.js?v=caption-view-20260929"></script>
   </body>
 </html>
 
