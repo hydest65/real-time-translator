@@ -1,0 +1,168 @@
+/* Adjustable alpha belongs only to this backing layer. */
+html.desktop-surface, html.desktop-surface body { background: transparent !important; }
+.desktop-app {
+  --text: #283445; --muted: #68788c; --bg: #f8fafd; --bg-soft: #f1f5fa;
+  --dark-shadow: transparent; --light-shadow: transparent; --accent-strong: #416b9e;
+  color-scheme: light; font-family: "Segoe UI", "Microsoft YaHei", sans-serif;
+  position: relative; display: grid; grid-template-rows: auto minmax(0, 1fr);
+  border: 1px solid rgba(255,255,255,.7); border-radius: 16px; overflow: hidden; isolation: isolate;
+}
+.desktop-app::before { content: ''; position: absolute; inset: 0; z-index: -1; border-radius: inherit; background: rgba(248,250,253,var(--desktop-background-alpha)); }
+.desktop-titlebar {
+  display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap;
+  gap: 0 12px; min-height: 46px; padding: 6px 14px; user-select: none;
+  -webkit-app-region: drag; border-bottom: 1px solid rgba(106,126,153,.12);
+}
+.desktop-drag-label { display: flex; align-items: center; gap: 8px; white-space: nowrap; font-size: 12px; font-weight: 600; letter-spacing: .15px; color: #4b5b70; }
+.desktop-brand-mark { width: 15px; height: 15px; display: inline-grid; grid-template-columns: repeat(3,2px); align-items: center; justify-content: center; gap: 2px; }
+.desktop-brand-mark i { height: 7px; border-radius: 2px; background: #7694ba; }
+.desktop-brand-mark i:nth-child(2) { height: 13px; }
+.desktop-activity-indicator { flex: 0 0 15px; color: #94a1b1; }
+.desktop-activity-indicator i { background: currentColor; transform-origin: center; }
+.desktop-activity-indicator[data-state='active'] { color: #4c9475; }
+.desktop-activity-indicator[data-state='active'] i { animation: desktopLiveWave 1050ms ease-in-out infinite; }
+.desktop-activity-indicator[data-state='active'] i:nth-child(2) { animation-delay: 150ms; }
+.desktop-activity-indicator[data-state='active'] i:nth-child(3) { animation-delay: 300ms; }
+.desktop-activity-indicator[data-state='pending'] { color: #7694ba; animation: desktopConnectionPulse 1500ms ease-in-out infinite; }
+.desktop-activity-indicator[data-state='error'] { color: #b66275; }
+@keyframes desktopLiveWave { 0%,100% { transform: scaleY(.5); } 50% { transform: scaleY(1); } }
+@keyframes desktopConnectionPulse { 0%,100% { opacity: .45; } 50% { opacity: 1; } }
+.desktop-titlebar nav { display: flex; align-items: center; gap: 7px; -webkit-app-region: no-drag; }
+.desktop-control-group { display: flex; align-items: center; gap: 2px; }
+.desktop-app button svg { display: block; width: 17px; height: 17px; pointer-events: none; }
+.desktop-titlebar button { display: grid; place-items: center; width: 30px; padding: 0; }
+.desktop-window-controls { padding-left: 6px; border-left: 1px solid rgba(106,126,153,.16); }
+.desktop-titlebar button, .desktop-app .caption-settings button, .desktop-app .connection-strip button {
+  min-height: 30px; border: 0; border-radius: 8px; padding: 0 8px; background: transparent; box-shadow: none;
+  color: #5d6d82; font-family: inherit; font-size: 11px; font-weight: 600; line-height: 1.2;
+  cursor: pointer; transition: background-color 140ms ease, color 140ms ease;
+}
+.desktop-titlebar button:hover, .desktop-app .caption-settings button:hover, .desktop-app .connection-strip button:hover { background: #e9eff7; color: #2f527d; }
+.desktop-titlebar button:disabled { opacity: .4; cursor: default; }
+.desktop-titlebar #desktopStart { color: #345f93; background: #e6eef9; width: 34px; padding: 0; }
+.desktop-titlebar #desktopStart:hover:not(:disabled) { background: #d7e5f8; }
+.desktop-titlebar #desktopPin[aria-pressed='true'], .desktop-titlebar #desktopSettings[aria-expanded='true'] { color: #345f93; background: #e6eef9; }
+.desktop-titlebar #desktopClose { font-size: 18px; font-weight: 400; }
+.desktop-titlebar #desktopMinimize { font-size: 14px; font-weight: 400; }
+.desktop-titlebar #desktopClose:hover { color: #9f4856; background: #f8e6e9; }
+.desktop-app button:focus-visible, .desktop-app select:focus-visible, .desktop-app input:focus-visible { outline: 2px solid #7694ba; outline-offset: 2px; }
+.desktop-app .studio { height: 100%; min-width: 0; padding: 10px 18px 14px; gap: 8px; grid-template-rows: auto auto minmax(0,1fr); }
+.desktop-app .brand, .desktop-app .toolbar, .desktop-app .studio-topbar, .desktop-app .subtitle-box, .desktop-app .split-subtitle-box,
+.desktop-app .subtitle-row, .desktop-app .subtitle-row.live, .desktop-app .subtitle-stream, .desktop-app .english-pane, .desktop-app .panel-section { background: transparent; box-shadow: none; }
+.desktop-app .studio-topbar > .brand, .desktop-app #startButton, .desktop-app #endMeetingButton, .desktop-app #enterCaptionView { display: none; }
+.desktop-app .studio-topbar { border-radius: 0; }
+.desktop-app .studio-topbar > .toolbar { padding: 0; gap: 8px; }
+.desktop-app .toolbar label { min-width: 110px; min-height: 32px; padding: 4px 9px; grid-template-columns: 15px minmax(0,1fr); gap: 6px; border: 1px solid rgba(117,137,164,.2); border-radius: 8px; background: rgba(255,255,255,.32); box-shadow: none; font-weight: 400; }
+.desktop-app .toolbar .speech-field { min-width: 160px; }
+.desktop-app .toolbar select { font-weight: 400; font-size: 12px; color: #465870; background: transparent; }
+.desktop-app .field-icon { opacity: .6; }
+.desktop-app .connection-strip { min-width: 0; flex-wrap: nowrap; gap: 12px; padding: 0 2px; border-radius: 0; background: transparent; box-shadow: none; color: var(--muted); font-weight: 400; font-size: 10px; }
+.desktop-app .connection-strip > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.desktop-app #liveConnectionActivity { flex: 1 1 0; min-width: 0; }
+.desktop-app .connection-strip [data-state='online'] { color: #467564; font-weight: 400; }
+.desktop-app .connection-strip [data-state='pending'] { color: #977941; font-weight: 400; }
+.desktop-app .connection-strip [data-state='error'] { color: #a34c60; font-weight: 500; }
+.desktop-app .connection-strip button { min-height: 24px; font-size: 10px; padding: 0 6px; }
+.desktop-app .studio-grid { gap: 18px; grid-template-columns: 136px minmax(0,1fr); }
+.desktop-app .side-panel { gap: 14px; padding: 8px 14px 8px 0; border-right: 1px solid rgba(106,126,153,.12); }
+.desktop-app .panel-section { padding: 0; border-radius: 0; }
+.desktop-app .panel-icon, .desktop-app .usage-icon, .desktop-app .usage-grid > div { background: transparent; box-shadow: none; }
+.desktop-app .desktop-line-icon::before, .desktop-app .desktop-line-icon::after { display: none; }
+.desktop-app .desktop-line-icon { display: grid; place-items: center; color: #7690ac; opacity: 1; }
+.desktop-app .desktop-line-icon svg { width: 17px; height: 17px; }
+.desktop-app .status-panel-icon::before { background: #7690ac; }
+.desktop-app .notice-pill { background: #eef3f9; color: #65778d; box-shadow: none; font-size: 10px; font-weight: 400; border-radius: 6px; }
+.desktop-app .panel-line, .desktop-app .usage-label { color: #748398; font-size: 10px; font-weight: 400; }
+.desktop-app .usage-grid strong { color: #465870; font-weight: 500; }
+.desktop-app .subtitle-box, .desktop-app .split-subtitle-box { border-radius: 0; grid-template-rows: 38px minmax(0,1fr); }
+.desktop-app .subtitle-box-header, .desktop-app .subtitle-box-header.compact { padding: 0 8px; }
+.desktop-app .monitor-title { color: #4b5b70; font-size: 11px; font-weight: 500; letter-spacing: .2px; }
+.desktop-app .monitor-badge { background: #edf3f9; color: #7690ac; box-shadow: none; font-size: 9px; font-weight: 500; border-radius: 5px; padding: 3px 6px; }
+.desktop-app .subtitle-stream { margin: 0; padding: 12px 8px; gap: 22px; border-radius: 0; overflow-y: auto; }
+.desktop-app .subtitle-row, .desktop-app.caption-only .subtitle-row { width: 100%; padding: 0; border-radius: 0; }
+.desktop-app .subtitle-row.new-turn::before { display: none; }
+.desktop-app .translation, .desktop-app .subtitle-row.live .translation, .desktop-app .translation-flow-text, .desktop-app .flow-text, .desktop-app .funasr-live-text { color: var(--translation-font-color, #283445); font-weight: 500; line-height: 1.4; }
+.desktop-app .source, .desktop-app .english-flow-text, .desktop-app .english-context-stream .flow-text { color: var(--source-font-color, #68788c); font-weight: 400; line-height: 1.4; }
+.desktop-app .translation { margin-top: 10px; letter-spacing: .02em; }
+.desktop-app .timestamp { color: #8794a5; font-size: 9px; font-weight: 400; margin-top: 12px; }
+.desktop-app .subtitle-stream:empty::before { content: '字幕将在这里显示'; margin: auto; color: #8290a3; font-size: 15px; font-weight: 400; }
+.desktop-app .subtitle-stream:focus-visible { outline: 1px solid rgba(118,148,186,.65); outline-offset: -1px; border-radius: 8px; }
+/* Preserve native scrolling while hiding the visual scrollbar and gutter. */
+.desktop-app .subtitle-stream, .desktop-app .side-panel, .desktop-app .caption-settings { scrollbar-width: none; scrollbar-gutter: auto; }
+.desktop-app .subtitle-stream::-webkit-scrollbar, .desktop-app .side-panel::-webkit-scrollbar, .desktop-app .caption-settings::-webkit-scrollbar { display: none; width: 0; height: 0; }
+.desktop-app.caption-only .caption-view-tools { display: none; }
+.desktop-app.caption-only .studio { grid-template-rows: minmax(0,1fr); padding: 0; gap: 0; }
+.desktop-app.caption-only .studio-grid { grid-template-columns: minmax(0,1fr); }
+.desktop-app.caption-only #subtitleStack, .desktop-app.caption-only .local-subtitle-layout.target-only #chineseSubtitleStack { padding: 18px 22px 20px; }
+.desktop-app.caption-only .english-pane { padding-top: 0; margin: 0; }
+.desktop-app.caption-only .subtitle-stream { border-radius: 0; }
+.desktop-app .caption-settings { display: none; }
+.desktop-app.desktop-settings-open .caption-settings {
+  position: absolute; z-index: 25; top: calc(var(--desktop-titlebar-height,46px) + 10px); right: 12px;
+  width: min(344px,calc(100% - 24px)); max-height: calc(100% - var(--desktop-titlebar-height,46px) - 22px);
+  margin: 0; display: grid; grid-template-columns: minmax(0,1fr); gap: 14px; padding: 16px;
+  overflow-y: auto; overscroll-behavior: contain; border: 1px solid #e0e7ef; border-radius: 14px;
+  background: #f9fbfe; box-shadow: 0 10px 28px rgba(39,61,87,.13); color: #5d6d82; font-family: inherit; font-size: 11px; font-weight: 400;
+}
+.desktop-settings-heading { display: flex; align-items: center; justify-content: space-between; }
+.desktop-settings-heading h2 { margin: 0; color: #3e5067; font-size: 13px; font-weight: 600; }
+.desktop-app .caption-settings #desktopSettingsClose { min-height: 22px; font-size: 18px; font-weight: 400; }
+.desktop-app .caption-size-control { display: grid; grid-template-columns: 78px minmax(0,1fr) 44px 14px; gap: 8px; align-items: center; }
+.desktop-app .caption-size-control label { font-size: 11px; }
+.desktop-app .caption-size-control input[type='number'] { width: 44px; min-height: 28px; padding: 4px 2px; border: 1px solid #e2e8f0; border-radius: 6px; background: #f0f4f9; box-shadow: none; color: #3e5067; font-weight: 400; text-align: center; appearance: textfield; -moz-appearance: textfield; }
+.desktop-app .caption-size-control input[type='number']::-webkit-inner-spin-button, .desktop-app .caption-size-control input[type='number']::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
+.desktop-app .caption-size-control input[type='range'] { appearance: none; min-width: 0; width: 100%; height: 18px; margin: 0; background: transparent; cursor: pointer; }
+.desktop-app .caption-color-control { display: grid; grid-template-columns: 78px 34px minmax(0,1fr); gap: 8px; align-items: center; }
+.desktop-app .caption-color-control label { font-size: 11px; }
+.desktop-app .caption-color-control input[type='color'] { border-color: #dce5ef; background: #fff; }
+.desktop-app .caption-color-control input[type='text'] { width: 100%; min-height: 28px; padding: 4px 8px; border: 1px solid #e2e8f0; border-radius: 6px; background: #f0f4f9; color: #3e5067; font-family: inherit; font-size: 11px; font-weight: 400; }
+.desktop-app .caption-color-control input[aria-invalid='true'] { border-color: #b97b86; }
+.desktop-app input[type='range']::-webkit-slider-runnable-track { height: 3px; border-radius: 3px; background: #dce5ef; }
+.desktop-app input[type='range']::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; margin-top: -4.5px; border-radius: 50%; background: #7694ba; border: 2px solid #f9fbfe; box-shadow: 0 0 0 1px #7694ba; }
+.desktop-app .desktop-background-control { grid-template-columns: 78px minmax(0,1fr) 66px; }
+#desktopOpacityValue { text-align: right; color: #68788c; font-size: 11px; font-variant-numeric: tabular-nums; }
+.desktop-settings-actions { display: flex; gap: 4px; padding-top: 10px; border-top: 1px solid #e4eaf2; }
+.desktop-app .caption-settings button, .desktop-app .connection-strip button { display: grid; place-items: center; width: 30px; padding: 0; }
+.desktop-app .caption-visibility-control { display: grid; grid-template-columns: 78px minmax(0,1fr); gap: 8px; }
+.desktop-app .caption-visibility-options { display: grid; grid-template-columns: repeat(2,minmax(0,1fr)); gap: 5px; padding: 3px; border: 1px solid #e2e8f0; border-radius: 9px; background: #f0f4f9; }
+.desktop-app .caption-visibility-options button { display: flex; align-items: center; justify-content: center; gap: 5px; width: 100%; min-width: 0; min-height: 29px; padding: 0 6px; border-radius: 6px; color: #7b8a9d; font-size: 10px; font-weight: 500; opacity: 1; }
+.desktop-app .caption-visibility-options button svg { width: 14px; height: 14px; }
+.desktop-app .caption-visibility-options button[aria-pressed='true'] { background: #e0eaf7; color: #345f93; }
+.desktop-app .caption-visibility-options button:hover { background: #e6edf6; }
+.desktop-app .caption-visibility-notice { color: #8290a3; font-size: 12px; font-weight: 400; }
+.desktop-app #captionSettingsStatus { color: #8290a3; font-size: 10px; font-weight: 400; }
+.desktop-cloud-form { display: grid; gap: 12px; border-top: 1px solid #e4eaf2; padding-top: 14px; }
+.desktop-cloud-form[hidden] { display: none; }
+.desktop-cloud-form label { display: grid; gap: 6px; }
+.desktop-cloud-form input { min-width: 0; width: 100%; padding: 8px; border-radius: 7px; border: 1px solid #dce5ef; background: #fff; color: #3e5067; font-size: 12px; }
+.desktop-app .desktop-cloud-form button { justify-self: end; background: #e6eef9; color: #345f93; width: 38px; padding: 0; }
+.desktop-cloud-form p { margin: 0; color: #748398; font-size: 10px; line-height: 1.6; }
+.desktop-status { font-size: 10px; color: #a34c60; flex: 1 1 100%; -webkit-app-region: no-drag; }
+.desktop-status:not([hidden]) { padding: 4px 0; }
+.desktop-resize { position: absolute; z-index: 100; touch-action: none; -webkit-app-region: no-drag; }
+.desktop-resize-n, .desktop-resize-s { left: 12px; right: 12px; height: 7px; cursor: ns-resize; }
+.desktop-resize-n { top: 0; } .desktop-resize-s { bottom: 0; }
+.desktop-resize-w, .desktop-resize-e { top: 12px; bottom: 12px; width: 7px; cursor: ew-resize; }
+.desktop-resize-w { left: 0; } .desktop-resize-e { right: 0; }
+.desktop-resize-ne, .desktop-resize-nw, .desktop-resize-se, .desktop-resize-sw { width: 14px; height: 14px; }
+.desktop-resize-nw { top: 0; left: 0; cursor: nwse-resize; }
+.desktop-resize-ne { top: 0; right: 0; cursor: nesw-resize; }
+.desktop-resize-sw { bottom: 0; left: 0; cursor: nesw-resize; }
+.desktop-resize-se { bottom: 0; right: 0; cursor: nwse-resize; }
+@media (max-width: 980px) { .desktop-app .studio-grid { grid-template-columns: minmax(0,1fr); } }
+@media (max-width: 540px) {
+  .desktop-titlebar { gap: 0 4px; padding: 6px 8px; }
+  .desktop-drag-label { gap: 5px; font-size: 11px; letter-spacing: 0; }
+  .desktop-titlebar nav { gap: 3px; }
+  .desktop-titlebar button { padding-inline: 6px; font-size: 10px; }
+  .desktop-titlebar #desktopStart { padding: 0; }
+  .desktop-window-controls { padding-left: 3px; }
+  .desktop-app .studio { padding: 8px 12px 12px; gap: 5px; }
+  .desktop-app .connection-strip { gap: 8px; }
+  .desktop-app #liveConnectionActivity { display: none; }
+  .desktop-app.caption-only #subtitleStack, .desktop-app.caption-only .local-subtitle-layout.target-only #chineseSubtitleStack { padding: 14px 16px 16px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .desktop-app button { transition: none; }
+  .desktop-activity-indicator[data-state], .desktop-activity-indicator[data-state='active'] i { animation: none; }
+}
