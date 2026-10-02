@@ -1,77 +1,15 @@
-# Agent State
+# 当前交接状态
 
-## Current Working Directory
+更新时间：2026-10-03。项目：`real-time-translator`；桌面版本：**0.4.6**。
 
-`E:\Users\Administrator\Documents\Codex\2026-05-03-github\real-time-translator`
+当前任务是将本轮桌面应用及实时字幕改动同步到 GitHub。当前工作分支为 `codex/azure-usage-sync-panel`，目标仓库为 `hydest65/real-time-translator`；本文件不声明本轮提交或推送已经完成，应以最终 Git 与远端结果为准。
 
-## Current User Goal
+已完成的实现：Windows Cloud 便携应用、淡色半透明图标界面、置顶与八向缩放、10–160 px 独立字号、颜色与背景透明度、SRC / TR 独立显示及重启恢复、字幕历史无可见滚动条浏览、状态声波动效、配置预检与 MSIX 保存目录兼容恢复。当前运行界面和 API 已移除 Notes 生成路线；历史脚本与已有数据保留。
 
-Finish the current coding pass and sync the work to GitHub.
+本轮已有验证：隔离原生窗口 37 项、完整重开 39 项、单元测试 30/30 通过；源配置保护与实际主配置独立后端读取验证通过；便携包扫描未发现私有配置、录音或私钥。真实音频、付费识别和普通 Explorer 完整界面验收不在已完成结果内，详见 [QA 清单](QA_CHECKLIST.md)。
 
-## Completed This Turn
+同步边界：明确检查并暂存相关源码、测试及公开中文文档；保留无关本机改动。私有配置、用户数据、模型、日志、诊断结果和构建产物不进入 GitHub。不要将旧版本的验收记录视为本轮检查。
 
-- Reviewed the project continuation state and GitHub publish workflow.
-- Confirmed the current branch is `codex/post-meeting-ollama-notes-desktop`.
-- Confirmed GitHub CLI `gh` is not installed, so draft PR creation is blocked on this machine.
-- Added final closeout notes for Azure Batch meeting notes, selected-engine routing, progress UI, long-recording chunking, and fallback behavior.
-- Refreshed QA notes with the 2026-05-24 verification status.
+交接入口：[当前需求](requirements.md)、[当前架构](architecture.md)、[迭代与待验收](roadmap.md)、[技术交接](technical-memory.md)、[桌面操作与构建](DESKTOP_APP.md)。
 
-## Main Work Now In The Working Tree
-
-- Stability-first local `System` audio defaults and local ASR hallucination filtering.
-- Shared terminology loader with private `backend/glossary.csv` support and a committed `backend/glossary.example.csv`.
-- Meeting notes topic timeline generation.
-- Meeting notes progress API and frontend progress bar.
-- Long-recording chunked faster-whisper transcription.
-- Pyannote diarization compatibility improvements for local/offline experiments.
-- Azure Batch Transcription support for cloud meeting notes with speaker separation.
-- Selected-engine routing: Azure live mode attempts cloud notes when configured; local live engines use local notes without speaker separation.
-- User-facing meeting-notes hints and completion logs that explain which path was used.
-- One-click Windows command shortcuts for backend restart and shutdown.
-- Aliyun Tingwu is now the chosen/default cloud meeting-notes direction. The UI defaults meeting notes to `Aliyun Tingwu`, while Azure remains available as a legacy cloud speech option. Local `.env` holds the private Aliyun values and Tencent Relay URL; committed setup notes use placeholders only.
-- Local meeting-notes refinement is now pointed at Ollama `qwen3:14b`; Gemma and Phi test models were removed locally.
-
-## Files Expected In The Commit
-
-- `.env.example`
-- `.gitignore`
-- `README.md`
-- `backend/asr.py`
-- `backend/audio_capture.py`
-- `backend/cloud_speech.py`
-- `backend/config.py`
-- `backend/main.py`
-- `backend/glossary.example.csv`
-- `backend/terminology.py`
-- `docs/PRODUCT_REQUIREMENTS.md`
-- `docs/RELEASE_NOTES.md`
-- `docs/TECHNICAL_ARCHITECTURE.md`
-- `docs/QA_CHECKLIST.md`
-- `docs/agent-state.md`
-- `frontend/app.js`
-- `frontend/index.html`
-- `frontend/style.css`
-- `scripts/diarize-recording.py`
-- `scripts/process-recording.py`
-- `一键关闭后台.cmd`
-- `一键重启后台.cmd`
-
-## Checks And Results
-
-- `.\.venv\Scripts\python.exe -m py_compile backend\main.py backend\asr.py backend\audio_capture.py backend\cloud_speech.py backend\config.py backend\terminology.py scripts\process-recording.py scripts\diarize-recording.py`: passed.
-- `node --check frontend\app.js`: passed.
-- `git diff --check`: passed.
-- Secret scan found placeholders and environment variable references only; no live token, Blob SAS signature, or account key was detected in committed paths.
-- Local fallback routing and Azure-without-Blob-SAS fallback were smoke-tested.
-
-## Known Blockers And Warnings
-
-- `gh` is not installed, so the GitHub publish skill cannot create a draft PR from this machine.
-- `AZURE_BATCH_CONTAINER_SAS_URL` is not configured in `.env`; Azure Batch meeting notes will fall back to local faster-whisper until Blob SAS is added.
-- Azure Batch requires a Blob/container SAS URL because Batch Transcription cannot directly read a local WAV file.
-- Local pyannote diarization works after Hugging Face gated model access is accepted, but it is too slow to use as the default long-meeting path on T600-class hardware.
-- Aliyun Tingwu integration is implemented with OSS or Tencent Relay upload paths, task polling, raw-result capture, Markdown/DOCX notes, progress reporting, diagnostics, and temporary audio cleanup. Private `.env` values are still required before another machine can run the cloud path.
-
-## Next Recommended Step
-
-Run the final syntax checks, stage the intended files explicitly, commit the Aliyun Tingwu and qwen3 notes work, and push the current branch to GitHub. Install/authenticate `gh` later if a draft PR is required from this machine.
+此前本文件记录的是 2026-05 的会议纪要开发状态、旧分支和当时的工具限制。它们已不是当前任务：会议纪要设计背景仍保存在历史文档与脚本中，不能据此重新启用已移除接口，也不能沿用旧工具状态判断当前 GitHub 同步是否可行。

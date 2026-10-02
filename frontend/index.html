@@ -4,12 +4,13 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Subtitle Studio</title>
-    <link rel="stylesheet" href="/static/style.css?v=soft-controls-20260929" />
+    <link rel="stylesheet" href="/static/style.css?v=caption-visibility-0.4.6" />
+    <link rel="stylesheet" href="/static/desktop.css?v=desktop-light-0.4.6" />
   </head>
   <body>
     <div class="caption-view-tools">
       <span id="captionViewWarning" role="status" hidden></span>
-      <button id="exitCaptionView" type="button" title="Return to full view (Esc)">Full view</button>
+      <button id="exitCaptionView" type="button" title="返回完整界面（Esc）">UI</button>
     </div>
     <main class="studio">
       <header class="studio-topbar">
@@ -40,11 +41,11 @@
             </select>
           </label>
 
-          <button id="startButton" class="primary-flow-button"><span class="button-glyph start-glyph"></span><span>Start</span></button>
-          <button id="endMeetingButton" class="end-flow-button" disabled><span class="button-glyph stop-glyph"></span><span>End</span></button>
-          <button id="stopButton" class="secondary-flow-button hidden" disabled>Pause Captions</button>
-          <a class="editor-link hidden" href="/static/ui-editor.html" target="_blank" rel="noreferrer">UI Editor</a>
-          <button id="downloadTranscriptButton" class="export-button hidden" disabled>Transcript</button>
+          <button id="startButton" class="primary-flow-button" title="开始翻译" aria-label="开始翻译"><span class="button-glyph start-glyph"></span><span>ST</span></button>
+          <button id="endMeetingButton" class="end-flow-button" title="停止翻译并保存录音" aria-label="停止翻译并保存录音" disabled><span class="button-glyph stop-glyph"></span><span>SP</span></button>
+          <button id="stopButton" class="secondary-flow-button hidden" title="暂停字幕" disabled>PAU</button>
+          <a class="editor-link hidden" href="/static/ui-editor.html" title="界面编辑器" target="_blank" rel="noreferrer">UI</a>
+          <button id="downloadTranscriptButton" class="export-button hidden" title="导出字幕文本" disabled>TXT</button>
 
 
           <div class="hidden internal-settings-controls" aria-hidden="true">
@@ -92,8 +93,8 @@
         <span id="backendConnection" data-state="pending">Server: Checking</span>
         <span id="streamConnection" data-state="idle">Captions: Not connected</span>
         <span id="liveConnectionActivity">Ready to start</span>
-        <button id="retryConnectionCheck" type="button">Check connection</button>
-        <button id="enterCaptionView" type="button" title="Show only captions">Captions only</button>
+        <button id="retryConnectionCheck" type="button" title="检查连接状态">CHK</button>
+        <button id="enterCaptionView" type="button" title="仅显示字幕">CAP</button>
       </section>
       <section class="studio-grid">
         <aside class="side-panel" aria-label="Runtime information">
@@ -172,27 +173,46 @@
             <div class="subtitle-stream chinese-stream" id="chineseSubtitleStack" aria-live="polite"></div>
           </section>
         </section>
+        <p id="captionVisibilityNotice" class="caption-visibility-notice" role="status" hidden>原文和译文均已隐藏，可在 SET 中重新显示。</p>
       </section>
-      <footer class="caption-settings" aria-label="Caption font settings">
+      <footer class="caption-settings" aria-label="Caption appearance settings">
+        <div class="caption-visibility-control" role="group" aria-label="字幕显示选择">
+          <span>显示字幕</span>
+          <div class="caption-visibility-options">
+            <button id="toggleSourceText" type="button" aria-pressed="true" aria-label="原文字幕" aria-controls="subtitleStack localSourcePanel" title="隐藏原文字幕（SRC）">SRC</button>
+            <button id="toggleTranslationText" type="button" aria-pressed="true" aria-label="译文字幕" aria-controls="subtitleStack localTargetPanel" title="隐藏译文字幕（TR）">TR</button>
+          </div>
+        </div>
         <div class="caption-size-control">
           <label for="sourceFontSize">Source</label>
-          <input id="sourceFontSlider" type="range" min="12" max="96" step="1" value="18" aria-label="Source font size slider" />
-          <input id="sourceFontSize" type="number" min="12" max="96" step="1" value="18" aria-label="Source font size" /><span>px</span>
+          <input id="sourceFontSlider" type="range" min="10" max="160" step="1" value="18" aria-label="Source font size slider" />
+          <input id="sourceFontSize" type="number" min="10" max="160" step="1" value="18" aria-label="Source font size" /><span>px</span>
         </div>
         <div class="caption-size-control">
           <label for="translationFontSize">Translation</label>
-          <input id="translationFontSlider" type="range" min="12" max="96" step="1" value="32" aria-label="Translation font size slider" />
-          <input id="translationFontSize" type="number" min="12" max="96" step="1" value="32" aria-label="Translation font size" /><span>px</span>
+          <input id="translationFontSlider" type="range" min="10" max="160" step="1" value="32" aria-label="Translation font size slider" />
+          <input id="translationFontSize" type="number" min="10" max="160" step="1" value="32" aria-label="Translation font size" /><span>px</span>
         </div>
-        <button id="resetCaptionFonts" type="button">Reset defaults</button>
-        <span id="captionSettingsStatus" role="status">Font sizes saved automatically</span>
+        <div class="caption-color-control">
+          <label for="sourceFontColor">原文颜色</label>
+          <input id="sourceFontColor" type="color" value="#586577" aria-label="原文字幕颜色" title="选择原文字幕颜色" />
+          <input id="sourceFontColorHex" type="text" value="#586577" maxlength="7" pattern="#[0-9a-fA-F]{6}" placeholder="#RRGGBB" aria-label="原文字幕颜色 HEX" title="六位 HEX 颜色，例如 #68788C" spellcheck="false" autocomplete="off" />
+        </div>
+        <div class="caption-color-control">
+          <label for="translationFontColor">译文颜色</label>
+          <input id="translationFontColor" type="color" value="#3f54d2" aria-label="译文字幕颜色" title="选择译文字幕颜色" />
+          <input id="translationFontColorHex" type="text" value="#3F54D2" maxlength="7" pattern="#[0-9a-fA-F]{6}" placeholder="#RRGGBB" aria-label="译文字幕颜色 HEX" title="六位 HEX 颜色，例如 #283445" spellcheck="false" autocomplete="off" />
+        </div>
+        <button id="resetCaptionFonts" type="button" title="重置字幕字号和颜色">RST</button>
+        <span id="captionSettingsStatus" role="status">Caption appearance saved automatically</span>
       </footer>
     </main>
 
     <script src="/static/connection-status.js?v=live-only-20260929"></script>
-    <script src="/static/app.js?v=live-only-20260929"></script>
-    <script src="/static/caption-settings.js?v=live-only-20260929"></script>
+    <script src="/static/app.js?v=config-start-0.4.4"></script>
+    <script src="/static/caption-settings.js?v=caption-visibility-0.4.6"></script>
     <script src="/static/caption-view.js?v=caption-view-20260929"></script>
+    <script src="/static/desktop-controls.js?v=desktop-light-0.4.6"></script>
   </body>
 </html>
 

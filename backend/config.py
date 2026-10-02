@@ -13,7 +13,7 @@ SourceLanguage = Literal["eng_Latn", "spa_Latn", "jpn_Jpan", "zho_Hans"]
 
 
 def load_dotenv_file() -> None:
-    env_path = Path(__file__).resolve().parents[1] / ".env"
+    env_path = Path(os.getenv("SUBTITLE_STUDIO_ENV_FILE") or (Path(__file__).resolve().parents[1] / ".env"))
     if not env_path.exists():
         return
     for line in env_path.read_text(encoding="utf-8", errors="ignore").splitlines():

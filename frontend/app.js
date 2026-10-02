@@ -73,6 +73,9 @@ let recordingTimer = null;
 let currentRecordingPath = "";
 let azureConfigured = false;
 let funasrConfigured = false;
+let runtimeConfigLoaded = false;
+let runtimeConfigPromise = null;
+let isStartPending = false;
 let isRecordingActive = false;
 let isLiveSessionActive = false;
 let lastSubtitleReceivedAt = 0;
@@ -142,27 +145,45 @@ function applyDefaultInputMode() {
   translationEngine.value = "azure";
 }
 
-async function loadRuntimeConfig() {
-  try {
-    const response = await fetch("/api/config");
-    if (!response.ok) {
-      return;
+function loadRuntimeConfig() {
+  if (runtimeConfigPromise) return runtimeConfigPromise;
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+  runtimeConfigPromise = (async () => {
+    try {
+      const response = await fetch("/api/config", { cache: "no-store", signal: controller.signal });
+      if (!response.ok) throw new Error("Configuration request failed");
+      const payload = await response.json();
+      const configured = payload?.cloud_configured ?? payload?.azure_configured;
+      // Only a successful, valid response can confirm that credentials are missing.
+      if (typeof configured !== "boolean") throw new Error("Invalid configuration response");
+      azureConfigured = configured;
+      funasrConfigured = Boolean(payload.funasr_configured);
+      runtimeConfigLoaded = true;
+      updateMeetingActionButtons();
+      renderAzureUsage();
+      if (!azureConfigured && translationEngine.value === "azure") {
+        noticeText.textContent = "Cloud not configured";
+        logText.textContent = "Cloud speech is not configured. Cloud mode will wait for valid cloud configuration.";
+        updateDelayHintFromStatus("Cloud not configured", logText.textContent);
+      } else if (!isLiveSessionActive) {
+        noticeText.textContent = "Ready";
+      }
+      updateEngineControls();
+      updateLanguageHints();
+      return true;
+    } catch (error) {
+      runtimeConfigLoaded = false;
+      noticeText.textContent = window.subtitleDesktop ? "配置读取失败" : "Config unavailable";
+      logText.textContent = window.subtitleDesktop
+        ? "暂时无法读取字幕服务配置。请点击开始重试，无需重新填写密钥。"
+        : "Could not load backend config. Click Start to retry.";
+      return false;
+    } finally {
+      clearTimeout(timeout);
     }
-    const payload = await response.json();
-    azureConfigured = Boolean(payload.cloud_configured ?? payload.azure_configured);
-    funasrConfigured = Boolean(payload.funasr_configured);
-    updateMeetingActionButtons();
-    renderAzureUsage();
-    if (!azureConfigured && translationEngine.value === "azure") {
-      noticeText.textContent = "Cloud not configured";
-      logText.textContent = "Cloud speech is not configured. Cloud mode will wait for valid cloud configuration.";
-      updateDelayHintFromStatus("Cloud not configured", logText.textContent);
-    }
-    updateEngineControls();
-    updateLanguageHints();
-  } catch (error) {
-    logText.textContent = "Could not load backend config.";
-  }
+  })().finally(() => { runtimeConfigPromise = null; });
+  return runtimeConfigPromise;
 }
 
 
@@ -175,7 +196,7 @@ function updateMeetingActionButtons() {
   const connected = Boolean(socket && socket.readyState === WebSocket.OPEN);
   const connecting = Boolean(socket && socket.readyState === WebSocket.CONNECTING);
   const quotaBlocked = cloudQuotaExceeded();
-  startButton.disabled = connected || connecting || isRecordingActive || quotaBlocked;
+  startButton.disabled = isStartPending || connected || connecting || isRecordingActive || quotaBlocked;
   startButton.title = quotaBlocked ? cloudQuotaMessage() : "";
   endMeetingButton.disabled = !connected && !connecting && !isRecordingActive;
   stopButton.disabled = !connected;
@@ -201,6 +222,15 @@ function updateDelayHintFromStatus(status, detail = "") {
   const isCloud = translationEngine.value === "azure";
   const inputLabel = audioSource.value === "microphone" ? "microphone" : "system audio";
 
+
+  if (isCloud && !runtimeConfigLoaded) {
+    setDelayHint(
+      isStartPending ? "Checking config" : "Config unavailable",
+      isStartPending ? "Checking saved cloud settings before starting captions." : "Cloud settings have not been loaded. Click Start to retry.",
+      !isStartPending,
+    );
+    return;
+  }
 
   if (isCloud && !azureConfigured) {
     setDelayHint(
@@ -2170,8 +2200,8 @@ function stopBrowserAudioStreaming() {
   }
 }
 
-function start() {
-  if (socket && socket.readyState === WebSocket.OPEN) {
+async function start() {
+  if (isStartPending || (socket && [WebSocket.OPEN, WebSocket.CONNECTING].includes(socket.readyState))) {
     return;
   }
   if (cloudQuotaExceeded()) {
@@ -2180,12 +2210,53 @@ function start() {
     logText.textContent = cloudQuotaMessage();
     return;
   }
-  isLiveSessionActive = true;
-  if (translationEngine.value === "azure" && !azureConfigured) {
-    noticeText.textContent = "Cloud not configured";
-    logText.textContent = "Cloud speech is not configured. Start may fail until cloud settings are available.";
-    updateDelayHintFromStatus("Cloud not configured", logText.textContent);
+  isStartPending = true;
+  updateMeetingActionButtons();
+  try {
+    if (translationEngine.value === "azure") {
+      noticeText.textContent = window.subtitleDesktop ? "正在检查配置…" : "Checking config";
+      setStatus("Checking config", window.subtitleDesktop ? "正在读取已保存的云服务配置…" : "Checking saved cloud settings…");
+      if (!await loadRuntimeConfig()) {
+        setStatus("Error", logText.textContent);
+        return;
+      }
+      if (!azureConfigured) {
+        if (window.subtitleDesktop) {
+          let saved;
+          try {
+            saved = await window.subtitleDesktop.getCloudConfig();
+            if (typeof saved?.configured !== "boolean") throw new Error("Invalid saved configuration response");
+          } catch (error) {
+            noticeText.textContent = "配置读取失败";
+            setStatus("Error", "无法读取本机云配置。请重新打开应用，无需重新填写密钥。");
+            return;
+          }
+          if (saved.configured) {
+            noticeText.textContent = "配置已保存";
+            setStatus("Error", "云配置已保存，但字幕服务尚未加载。请重新打开应用，无需重新填写密钥。");
+            return;
+          }
+        }
+        const hint = window.subtitleDesktop ? "请在云服务设置中填写区域和密钥，保存后重新启动。" : "Cloud speech is not configured. Configure the server's speech key and region first.";
+        noticeText.textContent = window.subtitleDesktop ? "云服务未配置" : "Cloud not configured";
+        setStatus("Error", hint);
+        window.dispatchEvent(new Event("subtitle-cloud-config-required"));
+        return;
+      }
+    }
+    // Usage polling may finish while the saved configuration is being checked.
+    if (cloudQuotaExceeded()) {
+      setStatus("Error", cloudQuotaMessage());
+      noticeText.textContent = "Quota reached";
+      logText.textContent = cloudQuotaMessage();
+      return;
+    }
+  } finally {
+    isStartPending = false;
+    updateMeetingActionButtons();
+    updateDelayHintFromStatus(statusText.textContent, logText.textContent);
   }
+  isLiveSessionActive = true;
 
   subtitleStack.innerHTML = "";
   englishContextStack.innerHTML = "";

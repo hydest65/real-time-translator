@@ -1,5 +1,29 @@
 # Technical Architecture
 
+## 当前架构：Windows 桌面层 0.4.6（2026-10-03）
+
+`desktop/main.cjs` 使用 Electron 透明无边框窗口，复用现有字幕页面。页面禁用 Node.js、开启 sandbox/contextIsolation，仅经 `desktop/preload.cjs` 的固定接口控制窗口及本机云配置。桌面桥验证发起请求的主框架和本机页面地址。外部导航及新窗口默认阻止。
+
+窗口的八向缩放由 `desktop/geometry.cjs` 计算桌面 DIP 坐标，保持对边和最小尺寸。背景只使用 CSS RGBA 改变透明度，不改变整个窗口或文字 opacity；字幕尺寸与窗口尺寸独立。
+
+`desktop/backend_worker.py` 通过 PyInstaller 打包云端依赖，并仅在随机的 `127.0.0.1` 端口运行。桌面进程等待健康检查后展示页面。退出时通过私有标准输入管道触发 Uvicorn 正常关闭，完成 WebSocket 和录音清理；异常情况下再终止自己创建的进程。
+
+网页源码位置与用户数据位置分离：`SUBTITLE_STUDIO_DATA_DIR` 控制录音和用量记录，`SUBTITLE_STUDIO_ENV_FILE` 指定本机配置文件。源码运行时仍保留原有默认路径。便携包不带离线模型或 `.env`。
+
+`desktop/cloud-config.cjs` 统一解析 Speech key / region / phrase，支持 BOM、引号和重复键，工作进程使用选定文件中的三项设置覆盖继承的空白环境值。主进程先检查已保存配置，仅在正式便携包使用默认配置路径且主配置不完整、无部分冲突时，从固定的 Codex MSIX 保存位置恢复；显式路径与隔离验收目录不执行恢复。写入使用同目录临时文件和替换，保留注释、无关设置与源配置，完整主配置不再改写。桌面接口仅返回区域和是否配置，不返回密钥。
+
+`frontend/caption-settings.js` 处理字号、颜色与原文 / 译文可见性；`frontend/desktop-controls.js` 将其同步到原生 `display.json`，从而跨随机服务端口及完整重启恢复。主进程限制字号和透明度范围、验证六位 HEX，并仅接受 `captionOnly`、`showSourceText`、`showTranslationText` 的布尔值。SRC / TR 通过显示样式隐藏对应文本，保留字幕节点和会话；RST 只恢复字号和颜色。
+
+`frontend/desktop.css` 提供淡色半透明窗口、图标工具栏、隐藏滚动条及最小窗口内的设置布局。状态声波根据本机健康、字幕连接和会话活动显示颜色与动画，遵循减少动画设置；绿色动画表示受控状态处于活动，不能单凭它认定音频已被识别。
+
+当前实时字幕应用没有 Notes 操作或生成 API。历史脚本与数据保留，但不属于支持的运行链。Cloud 便携包不附带离线模型，源码的可选本地模式需另行准备依赖。
+
+短架构入口见 [architecture.md](architecture.md)，使用说明及构建方法见 [DESKTOP_APP.md](DESKTOP_APP.md)，验证边界见 [QA_CHECKLIST.md](QA_CHECKLIST.md)。
+
+## 历史浏览器及会议纪要架构
+
+下方保留旧版本运行链和设计背景。实时字幕、可选本地模型、远程测试仍可参考对应源码；涉及 Notes 界面、纪要 API、诊断纪要状态及“当前”纪要路线的描述均属于已移除功能的历史，不作为 0.4.6 当前契约。当前语言与接口以源码为准。
+
 ## Runtime Routes
 
 ### Cloud Route

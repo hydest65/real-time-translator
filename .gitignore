@@ -22,3 +22,8 @@ codex-temp-index
 sync-meta/
 sync-worktree/
 sync-worktree2/
+desktop/build/
+desktop/dist/
+outputs/
+outputs/Subtitle-Studio-Desktop-*/
+outputs/Subtitle-Studio-Desktop-*.zip

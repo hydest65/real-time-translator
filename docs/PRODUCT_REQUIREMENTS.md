@@ -1,5 +1,28 @@
 # Product Requirements
 
+## 当前基线：Windows 桌面字幕 0.4.6（2026-10-03）
+
+- 解压完整便携包后可直接启动应用，不要求用户另装 Python 或打开浏览器。
+- 半透明背景可单独调节不透明度为 15%–100%，字幕文字始终保持清晰。
+- 窗口可拖动、置顶，四边及四角可调整尺寸；最小为 420 × 240。
+- 原文和译文字号分别支持 10–160 px 的滑块及数字输入，字幕模式中也可调整。
+- 原文和译文各自支持颜色选择器及 HEX 输入；RST 恢复默认字号和颜色。
+- SET 中 SRC / TR 独立选择显示原文、译文或两者均隐藏；修改保留字幕历史和会话，RST 不改变显示选择。
+- 雾白半透明界面使用图标按钮；历史区域隐藏滚动条，保留滚轮及 PageUp / End 浏览。
+- 字幕模式声波图标区分连接中、正常活动、停止与错误；系统减少动画设置下停止跳动。
+- 自动保存窗口尺寸、位置、置顶、字号、颜色、原文 / 译文显示选择及背景设置。
+- 已保存云配置持续复用，密钥框留空保留原值；默认主配置缺失且兼容时从指定的 Codex MSIX 保存位置恢复，不覆盖有效或冲突配置。
+- 应用管理自己的本机翻译服务，退出时正常结束录音；不停止其他服务。
+- 便携包保留 Cloud 实时翻译，排除私有密钥、录音和离线模型。
+
+当前应用聚焦实时字幕、录音和显示设置。Notes 入口、会议纪要生成 API 及相关默认依赖已移除；旧文件与已有数据保留，不构成当前功能契约。Electron 桌面封装已经完成。
+
+隔离原生窗口验收为 37 项，完整重开后 39 项；单元测试 30/30。它们验证显示、持久化、配置及受控连接状态，未验证实际音频或付费识别。当前需求入口见 [requirements.md](requirements.md)，使用及验收范围见 [DESKTOP_APP.md](DESKTOP_APP.md) 与 [QA_CHECKLIST.md](QA_CHECKLIST.md)。
+
+## 历史浏览器 MVP 范围
+
+下方保留桌面版与实时字幕精简之前的设计记录。以下各节中写作“Current”、Notes / Word 成功标准、红灯旧状态和 Electron 尚未封装等内容均属于历史，不作为 0.4.6 当前能力或待办。
+
 ## Product Goal
 
 Build a Windows real-time subtitle translator for meetings. The first usable version listens to microphone, browser audio, or system audio, recognizes English, Spanish, Japanese, or Chinese speech, translates or transcribes it into Simplified Chinese, and displays subtitles in a local or hosted browser window.

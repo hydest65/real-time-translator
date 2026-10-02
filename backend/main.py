@@ -47,11 +47,12 @@ from .translator import ArgosTranslator, MarianMTTranslator, NLLBTranslator, Tra
 
 ROOT = Path(__file__).resolve().parents[1]
 FRONTEND_DIR = ROOT / "frontend"
-RECORDINGS_DIR = ROOT / "recordings"
+DATA_ROOT = Path(os.getenv("SUBTITLE_STUDIO_DATA_DIR") or ROOT)
+RECORDINGS_DIR = DATA_ROOT / "recordings"
 RECORDING_RESUME_SECONDS = 5 * 60
 CLOUD_MONTHLY_SECONDS_LIMIT_DEFAULT = 5 * 60 * 60
 CLOUD_QUOTA_GUARD_INTERVAL_SECONDS = 5
-CLOUD_USAGE_LEDGER_PATH = ROOT / "sync-meta" / "cloud-usage-quota.json"
+CLOUD_USAGE_LEDGER_PATH = DATA_ROOT / "sync-meta" / "cloud-usage-quota.json"
 active_recording_path: Path | None = None
 last_recording_stop_at = 0.0
 RECORDING_PATTERNS = ("rec-*.wav", "session-*.wav")

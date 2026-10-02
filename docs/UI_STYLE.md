@@ -1,6 +1,21 @@
 # UI Style
 
-> Current scope (2026-09-29): realtime-only. Notes shortcuts, notes status cards, notes settings, and post-meeting processing described in older sections below have been removed. The single-row toolbar contains the brand, audio source, language, Start, and End. Connection status and caption font controls remain visible.
+## 当前桌面界面 0.4.6（2026-10-03）
+
+- 雾白半透明背景、深灰正常字重字幕和淡蓝激活状态；背景透明度单独调整，文字不随背景变淡。
+- 功能按钮使用细线图标，悬停保留中文说明与英文缩写，提供可访问标签及开关状态。
+- 完整界面与字幕模式均提供 SET；原文 / 译文各自支持 10–160 px 字号、颜色选择器和 HEX 输入。
+- SRC / TR 独立控制显示，默认均开启，选择保存并在重启后恢复；两者隐藏时显示可恢复提示。RST 仅重置字号和颜色。
+- 隐藏字幕区域滚动条，保留滚轮、PageUp / End 历史浏览。向上浏览期间新字幕不会强制跳回末尾。
+- 透明无边框原生窗口支持置顶和八向缩放，最小 420 × 240；两种视图下设置可在窗口内到达。
+- 状态声波在连接中为蓝色、正常活动时绿色跳动、停止时淡色静止、错误时红色，遵循系统减少动画设置。
+- CFG 留空保留已有密钥；读取失败、尚在读取与确定缺配置分别提示，已有配置不因升级反复要求输入。
+
+当前应用为实时字幕版，没有 Notes 快捷方式、卡片、设置或生成流程。原生界面验收使用隔离配置、合成字幕及受控状态；真实音频和付费识别另需验证。详细使用见 [DESKTOP_APP.md](DESKTOP_APP.md)。
+
+## 历史浏览器样式记录
+
+下方保留旧版设计。可见滚动条、红色灯泡、12–96 px 字号、Windows 封装为未来工作及 Notes 操作等描述仅用于理解历史，不作为当前桌面 UI 要求。
 
 ## Direction
 
